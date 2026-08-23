@@ -23,8 +23,14 @@ export async function getPriceList(ctx: RlsContext): Promise<PriceRow[]> {
     driver: string | null; unit: string; rate_idr: string; is_active: boolean; note: string | null;
   }>(
     ctx,
+    // valid_to IS NULL = versi yang masih berlaku. WAJIB sejak migrasi 0041:
+    // app.publish_price() menutup versi lama (valid_to terisi) lalu menyisipkan
+    // versi baru, jadi satu kode punya BANYAK baris. Tanpa filter ini
+    // reflectedCosts() menjumlahkan tarif lama DAN baru — biaya berganda.
     `SELECT id, code, kind, category, driver, unit, rate_idr, is_active, note
-       FROM app.price_list ORDER BY kind, category`,
+       FROM app.price_list
+      WHERE valid_to IS NULL
+      ORDER BY kind, category`,
   );
   return rows.map((r) => ({
     id: r.id, code: r.code, kind: r.kind, category: r.category, driver: r.driver,
@@ -138,11 +144,27 @@ export async function reflectedCosts(ctx: RlsContext): Promise<Reflection> {
   };
 }
 
-/** Ubah tarif satu item price list (approver/super admin, ditegakkan RLS + action). */
-export async function setPriceRate(ctx: RlsContext, id: string, rateIdr: number): Promise<void> {
+/**
+ * TERBITKAN tarif baru — bukan mengubah yang lama.
+ *
+ * Sejak migrasi 0041 (K-02 §14) price_list append-only: UPDATE dicabut dari
+ * app_rw dan tercatat di ledger app.privilege_revocations. Perubahan tarif
+ * berjalan lewat app.publish_price() yang menutup versi lama (valid_to) lalu
+ * menyisipkan versi baru — sehingga biaya historis TIDAK ikut berubah saat
+ * tarif naik. Fungsinya SECURITY DEFINER dan self-gate ke super_admin
+ * (§17 Keputusan 3), jadi lapisan ini tidak perlu — dan tidak boleh — menebak
+ * otorisasinya sendiri.
+ *
+ * `berlakuDari` default hari ini di zona operasional: tarif berlaku ke depan,
+ * backdating dilarang oleh fungsinya (K-02 aturan 2).
+ */
+export async function publishPriceRate(
+  ctx: RlsContext,
+  input: { code: string; rateIdr: number; berlakuDari: string },
+): Promise<void> {
   await rlsQuery(
     ctx,
-    `UPDATE app.price_list SET rate_idr = $2, updated_at = now(), updated_by = $3 WHERE id = $1`,
-    [id, rateIdr, ctx.userId],
+    `SELECT app.publish_price($1, $2, $3::date)`,
+    [input.code, input.rateIdr, input.berlakuDari],
   );
 }

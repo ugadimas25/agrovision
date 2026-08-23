@@ -8,10 +8,15 @@ import { cn } from "@/lib/utils";
 
 const initial: PriceState = { ok: false, message: "" };
 
+/**
+ * Menerbitkan tarif BARU, bukan mengubah yang lama (K-02 §14, migrasi 0041).
+ * Karena itu yang dikirim adalah `code` — penerbitan bekerja pada kode tarif:
+ * versi lama ditutup, versi baru lahir, dan nilai historis tidak ikut berubah.
+ */
 export function PriceRateEditor({
-  id, rateIdr, unit, canEdit,
+  code, rateIdr, unit, canEdit,
 }: {
-  id: string; rateIdr: number; unit: string; canEdit: boolean;
+  code: string; rateIdr: number; unit: string; canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [state, action, pending] = useActionState(setPriceRateAction, initial);
@@ -31,7 +36,7 @@ export function PriceRateEditor({
 
   return (
     <form action={action} className="flex items-center gap-1.5">
-      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="code" value={code} />
       <input
         name="rateIdr"
         type="number"

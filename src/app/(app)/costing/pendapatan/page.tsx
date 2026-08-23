@@ -95,7 +95,7 @@ export default async function RevenuePage() {
       {/* Tarif komoditas (price list) */}
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         <h2 className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-800">
-          Tarif komoditas <span className="font-normal text-slate-500">— diubah di Refleksi Biaya (approver/super admin)</span>
+          Tarif komoditas <span className="font-normal text-slate-500">— diterbitkan di Refleksi Biaya (super admin)</span>
         </h2>
         <ResponsiveTable>
           <table className="w-full text-sm">

@@ -774,7 +774,12 @@ async function seed() {
     await c.query(
       `INSERT INTO app.price_list (company_id, code, kind, category, driver, unit, rate_idr, note, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (company_id, code) DO NOTHING`,
+       -- Indeks unik (company_id, code) diganti indeks PARSIAL price_list_one_open
+       -- (… WHERE valid_to IS NULL) oleh migrasi 0041, karena satu kode kini punya
+       -- banyak versi. ON CONFLICT tidak bisa menyimpulkan indeks parsial tanpa
+       -- predikat yang sama, jadi tanpa WHERE di bawah seed ini GAGAL dengan
+       -- "no unique or exclusion constraint matching the ON CONFLICT specification".
+       ON CONFLICT (company_id, code) WHERE valid_to IS NULL DO NOTHING`,
       [CO, code, kind, category, driver, unit, rate, note, users[0][0]])
   }
 
