@@ -10,6 +10,7 @@ import { formatIdr, formatIdrShort, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PriceRateEditor } from "./PriceRateEditor";
 import { PriceRowForm } from "./PriceRowForm";
+import { PriceMetaEditor } from "./PriceMetaEditor";
 
 export const metadata = { title: "Refleksi Biaya — AgroVision" };
 
@@ -25,16 +26,17 @@ export default async function Page() {
   const [prices, reflection, kategoriAkuntansi] = await Promise.all([
     getPriceList(ctx),
     reflectedCosts(ctx),
-    // Hanya dibutuhkan form tambah baris; kategori INDUK karena anggaran
-    // dipasang di tingkat induk dan v_budget_vs_actual mencocokkan
-    // cost_category_id secara persis (34 sub-kategori masih menunggu keputusan
-    // granularitas, docs/13 §10c).
-    canEdit ? listParentCategoryOptions(ctx) : Promise.resolve([]),
+    // Kategori INDUK: anggaran dipasang di tingkat induk dan v_budget_vs_actual
+    // menggulung realisasi ke sana (migrasi 0047). Dimuat untuk SEMUA peran, bukan
+    // hanya super_admin — kolom "Kategori akuntansi" perlu namanya untuk dirender;
+    // tanpa ini peran lain melihat em-dash padahal tarifnya terpetakan.
+    listParentCategoryOptions(ctx),
   ]);
   const costRates = prices.filter((p) => p.kind === "cost");
   const revenueRates = prices.filter((p) => p.kind === "revenue");
   const drivers = driverOptions();
   const driverLabel = new Map(drivers.map((d) => [d.value, d.label]));
+  const kategoriNama = new Map(kategoriAkuntansi.map((k) => [k.value, k.label]));
 
   // Revenue nyata dari panen disetujui × tarif; null bila belum ada panen.
   const hasRevenue = reflection.revenueLines.length > 0;
@@ -199,6 +201,7 @@ export default async function Page() {
                     apakah baris ini ikut dihitung. */}
                 <th className="px-4 py-2 font-medium">Driver volume</th>
                 <th className="px-4 py-2 font-medium">Satuan</th>
+                <th className="px-4 py-2 font-medium">Kategori akuntansi</th>
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 text-right font-medium">Tarif</th>
               </tr>
@@ -224,10 +227,31 @@ export default async function Page() {
                     )}
                   </td>
                   <td data-label="Satuan" className="px-4 py-2 text-xs text-slate-600">{p.unit}</td>
+                  {/* Kunci pembanding anggaran. Tarif tanpa kategori menghasilkan biaya
+                      yang tidak match anggaran mana pun — akar QA B-20, jadi ketiadaannya
+                      ditandai di barisnya, bukan didiamkan. Revenue tidak memakainya. */}
+                  <td data-label="Kategori akuntansi" className="px-4 py-2 text-xs">
+                    {p.kind === "revenue" ? (
+                      <span className="text-slate-300">{EMPTY}</span>
+                    ) : p.costCategoryId ? (
+                      <span className="text-slate-600">{kategoriNama.get(p.costCategoryId) ?? "—"}</span>
+                    ) : (
+                      <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">belum dipetakan</span>
+                    )}
+                  </td>
                   <td data-label="Status" className="px-4 py-2">
-                    <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium", p.isActive ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}>
-                      {p.isActive ? "Aktif" : "Nonaktif"}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium", p.isActive ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}>
+                        {p.isActive ? "Aktif" : "Nonaktif"}
+                      </span>
+                      {canEdit && (
+                        <PriceMetaEditor
+                          id={p.id} code={p.code} category={p.category} note={p.note}
+                          isActive={p.isActive} costCategoryId={p.costCategoryId}
+                          categoryOptions={kategoriAkuntansi} isCost={p.kind === "cost"}
+                        />
+                      )}
+                    </div>
                   </td>
                   <td data-label="Tarif" className="px-4 py-2 text-right">
                     <PriceRateEditor code={p.code} rateIdr={p.rateIdr} unit={p.unit} canEdit={canEdit} />

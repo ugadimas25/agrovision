@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
-import { createPriceRow, driverOptions, priceCodeExists, publishPriceRate } from "@/lib/repo/pricing";
+import { createPriceRow, driverOptions, priceCodeExists, publishPriceRate, updatePriceMeta } from "@/lib/repo/pricing";
 import { todayInOperationalZone } from "@/lib/date";
 
 export type PriceState = { ok: boolean; message: string; fieldErrors?: Record<string, string> };
@@ -164,6 +164,75 @@ export async function createPriceRowAction(_p: PriceState, fd: FormData): Promis
     if (/price_list_driver_check/.test(m)) return { ok: false, message: "Driver tidak dikenal database.", fieldErrors: { driver: "Driver tidak dikenal" } };
     if (/price_list_kind_check/.test(m)) return { ok: false, message: "Jenis harus biaya atau revenue.", fieldErrors: { kind: "Jenis tidak valid" } };
     if (/row-level security/.test(m)) return { ok: false, message: "Anda tidak berhak menulis baris tarif ini." };
+    return { ok: false, message: m };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AI-44b · ubah metadata tarif (kelas "edit in-place" K-09 §19)
+//
+// `cost_category_id` adalah kunci yang dipakai perbandingan anggaran. Tanpa
+// action ini, satu-satunya cara memetakan tarif ke kategori adalah seed atau SQL
+// manual — artinya setiap tenant baru butuh developer sebelum serapan anggarannya
+// bisa terisi. Itulah yang membuat B-20 muncul lagi di instalasi baru.
+//
+// `rate_idr`/`unit` SENGAJA tidak di sini: keduanya berversi (setPriceRateAction).
+// `code`/`kind`/`driver` kekal dan tidak punya jalur ubah sama sekali.
+// ---------------------------------------------------------------------------
+
+const metaSchema = z.object({
+  id: z.string().uuid("Baris tarif tidak dikenal"),
+  // Kosong = jangan ubah. Fungsi database memakai COALESCE, jadi string kosong
+  // harus menjadi null di sini — kalau tidak, label yang sudah ada tertimpa "".
+  category: z.string().trim().max(120).optional().transform((v) => (v ? v : null)),
+  note: z.string().trim().max(1000).optional().transform((v) => (v ? v : null)),
+  costCategoryId: z.string().uuid().optional().or(z.literal("")).transform((v) => (v ? v : null)),
+  // Checkbox: hadir = aktif, absen = nonaktif. Selalu dikirim eksplisit oleh form
+  // lewat hidden input, jadi tidak ada mode "jangan ubah" yang ambigu.
+  isActive: z.enum(["true", "false"]).transform((v) => v === "true"),
+});
+
+export async function updatePriceMetaAction(_p: PriceState, fd: FormData): Promise<PriceState> {
+  try {
+    const ctx = await requireRole("super_admin");
+    if (!ctx.companyId) return { ok: false, message: "Pilih satu entitas dulu." };
+
+    const parsed = metaSchema.safeParse({
+      id: fd.get("id"),
+      category: fd.get("category") ?? undefined,
+      note: fd.get("note") ?? undefined,
+      costCategoryId: fd.get("costCategoryId") ?? undefined,
+      isActive: fd.get("isActive") ?? "true",
+    });
+    if (!parsed.success) {
+      return { ok: false, message: "Periksa isian yang ditandai.", fieldErrors: fieldErrors(parsed.error) };
+    }
+    const d = parsed.data;
+    const n = await updatePriceMeta(ctx, {
+      id: d.id, category: d.category, note: d.note,
+      isActive: d.isActive, costCategoryId: d.costCategoryId,
+    });
+
+    revalidatePath("/costing/refleksi");
+    revalidatePath("/costing/anggaran");
+    revalidatePath("/dashboard/financial");
+    return {
+      ok: true,
+      message: n > 1
+        ? `Tersimpan pada ${n} versi tarif ini — label & pemetaan akuntansi berlaku untuk seluruh riwayatnya.`
+        : "Tersimpan.",
+    };
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    if (m === "FORBIDDEN") return { ok: false, message: "Hanya super admin yang bisa mengubah metadata tarif." };
+    if (/price_list_one_active_per_driver_idx/.test(m)) {
+      return {
+        ok: false,
+        message: "Mengaktifkan baris ini membuat dua tarif aktif untuk satu driver. Nonaktifkan dulu baris yang sekarang aktif.",
+        fieldErrors: { isActive: "Bentrok dengan tarif aktif lain" },
+      };
+    }
+    if (/row-level security/.test(m)) return { ok: false, message: "Anda tidak berhak mengubah tarif ini." };
     return { ok: false, message: m };
   }
 }

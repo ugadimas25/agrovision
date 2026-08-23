@@ -219,8 +219,11 @@ Ini bagian paling berharga dari dokumen ini.
 11. **`useEffect(() => setState(true), [])` untuk deteksi hidrasi ditolak lint**
    (`react-hooks`, cascading render). Pakai `useSyncExternalStore(langganan, () => true,
    () => false)`: `false` di server, `true` di klien, tanpa render kedua.
-12. **`psql -tAc` mencetak boolean sebagai `true`/`false`, bukan `t`/`f`.** Assertion
-   string yang mengharapkan `|t` gagal walau datanya benar.
+12. **`psql -tAc` mencetak boolean bergantung cara memilihnya.** Kolom boolean apa
+   adanya (`SELECT is_active`) keluar sebagai **`f`/`t`**; hanya ekspresi yang di-cast
+   ke text — termasuk hasil `||` — yang keluar sebagai **`false`/`true`**. Assertion
+   string bisa gagal walau datanya benar, dan arah kegagalannya berbeda tergantung
+   query-nya. Paling aman: `SELECT kolom::text` secara eksplisit.
 13. **`db:seed:demo` RUSAK oleh dua migrasi sendiri, dan tidak ada yang menyadarinya
    karena data demo sudah ada.** Keduanya baru terlihat saat DB dibangun dari nol:
    - `ON CONFLICT (company_id, code)` pada `price_list` gagal setelah 0041 menggantinya

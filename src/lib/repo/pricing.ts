@@ -15,19 +15,22 @@ export type PriceRow = {
   rateIdr: number;
   isActive: boolean;
   note: string | null;
+  /** Kunci pembanding anggaran. null = biaya dari tarif ini tidak match anggaran mana pun. */
+  costCategoryId: string | null;
 };
 
 export async function getPriceList(ctx: RlsContext): Promise<PriceRow[]> {
   const rows = await rlsQuery<{
     id: string; code: string; kind: "cost" | "revenue"; category: string;
     driver: string | null; unit: string; rate_idr: string; is_active: boolean; note: string | null;
+    cost_category_id: string | null;
   }>(
     ctx,
     // valid_to IS NULL = versi yang masih berlaku. WAJIB sejak migrasi 0041:
     // app.publish_price() menutup versi lama (valid_to terisi) lalu menyisipkan
     // versi baru, jadi satu kode punya BANYAK baris. Tanpa filter ini
     // reflectedCosts() menjumlahkan tarif lama DAN baru — biaya berganda.
-    `SELECT id, code, kind, category, driver, unit, rate_idr, is_active, note
+    `SELECT id, code, kind, category, driver, unit, rate_idr, is_active, note, cost_category_id
        FROM app.price_list
       WHERE valid_to IS NULL
       ORDER BY kind, category`,
@@ -35,6 +38,7 @@ export async function getPriceList(ctx: RlsContext): Promise<PriceRow[]> {
   return rows.map((r) => ({
     id: r.id, code: r.code, kind: r.kind, category: r.category, driver: r.driver,
     unit: r.unit, rateIdr: Number(r.rate_idr), isActive: r.is_active, note: r.note,
+    costCategoryId: r.cost_category_id,
   }));
 }
 
@@ -312,6 +316,49 @@ export async function createPriceRow(
       input.category, input.driver, input.costCategoryId, input.note,
     ],
   );
+}
+
+/**
+ * UBAH METADATA tarif (AI-44b, kelas "edit in-place" K-09 §19).
+ *
+ * Hanya `category`, `note`, `is_active`, dan `cost_category_id` — kelas yang boleh
+ * diperbaiki tanpa membuat versi baru, karena mengubahnya tidak mengubah pernyataan
+ * ekonomi apa pun. `rate_idr` + `unit` TIDAK di sini (itu versi baru lewat
+ * publishPriceRate), dan `code`/`kind`/`driver` kekal.
+ *
+ * Berlaku ke SELURUH versi kode itu, bukan satu baris. Itu disengaja (0041 §6):
+ * label dan pemetaan akuntansi adalah sifat KODE-nya, bukan sifat versi tarifnya,
+ * jadi riwayat harus terbaca konsisten.
+ *
+ * Kenapa ini penting melebihi kenyamanan: `cost_category_id` adalah kunci yang
+ * dipakai perbandingan anggaran. Tanpa jalur ini, satu-satunya cara memetakan
+ * tarif ke kategori adalah seed atau SQL manual — artinya SETIAP tenant baru
+ * butuh developer sebelum serapan anggarannya bisa terisi.
+ *
+ * NULL = "jangan ubah" (fungsinya memakai COALESCE), jadi field yang tidak diisi
+ * tidak akan menimpa nilai yang sudah ada.
+ */
+export async function updatePriceMeta(
+  ctx: RlsContext,
+  input: {
+    id: string;
+    category: string | null;
+    note: string | null;
+    isActive: boolean | null;
+    costCategoryId: string | null;
+  },
+): Promise<number> {
+  const rows = await rlsQuery<{ n: number }>(
+    ctx,
+    `SELECT app.update_price_meta(
+              p_id               => $1::uuid,
+              p_category         => $2,
+              p_note             => $3,
+              p_is_active        => $4::boolean,
+              p_cost_category_id => $5::uuid) AS n`,
+    [input.id, input.category, input.note, input.isActive, input.costCategoryId],
+  );
+  return Number(rows[0]?.n ?? 0);
 }
 
 /** Kode tarif yang sudah dipakai entitas ini — untuk pesan galat yang menyebut sebabnya. */
