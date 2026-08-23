@@ -4,6 +4,16 @@ import { budgetVsActual, blockCostSummary } from "@/lib/repo/costing";
 import { reflectedCosts } from "@/lib/repo/pricing";
 import type { DashboardReport, Indicator, Insight } from "./types";
 
+// Realisasi kini boleh NULL (migrasi 0039: "belum ada realisasi" != "realisasi 0").
+// Menjumlahkan dengan `?? 0` akan mengembalikan angka fabrikasi yang baru saja
+// dibuang di lapisan SQL, jadi: jumlahkan yang DIKETAHUI saja, dan bila tidak ada
+// satu pun yang diketahui, hasilnya null supaya dirender "—".
+const sumKnown = (xs: (number | null)[]): number | null => {
+  const ada = xs.filter((x): x is number => x !== null);
+  return ada.length ? ada.reduce((a, b) => a + b, 0) : null;
+};
+
+
 const nf = (v: number, d = 0) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v);
 const EMPTY = "—";
 
@@ -25,8 +35,9 @@ export async function financialDashboardData(ctx: RlsContext): Promise<Dashboard
   const budgetTotal = pnl.totalBudgetIdr;
   const totalArea = perBlock.reduce((s, b) => s + (b.areaHa ?? 0), 0);
   const sumBudget = budget.reduce((s, b) => s + b.budgetIdr, 0);
-  const sumActual = budget.reduce((s, b) => s + b.actualIdr, 0);
-  const serap = budget.length && sumBudget > 0 ? (sumActual / sumBudget) * 100 : null;
+  const sumActual = sumKnown(budget.map((b) => b.actualIdr));
+  const serap =
+    sumActual !== null && sumBudget > 0 ? (sumActual / sumBudget) * 100 : null;
   const hasRevenue = reflection.revenueLines.length > 0;
   const revenue = hasRevenue ? reflection.totalRevenueIdr : null;
   const reflectedCost = reflection.totalCostIdr;
@@ -78,7 +89,22 @@ export async function financialDashboardData(ctx: RlsContext): Promise<Dashboard
   if (budgetTotal === null) insights.push({ finding: "Anggaran belum disusun; budget vs realisasi tidak dapat berjalan.", recommendation: "Susun anggaran per fase (mulai pengadaan bibit) & kategori biaya.", priority: "Tinggi", pic: "Finance · 14" });
   if (costPerHa === null) insights.push({ finding: "Belum ada biaya satuan (cost/ha, cost/pohon).", recommendation: "Aktifkan kalkulasi biaya satuan untuk economic feasibility.", priority: "Tinggi", pic: "Finance" });
   insights.push({ finding: "Belum ada kontrol pembayaran (maker-checker).", recommendation: "Terapkan payment approval dua tahap untuk vendor & payroll.", priority: "Tinggi", pic: "Finance" });
-  if (!hasRevenue) insights.push({ finding: "Belum ada panen disetujui sehingga revenue kosong.", recommendation: "Setujui panen di Inbox Approval; pastikan tarif price list per komoditas/grade terisi.", priority: "Sedang", pic: "Finance · 08" });
+  // Disamakan dengan kalimat di src/lib/pdf/reports.tsx: layar dan PDF tidak boleh
+  // mengatakan hal berbeda tentang angka yang sama (arah AI-47).
+  if (!hasRevenue) insights.push({ finding: "Pendapatan dan break-even sengaja kosong: keduanya butuh data panen, dan proyek belum menanam.", recommendation: "Struktur data sudah siap; angka muncul otomatis saat panen pertama disetujui. Pastikan tarif price list per komoditas/grade terisi.", priority: "Sedang", pic: "Finance · 08" });
+
+  // Anggaran terlampaui — dulu HANYA ada di PDF (src/lib/pdf/reports.tsx), sehingga
+  // approver yang membaca layar tidak diberi tahu sementara yang mengunduh PDF
+  // diberi tahu. Sumbernya sama: v_budget_vs_actual.is_over_budget.
+  const overBudget = budget.filter((b) => b.isOverBudget);
+  if (overBudget.length > 0) {
+    insights.push({
+      finding: `${overBudget.length} anggaran terlampaui: ${overBudget.map((b) => `${b.costCategoryName} (${b.periodName})`).join(", ")}.`,
+      recommendation: "Tinjau realisasi terhadap pagu; ajukan revisi anggaran atau tahan pengeluaran kategori itu.",
+      priority: "Tinggi",
+      pic: "Finance · 14",
+    });
+  }
 
   return {
     meta: {

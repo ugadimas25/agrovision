@@ -100,7 +100,17 @@ const prepSchema = z.object({
   effectiveAreaHa: z.union([posNum, z.literal("")]).optional(),
   status: z.enum(["not_started", "in_progress", "ready_to_plant"]),
   note: z.string().trim().max(500).optional(),
-});
+})
+  // Wajib HANYA bila pekerjaannya sudah berjalan. Status "belum mulai" memang
+  // belum punya luas efektif, dan memaksa angka di situ justru memancing tebakan
+  // -- lebih buruk daripada kolom kosong.
+  .refine(
+    (d) => d.status === "not_started" || (typeof d.effectiveAreaHa === "number" && d.effectiveAreaHa > 0),
+    {
+      message: "Area efektif wajib diisi bila pekerjaan sudah berjalan — tanpa itu biaya persiapan lahan tidak bisa dihitung",
+      path: ["effectiveAreaHa"],
+    },
+  );
 
 export async function createLandPrepAction(_p: ActionState, fd: FormData): Promise<ActionState> {
   try {
@@ -161,10 +171,24 @@ export async function createLandSuitabilityAction(_p: ActionState, fd: FormData)
 }
 
 // --- Pruning ---
+// AI-03 — field volume yang MENJADI DRIVER BIAYA dijadikan wajib.
+//
+// Nilai refleksi tiap modul di Inbox Approval dihitung volume × tarif
+// (app.v_pending_approvals, migrasi 0036): pruning memakai tree_count × PRUNE-TREE,
+// penyiangan area_ha × WEED-HA, penyemprotan total_volume × SPRAY-L, persiapan
+// lahan effective_area_ha × PREP-HA. Selama field itu opsional, record bisa
+// tersimpan tanpa volume dan biayanya MUSTAHIL dihitung -- itulah yang dilaporkan
+// penguji di B-05 dan B-07 ("tidak terdapat harga di inbox approval").
+//
+// Pesan galatnya menyebutkan akibatnya, bukan cuma "wajib diisi": orang yang tahu
+// akibatnya akan mencari angka yang benar, bukan mengarang angka supaya form lolos.
 const pruneSchema = z.object({
   blockId: uuid,
   prunedOn: dateStr,
-  treeCount: z.union([z.coerce.number().int().min(0), z.literal("")]).optional(),
+  treeCount: z.coerce
+    .number({ message: "Jumlah pohon wajib diisi" })
+    .int("Jumlah pohon harus bilangan bulat")
+    .refine((v) => v > 0, "Jumlah pohon harus lebih dari 0 — tanpa angka ini biaya pruning tidak bisa dihitung"),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -192,7 +216,9 @@ const weedSchema = z.object({
   blockId: uuid,
   weededOn: dateStr,
   method: z.enum(["manual", "mekanis", "mulsa", "herbisida", "penutup_tanah"]),
-  areaHa: optNum,
+  areaHa: z.coerce
+    .number({ message: "Luas wajib diisi" })
+    .refine((v) => v > 0, "Luas harus lebih dari 0 — tanpa luas, biaya penyiangan tidak bisa dihitung"),
   laborCount: z.union([z.coerce.number().int().min(0), z.literal("")]).optional(),
   note: z.string().trim().max(500).optional(),
 });
@@ -223,7 +249,9 @@ const spraySchema = z.object({
   chemicalId: z.union([uuid, z.literal("")]).optional(),
   target: z.string().trim().max(120).optional(),
   dosePerHa: optNum,
-  totalVolume: optNum,
+  totalVolume: z.coerce
+    .number({ message: "Volume total wajib diisi" })
+    .refine((v) => v > 0, "Volume total harus lebih dari 0 — tanpa volume, biaya penyemprotan tidak bisa dihitung"),
   unit: z.string().trim().max(20).optional(),
   note: z.string().trim().max(500).optional(),
 });

@@ -40,7 +40,7 @@ export default async function Page() {
               { kind: "select", name: "chemicalId", label: "Bahan (Agri-Input)", options: chemicals, allowEmpty: true, hint: chemicals.length === 0 ? "Belum ada bahan — tambah di Agri-Input › Chemical" : "Dari katalog Chemical" },
               { kind: "text", name: "target", label: "Target (OPT/gulma)", type: "text", placeholder: "mis. ulat penggerek" },
               { kind: "text", name: "dosePerHa", label: "Dosis /ha", type: "number", step: "any", min: "0" },
-              { kind: "text", name: "totalVolume", label: "Volume total", type: "number", step: "any", min: "0" },
+              { kind: "text", name: "totalVolume", label: "Volume total", type: "number", step: "any", min: "0.01", required: true },
               { kind: "text", name: "unit", label: "Satuan", type: "text", placeholder: "liter / kg" },
               { kind: "textarea", name: "note", label: "Catatan (opsional)" },
             ]}

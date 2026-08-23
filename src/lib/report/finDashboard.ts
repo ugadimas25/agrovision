@@ -3,14 +3,26 @@ import { budgetVsActual, totalApprovedSpend } from "@/lib/repo/costing";
 import { reflectedCosts } from "@/lib/repo/pricing";
 import { formatIdrShort, formatIdr } from "@/lib/format";
 import type { InsightRow } from "@/components/dashboard/shared";
+import { CROP } from "@/lib/labels";
+
+// Realisasi kini boleh NULL (migrasi 0039: "belum ada realisasi" != "realisasi 0").
+// Menjumlahkan dengan `?? 0` akan mengembalikan angka fabrikasi yang baru saja
+// dibuang di lapisan SQL, jadi: jumlahkan yang DIKETAHUI saja, dan bila tidak ada
+// satu pun yang diketahui, hasilnya null supaya dirender "—".
+const sumKnown = (xs: (number | null)[]): number | null => {
+  const ada = xs.filter((x): x is number => x !== null);
+  return ada.length ? ada.reduce((a, b) => a + b, 0) : null;
+};
+
 
 const EMPTY = "—";
 const nf = (v: number, d = 0) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v);
-const CROP: Record<string, string> = { DURIAN: "Durian", COCONUT: "Kelapa" };
+// Peta komoditas dipusatkan di src/lib/labels.ts (dulu disalin di 4 berkas).
 
 export type FinKpi = { key: "revenue" | "expense" | "profit" | "budget"; label: string; value: string; unit?: string; note?: string; tone?: "default" | "pos" | "neg"; badge?: { text: string; tone: "warn" | "ok" } };
 export type RevenueCommodity = { commodity: string; total: number; grades: { grade: string; value: number; pct: number }[] };
-export type BudgetFase = { fase: string; anggaran: number; realisasi: number };
+/** realisasi null = fase itu belum punya realisasi (migrasi 0039), bukan nol. */
+export type BudgetFase = { fase: string; anggaran: number; realisasi: number | null };
 
 export type FinDashboard = {
   kpis: FinKpi[];
@@ -62,20 +74,25 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
   const totalRevenue = hasRevenue ? reflection.totalRevenueIdr : null;
 
   const sumBudget = budgets.reduce((a, b) => a + b.budgetIdr, 0);
-  const sumActual = budgets.reduce((a, b) => a + b.actualIdr, 0);
+  const sumActual = sumKnown(budgets.map((b) => b.actualIdr));
   const hasBudget = budgets.length > 0;
-  const serapan = hasBudget && sumBudget > 0 ? (sumActual / sumBudget) * 100 : null;
+  const serapan =
+    hasBudget && sumBudget > 0 && sumActual !== null ? (sumActual / sumBudget) * 100 : null;
   const laba = reflection.balanceIdr;
   const labaSemu = hasRevenue && reflection.totalCostIdr < (totalRevenue ?? 0) * 0.05;
 
   // anggaran vs realisasi per fase (pakai periodName sebagai fase)
-  const faseMap = new Map<string, { anggaran: number; realisasi: number }>();
+  // realisasi per fase dijumlahkan dari yang DIKETAHUI saja; fase yang belum
+  // punya realisasi bernilai null, bukan 0 (grafik tidak menggambar batangnya).
+  const faseMap = new Map<string, { anggaran: number; realisasi: (number | null)[] }>();
   for (const b of budgets) {
-    const f = faseMap.get(b.periodName) ?? { anggaran: 0, realisasi: 0 };
-    f.anggaran += b.budgetIdr; f.realisasi += b.actualIdr;
+    const f = faseMap.get(b.periodName) ?? { anggaran: 0, realisasi: [] };
+    f.anggaran += b.budgetIdr; f.realisasi.push(b.actualIdr);
     faseMap.set(b.periodName, f);
   }
-  const budgetFases: BudgetFase[] = [...faseMap.entries()].map(([fase, v]) => ({ fase, ...v }));
+  const budgetFases: BudgetFase[] = [...faseMap.entries()].map(([fase, v]) => ({
+    fase, anggaran: v.anggaran, realisasi: sumKnown(v.realisasi),
+  }));
 
   const kpis: FinKpi[] = [
     { key: "revenue", label: "Revenue", value: totalRevenue === null ? EMPTY : formatIdrShort(totalRevenue), note: hasRevenue ? "dari panen disetujui" : "menunggu panen disetujui", tone: "pos" },
