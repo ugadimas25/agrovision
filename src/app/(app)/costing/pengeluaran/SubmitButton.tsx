@@ -10,8 +10,12 @@ const initial: ActionState = { ok: false, message: "" };
 export function SubmitButton({ id }: { id: string }) {
   const [state, formAction, pending] = useActionState(submitExpenditureAction, initial);
 
+  // data-testid = pegangan STABIL untuk scripts/at-verify.mjs. Harness memilih form
+  // dengan mencocokkan substring, jadi mencocokkan prosa ("Ajukan") rapuh: kata itu
+  // juga muncul di pesan sukses ExpenditureForm yang berada di ATAS tabel, sehingga
+  // uji menembak form yang salah dan kegagalannya baru terlihat jauh di AT4.
   return (
-    <form action={formAction} className="inline-flex flex-col items-end gap-1">
+    <form action={formAction} data-testid="ajukan-pengeluaran" className="inline-flex flex-col items-end gap-1">
       <input type="hidden" name="id" value={id} />
       <button
         type="submit"

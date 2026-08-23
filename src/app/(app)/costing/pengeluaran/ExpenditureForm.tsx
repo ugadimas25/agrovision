@@ -1,5 +1,21 @@
 "use client";
 
+/**
+ * Form catat pengeluaran manual.
+ *
+ * TIDAK terpasang di layar Pengeluaran sejak model refleksi (docs/11 §4): biaya
+ * mengalir dari aktivitas yang disetujui (volume x tarif), bukan input manual.
+ *
+ * SENGAJA DIPERTAHANKAN, bukan kode mati yang lupa dibuang:
+ *   - AI-52 (docs/13 §13 aturan 5) akan memasangnya kembali dengan cakupan
+ *     dipersempit -- khusus biaya overhead & upah tenaga kerja, yang memang
+ *     tidak punya driver aktivitas.
+ *   - Ini SATU-SATUNYA <input type="file"> di seluruh src/, jadi satu-satunya
+ *     jalur unggah bukti (putEvidence) yang ada. Menghapusnya berarti aplikasi
+ *     kehilangan kemampuan unggah bukti sama sekali.
+ * Lihat catatan sejenis di createExpenditureAction (src/lib/actions/costing.ts).
+ */
+
 import { useActionState, useState } from "react";
 import { Loader2, Plus, CircleAlert, CircleCheck, ChevronDown, Upload } from "lucide-react";
 import { createExpenditureAction, type ActionState } from "@/lib/actions/costing";
