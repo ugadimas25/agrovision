@@ -160,7 +160,9 @@ export async function listSuitabilityAssessments(ctx: RlsContext): Promise<Suita
     note: string | null; approval_status: string;
   }>(
     ctx,
-    `SELECT lsa.id, b.code AS block_code, lsa.assessed_at, cr.name AS crop_name,
+    `SELECT lsa.id, b.code AS block_code,
+            (lsa.assessed_at AT TIME ZONE 'Asia/Jakarta')::date::text AS assessed_at,
+            cr.name AS crop_name,
             cr.code AS crop_code, lsa.suit_class, lsa.subclass, lsa.limiting,
             lsa.params, lsa.note, lsa.approval_status
        FROM app.land_suitability_assessments lsa
@@ -171,7 +173,7 @@ export async function listSuitabilityAssessments(ctx: RlsContext): Promise<Suita
   return rows.map((r) => ({
     id: r.id,
     blockCode: r.block_code,
-    assessedAt: new Date(r.assessed_at).toISOString().slice(0, 10),
+    assessedAt: r.assessed_at,
     cropName: r.crop_name,
     cropCode: r.crop_code,
     suitClass: r.suit_class,

@@ -16,6 +16,7 @@ import { listOptions } from "@/lib/repo/master";
 import { createFertilizerAction } from "@/lib/actions/operational";
 import { RecommendationForm } from "./RecommendationForm";
 import { RecommendationTable } from "@/components/fertilizer/RecommendationTable";
+import { todayInOperationalZone } from "@/lib/date";
 
 export const metadata = { title: "Pemupukan — AgroVision" };
 
@@ -26,8 +27,11 @@ const PHASES = [
   { value: "productive", label: "Produktif / Generatif" },
 ];
 
+// Zona operasional (WIB), BUKAN UTC: server Cloud Run berjalan di UTC, jadi
+// toISOString() memberi tanggal KEMARIN bagi pengguna WIB antara 00:00-07:00 --
+// dan nilai itu ikut TERSIMPAN sebagai tanggal rekomendasi, bukan hanya tampil.
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayInOperationalZone();
 }
 
 export default async function Page() {

@@ -1,4 +1,5 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
+import { toDateString } from "@/lib/date";
 
 /**
  * Modul keberlanjutan: karbon, sertifikasi, traceability.
@@ -55,8 +56,8 @@ export async function latestCarbonRun(ctx: RlsContext): Promise<CarbonRun | null
   if (!r) return null;
   return {
     code: r.code,
-    periodStart: new Date(r.period_start).toISOString().slice(0, 10),
-    periodEnd: new Date(r.period_end).toISOString().slice(0, 10),
+    periodStart: r.period_start,
+    periodEnd: r.period_end,
     grossEmissionTco2e: r.gross_emission_tco2e === null ? null : Number(r.gross_emission_tco2e),
     sequestrationTco2e: r.sequestration_tco2e === null ? null : Number(r.sequestration_tco2e),
     netBalanceTco2e: r.net_balance_tco2e === null ? null : Number(r.net_balance_tco2e),
@@ -178,8 +179,8 @@ export async function listCertPrograms(ctx: RlsContext): Promise<CertProgram[]> 
     code: r.code,
     name: r.name,
     standardName: r.standard_name,
-    periodStart: new Date(r.period_start).toISOString().slice(0, 10),
-    periodEnd: new Date(r.period_end).toISOString().slice(0, 10),
+    periodStart: r.period_start,
+    periodEnd: r.period_end,
     status: r.status,
     blockCount: Number(r.block_count),
     avgReadiness: r.avg_readiness === null ? null : Number(r.avg_readiness),
@@ -235,8 +236,8 @@ export async function listCertificates(ctx: RlsContext): Promise<Certificate[]> 
       code: r.code,
       blockCode: r.block_code,
       standardName: r.standard_name,
-      validFrom: new Date(r.valid_from).toISOString().slice(0, 10),
-      validUntil: new Date(r.valid_until).toISOString().slice(0, 10),
+      validFrom: r.valid_from,
+      validUntil: r.valid_until,
       daysLeft,
       state,
     };
@@ -261,7 +262,7 @@ export async function listCapa(ctx: RlsContext): Promise<CapaItem[]> {
     severity: r.severity,
     description: r.description,
     status: r.status,
-    dueDate: new Date(r.due_date).toISOString().slice(0, 10),
+    dueDate: r.due_date,
   }));
 }
 
@@ -307,9 +308,7 @@ export async function traceSeedBatches(ctx: RlsContext): Promise<TraceBatch[]> {
       t.distributions.push({
         blockCode: r.block_code,
         qty: Number(r.qty),
-        distributedOn: r.distributed_on
-          ? new Date(r.distributed_on).toISOString().slice(0, 10)
-          : "",
+        distributedOn: r.distributed_on ?? "",
       });
     }
     map.set(r.batch_code, t);
@@ -380,8 +379,13 @@ export async function complianceRegistry(ctx: RlsContext): Promise<ComplianceGro
       status,
       referenceNo: r.reference_no,
       note: r.note,
-      obtainedOn: r.obtained_on ? new Date(r.obtained_on).toISOString().slice(0, 10) : null,
-      expiresOn: r.expires_on ? new Date(r.expires_on).toISOString().slice(0, 10) : null,
+      // toDateString, BUKAN toISOString: nilai ini dipakai sebagai defaultValue
+      // <input type="date"> di RegistryGroup.tsx lalu dikirim balik ke DB lewat
+      // setComplianceStatus(). toISOString() menggesernya satu hari ke belakang
+      // di WIB, jadi tanggalnya MUNDUR tiap kali approver menekan Simpan --
+      // walau ia hanya mengubah catatan. Itu kerusakan data, bukan label.
+      obtainedOn: toDateString(r.obtained_on),
+      expiresOn: toDateString(r.expires_on),
     });
     g.total += 1;
     if (status === "terbit" || status === "akan_berakhir") g.issued += 1;
@@ -466,8 +470,11 @@ export async function organicRegistry(ctx: RlsContext): Promise<OrganicRegistry>
     status: r.status ?? "belum_mulai",
     referenceNo: r.reference_no,
     note: r.note,
-    obtainedOn: r.obtained_on ? new Date(r.obtained_on).toISOString().slice(0, 10) : null,
-    expiresOn: r.expires_on ? new Date(r.expires_on).toISOString().slice(0, 10) : null,
+    // Sama seperti complianceRegistry: nilai ini dikirim balik ke DB lewat
+    // OrganicTracker.tsx -> setOrganicStatus(), jadi pergeseran zona waktu di
+    // sini merusak DATA, bukan hanya tampilan.
+    obtainedOn: toDateString(r.obtained_on),
+    expiresOn: toDateString(r.expires_on),
   });
   const standards = rows.filter((r) => r.kind === "standard").map(map);
   const evidence = rows.filter((r) => r.kind === "evidence").map(map);

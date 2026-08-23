@@ -14,6 +14,25 @@ export const LOCALES: Locale[] = ["id", "en"];
 export const DEFAULT_LOCALE: Locale = "id";
 export type Dict = (key: string, fallback?: string) => string;
 
+/**
+ * Sakelar bahasa DIMATIKAN sampai cakupan dictionary penuh (tiket F-4,
+ * docs/TIKET-Frontend-Harits.md).
+ *
+ * Alasan: dictionary di bawah berisi 118 kunci — cukup untuk navigasi, chrome,
+ * judul, dan subjudul halaman. Isi halaman tidak ikut: label form & header
+ * tabel ditulis langsung di komponen, label enum di src/lib/labels.ts, dan
+ * ~230 label layar laporan di src/lib/report/screens.ts. Memilih EN karena itu
+ * menghasilkan halaman setengah-setengah — judul Inggris di atas tabel
+ * Indonesia (temuan QA H-05 pada /aktivitas/weeding). Tampil separuh lebih
+ * buruk daripada tampil Indonesia seluruhnya.
+ *
+ * Selama false: getLocale() selalu mengembalikan DEFAULT_LOCALE, toggle bahasa
+ * tidak dirender, dan setLocaleAction tidak menulis cookie. Seluruh mesin i18n
+ * beserta dictionary EN tetap utuh — balik ke true begitu F-4 selesai.
+ * JANGAN hapus dictionary EN di bawah.
+ */
+export const LOCALE_SWITCHER_ENABLED = false;
+
 /** Dictionary terikat locale. `d("nav.dashboard")` → string. */
 export function getDict(locale: Locale): Dict {
   const table = MESSAGES[locale];

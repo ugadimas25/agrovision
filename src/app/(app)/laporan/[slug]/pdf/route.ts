@@ -4,6 +4,7 @@ import { requireContext } from "@/lib/session";
 import { reportBySlug } from "@/lib/report/registry";
 import { DashboardReportPdf } from "@/lib/pdf/dashboard";
 import { ModuleReportPdf } from "@/lib/pdf/moduleReport";
+import { todayInOperationalZone } from "@/lib/date";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
     el = createElement(ModuleReportPdf, { report: await entry.load(ctx) });
   }
   const buf = await renderToBuffer(el as unknown as Parameters<typeof renderToBuffer>[0]);
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = todayInOperationalZone();
   return new Response(new Uint8Array(buf), {
     headers: {
       "Content-Type": "application/pdf",

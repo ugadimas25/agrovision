@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # 'feat/**' ikut supaya PR di TENGAH stack juga mendapat CI. Tanpa itu hanya PR
+  # paling bawah (yang menargetkan main) yang diuji, dan checklist
+  # .github/pull_request_template.md tidak bisa dipenuhi otomatis.
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/**']
 
 env:
   NODE_VERSION: "22"

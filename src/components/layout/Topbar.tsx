@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Building2, LogOut, Menu } from "lucide-react";
 import { logoutAction, setLocaleAction, switchCompanyAction } from "@/lib/actions/auth";
 import type { CompanyOption } from "@/lib/session";
-import { getDict, LOCALES, type Locale } from "@/lib/i18n";
+import { getDict, LOCALE_SWITCHER_ENABLED, LOCALES, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 
@@ -13,6 +13,9 @@ function initials(name: string): string {
 }
 
 function LocaleToggle({ locale }: { locale: Locale }) {
+  // Disembunyikan sampai dictionary EN lengkap — lihat LOCALE_SWITCHER_ENABLED
+  // di src/lib/i18n.ts. Komponennya sengaja dipertahankan, bukan dihapus.
+  if (!LOCALE_SWITCHER_ENABLED) return null;
   const d = getDict(locale);
   return (
     <form action={setLocaleAction} className="flex overflow-hidden rounded-md border border-slate-200">
@@ -173,10 +176,12 @@ export function Topbar({
                     </select>
                   </form>
                 )}
-                <div className="mt-2">
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{d("chrome.language")}</p>
-                  <LocaleToggle locale={locale} />
-                </div>
+                {LOCALE_SWITCHER_ENABLED && (
+                  <div className="mt-2">
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{d("chrome.language")}</p>
+                    <LocaleToggle locale={locale} />
+                  </div>
+                )}
                 <form action={logoutAction} className="mt-3">
                   <button
                     type="submit"

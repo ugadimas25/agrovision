@@ -7,6 +7,7 @@ import {
   ScaleControl,
   AttributionControl,
   LngLatBounds,
+  Popup,
   setWorkerUrl,
   type MapLayerMouseEvent,
   type StyleSpecification,
@@ -216,6 +217,47 @@ export function TraceabilityMap() {
       m.on("mouseenter", "actors-circle", () => { m.getCanvas().style.cursor = "pointer"; });
       m.on("mouseleave", "actors-circle", () => { m.getCanvas().style.cursor = ""; });
 
+      // AI-36 (QA D-05, "Alur tidak bisa di klik"): garis alur kini bisa diklik →
+      // popup transaksi. Node memakai panel samping; alur cukup popup MapLibre
+      // karena isinya satu transaksi, bukan profil.
+      m.on("click", "flows-line", (e: MapLayerMouseEvent) => {
+        // Node digambar DI ATAS garis; bila klik mengenai keduanya, biarkan
+        // handler node yang menang supaya tidak muncul dua UI sekaligus.
+        const adaNode = m.queryRenderedFeatures(e.point, { layers: ["actors-circle"] }).length > 0;
+        if (adaNode) return;
+        const id = e.features?.[0]?.properties?.id as string | undefined;
+        const f = id ? FLOWS.find((x) => x.id === id) : undefined;
+        if (!f) return;
+        const dari = actorById(f.from), ke = actorById(f.to);
+        // Konten dirakit lewat DOM (setDOMContent), BUKAN string HTML — nama aktor
+        // adalah data, jangan beri jalan injeksi markup.
+        const el = document.createElement("div");
+        el.className = "text-xs leading-relaxed";
+        const baris = (label: string, nilai: string) => {
+          const row = document.createElement("div");
+          const b = document.createElement("span");
+          b.className = "text-slate-500";
+          b.textContent = `${label}: `;
+          row.appendChild(b);
+          row.appendChild(document.createTextNode(nilai));
+          el.appendChild(row);
+        };
+        baris("Alur", `${dari?.name ?? f.from} → ${ke?.name ?? f.to}`);
+        baris("Komoditas", f.commodity);
+        baris("Berat kotor", `${new Intl.NumberFormat("id-ID").format(f.grossKg)} kg`);
+        baris("Tanggal", f.date);
+        const kode = document.createElement("div");
+        kode.className = "mt-1 font-mono text-[10px] text-slate-400";
+        kode.textContent = f.id;
+        el.appendChild(kode);
+        new Popup({ closeButton: true, maxWidth: "260px" })
+          .setLngLat(e.lngLat)
+          .setDOMContent(el)
+          .addTo(m);
+      });
+      m.on("mouseenter", "flows-line", () => { m.getCanvas().style.cursor = "pointer"; });
+      m.on("mouseleave", "flows-line", () => { m.getCanvas().style.cursor = ""; });
+
       applyMode(m, modeRef.current);
       setLoaded(true);
 
@@ -238,7 +280,9 @@ export function TraceabilityMap() {
     return () => {
       cancelled = true;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      m.remove();
+      // Lihat catatan di EstateMap: m.remove() melempar bila init WebGL gagal,
+      // dan galat di cleanup effect membatalkan commit React saat navigasi.
+      try { m.remove(); } catch { /* peta tak pernah terinisialisasi */ }
       map.current = null;
     };
   }, [geo, applyMode]);

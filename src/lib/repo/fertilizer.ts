@@ -60,9 +60,7 @@ export async function listRecommendations(ctx: RlsContext): Promise<FertRecommen
     splitCount: r.split_count,
     isProvisional: r.is_provisional,
     note: r.note,
-    recommendedAt: r.recommended_at
-      ? new Date(r.recommended_at).toISOString().slice(0, 10)
-      : "",
+    recommendedAt: r.recommended_at ?? "",
   }));
 }
 

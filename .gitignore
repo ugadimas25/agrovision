@@ -53,3 +53,8 @@ next-env.d.ts
 
 # Tiket internal: memuat lokasi celah kontrol, JANGAN masuk repo publik
 TIKET-*-INTERNAL.md
+
+# Dump database lokal (pg_dump). Jangan di-commit: ukurannya besar dan isinya
+# salinan data, bukan sumber kebenaran. Skema tetap dari db/migrations/, data
+# demo tetap dari db/seed-demo.mjs.
+/db/backups/

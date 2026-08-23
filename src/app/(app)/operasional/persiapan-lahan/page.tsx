@@ -9,14 +9,14 @@ import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
 import { listOpRecords } from "@/lib/repo/operational";
 import { createLandPrepAction } from "@/lib/actions/operational";
+import { PREP_STATUS } from "@/lib/labels";
 
 export const metadata = { title: "Persiapan Lahan — AgroVision" };
 
-const STATUS = [
-  { value: "not_started", label: "Belum mulai" },
-  { value: "in_progress", label: "Berjalan" },
-  { value: "ready_to_plant", label: "Siap tanam" },
-];
+// Satu sumber label enum: src/lib/labels.ts. Dropdown form dan kolom Detail di
+// tabel harus memakai teks yang sama — sebelumnya labelnya ada di sini sementara
+// tabel menampilkan nilai mentah dari SQL (catatan.md §3).
+const STATUS = Object.entries(PREP_STATUS).map(([value, label]) => ({ value, label }));
 
 export default async function Page() {
   let ctx;
