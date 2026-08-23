@@ -244,6 +244,48 @@ async function run() {
   // jadi belum ada satu pun cek yang membuktikan kelas mana yang boleh berubah.
   // Yang dibuktikan di sini persis daftar "Cara membuktikan" §19.
   // =========================================================================
+  // =========================================================================
+  // Realisasi digulung ke kategori INDUK (migrasi 0047, QA B-20).
+  //
+  // Keputusan pemilik produk: anggaran dikelola di tingkat induk, tapi biaya
+  // dicatat di tingkat ANAK. Sebelum 0047 keduanya tidak pernah berpotongan dan
+  // actual_idr selalu NULL -- "realisasi anggaran selalu 0".
+  // =========================================================================
+  console.log('\n=== Realisasi digulung ke kategori INDUK (0047, B-20) ===')
+  const anak = (await c.query(
+    `INSERT INTO app.master_items (master_type_id, company_id, code, name, parent_id)
+     SELECT mt.id, $1, 'SEEDLING-SUB', 'Bibit Durian', $2 FROM app.master_types mt
+      WHERE mt.code = 'cost_category' RETURNING id`, [C1, cat.id])).rows[0]
+
+  // Anggaran per BLOK sudah ada di kategori INDUK (10 jt) dengan realisasi 12 jt.
+  // Satu transaksi lagi, kali ini dicatat di ANAK-nya.
+  await c.query(`INSERT INTO app.cost_transactions
+    (company_id,cost_center_id,block_id,cost_category_id,fiscal_period_id,transaction_date,amount_idr,approval_status,created_by)
+    VALUES ($1,$2,$3,$4,$5,'2026-03-05',1500000,'approved',$6)`,
+    [C1, cc.id, blk.id, anak.id, per.id, U_APPROVER])
+  r = await c.query(`SELECT actual_idr::float8 a FROM app.v_budget_vs_actual WHERE block_id=$1`, [blk.id])
+  ok('biaya di kategori ANAK ikut dihitung pada anggaran INDUK',
+     r.rows[0]?.a === 13500000, `Rp ${(r.rows[0]?.a ?? 0).toLocaleString('id-ID')} (12jt induk + 1,5jt anak)`)
+
+  // Arah gulungnya SATU arah: anggaran di tingkat anak tidak boleh menyerap
+  // saudara-saudaranya. Anggaran baru di ANAK, lingkup blok yang sama.
+  const anak2 = (await c.query(
+    `INSERT INTO app.master_items (master_type_id, company_id, code, name, parent_id)
+     SELECT mt.id, $1, 'SEEDLING-SUB2', 'Bibit Kelapa', $2 FROM app.master_types mt
+      WHERE mt.code = 'cost_category' RETURNING id`, [C1, cat.id])).rows[0]
+  await c.query(`INSERT INTO app.budgets (company_id,fiscal_period_id,cost_category_id,scope_type,block_id,amount_idr)
+                 VALUES ($1,$2,$3,'block',$4,9000000)`, [C1, per.id, anak2.id, blk.id])
+  r = await c.query(`SELECT actual_idr FROM app.v_budget_vs_actual
+                      WHERE block_id=$1 AND cost_category_id=$2`, [blk.id, anak2.id])
+  ok('anggaran di tingkat ANAK tidak menyerap biaya saudaranya',
+     r.rows[0]?.actual_idr === null, `actual_idr = ${r.rows[0]?.actual_idr ?? 'NULL'}`)
+
+  // security_invoker WAJIB masih menyala: CREATE OR REPLACE VIEW menjatuhkannya.
+  r = await c.query(`SELECT reloptions FROM pg_class WHERE oid='app.v_budget_vs_actual'::regclass`)
+  ok('v_budget_vs_actual tetap security_invoker sesudah ditulis ulang',
+     (r.rows[0]?.reloptions ?? []).includes('security_invoker=true'),
+     String(r.rows[0]?.reloptions))
+
   console.log('\n=== AI-44a jalur create + tiga kelas field (K-09 §19) ===')
   await asUser(U_ADMIN, 'super_admin', C1)
 
