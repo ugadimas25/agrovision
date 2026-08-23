@@ -72,6 +72,15 @@ export async function createMasterItemAction(
   try {
     const ctx = await requireRole("super_admin");
 
+    // Mode "semua entitas" (companyId null) tidak boleh menulis master item:
+    // repo menulis company_id = ctx.companyId, dan policy
+    // master_items_global_admin_only MELOLOSKAN super_admin dengan company_id
+    // NULL — item itu diam-diam menjadi GLOBAL dan terlihat oleh setiap tenant.
+    // Pola guard ini sama dengan createExpenditureAction/createBlockAction.
+    if (!ctx.companyId) {
+      return { ok: false, message: 'Pilih satu entitas dulu di kanan atas — master data tidak bisa ditulis pada mode "semua entitas".' };
+    }
+
     const parsed = createItemSchema.safeParse({
       masterTypeCode: formData.get("masterTypeCode"),
       code: formData.get("code"),
@@ -116,10 +125,22 @@ export async function updateMasterItemAction(
   try {
     const ctx = await requireRole("super_admin");
 
+    // Entitas wajib dipilih. Pada mode "semua entitas" RLS ikut meloloskan baris
+    // GLOBAL (mi_tenant: `company_id IS NULL OR ...`), jadi satu UPDATE bisa
+    // mengubah label untuk SETIAP tenant secara retroaktif. UI sudah tidak
+    // menawarkan tombolnya (MasterDataManager: item.isGlobal), ini penutup untuk
+    // pemanggilan POST langsung.
+    if (!ctx.companyId) {
+      return { ok: false, message: 'Pilih satu entitas dulu di kanan atas — perubahan master data tidak bisa dilakukan pada mode "semua entitas".' };
+    }
+
     const parsed = updateItemSchema.safeParse({
       id: formData.get("id"),
       name: formData.get("name") ?? undefined,
-      sortOrder: formData.get("sortOrder") ?? undefined,
+      // `||`, BUKAN `??`: input number yang dikosongkan mengirim "", dan
+      // z.coerce.number() mengubah "" menjadi 0 — urutan akan diam-diam
+      // di-reset ke 0 padahal pengguna tidak berniat mengubahnya.
+      sortOrder: formData.get("sortOrder") || undefined,
       isActive: formData.get("isActive") ?? undefined,
     });
     if (!parsed.success) {
@@ -133,7 +154,10 @@ export async function updateMasterItemAction(
     });
 
     revalidatePath("/pengaturan/master-data");
+    // Nama & status ikut menentukan isi dropdown di seluruh form — sama seperti
+    // pada createMasterItemAction, bukan hanya layar pengeluaran.
     revalidatePath("/costing/pengeluaran");
+    revalidatePath("/operasional/pemupukan");
     return { ok: true, message: "Perubahan disimpan." };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
@@ -175,6 +199,15 @@ export async function createFertilizerTypeAction(
 ): Promise<ActionState> {
   try {
     const ctx = await requireRole("super_admin");
+
+    // Mode "semua entitas" (companyId null) tidak boleh menulis master item:
+    // repo menulis company_id = ctx.companyId, dan policy
+    // master_items_global_admin_only MELOLOSKAN super_admin dengan company_id
+    // NULL — item itu diam-diam menjadi GLOBAL dan terlihat oleh setiap tenant.
+    // Pola guard ini sama dengan createExpenditureAction/createBlockAction.
+    if (!ctx.companyId) {
+      return { ok: false, message: 'Pilih satu entitas dulu di kanan atas — master data tidak bisa ditulis pada mode "semua entitas".' };
+    }
 
     const parsed = fertilizerSchema.safeParse({
       code: formData.get("code"),

@@ -26,6 +26,51 @@ import { getDict, type Locale } from "@/lib/i18n";
 type Item = { href: string; key: string; icon: typeof LayoutDashboard; ready?: boolean; roles?: string[] };
 type Group = { key: string | null; items: Item[] };
 
+/**
+ * MATRIKS PERAN → MENU (AI-27a, akar masalah AKAR-4 di docs/13).
+ *
+ * Sebelum ini tidak ada SATU pun item ber-`roles`, jadi filter di bawah (cari
+ * `i.roles.includes(role)`) tidak pernah membuang apa pun: petugas lapangan
+ * melihat seluruh menu. Aturannya sekarang: item tanpa `roles` terbuka untuk
+ * keempat peran, dan yang dibatasi HANYA yang punya dua-duanya —
+ * (a) dasar yang bisa ditunjuk, dan (b) route yang benar-benar dipagari.
+ *
+ * Aturan (b) itu bukan formalitas. Menyembunyikan menu tanpa memagari route
+ * hanya menghapus discoverability, bukan akses: URL-nya tetap bisa ditempel dan
+ * halamannya tetap merender seluruh datanya. Karena itu daftar di bawah sengaja
+ * PENDEK — hanya dua item, keduanya route-nya dipagari `requirePageRole()`.
+ *
+ * | Menu                  | SA | AP | CR | VW | Dasar |
+ * |-----------------------|----|----|----|----|-------|
+ * | Pengaturan › Master Data | v | - | - | - | QA A-05 (lulus): approver pun tidak boleh menambah/menonaktifkan. Route dipagari di master-data/page.tsx |
+ * | Pengguna & Akses      | v  | v  | -  | -  | Mengikuti aturan yang sudah berlaku di pengguna/page.tsx. Route dipagari |
+ *
+ * SELURUH item lain sengaja TIDAK dibatasi:
+ *   - Modul operasional/aktivitas/agri-input/keberlanjutan: viewer wajib bisa
+ *     MEMBACA setiap modul (QA A-03, lulus) dan creator memang menulis di sana
+ *     (requireRole("creator",…) di src/lib/actions/operational.ts).
+ *   - /approval: creator boleh MEMBUKA (QA A-04, lulus); yang digate adalah
+ *     tombol Setujui/Tolak, bukan halamannya.
+ *   - Layar uang (Dashboard Finansial, Refleksi Biaya, Revenue, Anggaran):
+ *     membatasinya dari creator TERDENGAR wajar, tapi belum boleh dilakukan di
+ *     sini. Tiga alasan: (1) route-nya belum dipagari, jadi hasilnya cuma
+ *     menyembunyikan; (2) angka yang sama masih terbaca lewat /laporan/keuangan
+ *     beserta /pdf dan /excel, jadi pembatasannya harus mencakup
+ *     src/lib/report/registry.ts — bukan hanya sidebar; (3) QA E-01/E-02/F-01
+ *     saat ini bertuliskan Role "Semua" dan berstatus lulus, jadi membatasinya
+ *     tanpa merevisi sheet akan melaporkan kegagalan palsu. Kerjakan satu paket
+ *     bersama AI-44/AI-47, dengan keputusan pemilik produk.
+ *
+ * CATATAN JUJUR (temuan sampingan, belum ada itemnya): harga beli aset di
+ * Agri-Input BELUM digate. `agri-input/chemical/page.tsx` dan
+ * `equipment/page.tsx` memakai canWrite = [creator, approver, super_admin] dan
+ * field "Harga beli (Rp)" ikut di dalam form yang sama, padahal K-06 Keputusan 3
+ * menyatakan harga = super_admin saja. Itu celah tersendiri, bukan alasan
+ * membatasi menunya.
+ */
+const SUPER_ADMIN_SAJA = ["super_admin"];
+const SUPER_ADMIN_APPROVER = ["super_admin", "approver"];
+
 const GROUPS: Group[] = [
   {
     key: "nav.group.dashboard",
@@ -90,8 +135,11 @@ const GROUPS: Group[] = [
   {
     key: "nav.group.settings",
     items: [
-      { href: "/pengaturan/master-data", key: "nav.masterdata", icon: Database, ready: true },
-      { href: "/pengguna", key: "nav.users", icon: Users, ready: true },
+      // QA A-05 (lulus): Master Data khusus super_admin. Sama dengan gate route
+      // di src/app/(app)/pengaturan/master-data/page.tsx.
+      { href: "/pengaturan/master-data", key: "nav.masterdata", icon: Database, ready: true, roles: SUPER_ADMIN_SAJA },
+      // Mengikuti gate route di src/app/(app)/pengguna/page.tsx.
+      { href: "/pengguna", key: "nav.users", icon: Users, ready: true, roles: SUPER_ADMIN_APPROVER },
     ],
   },
   // Dipindah ke paling bawah (docs/11 refinement) agar nav lebih rapih.
@@ -117,8 +165,11 @@ export function Sidebar({
     .filter((h) => pathname === h || pathname.startsWith(`${h}/`))
     .sort((a, b) => b.length - a.length)[0];
 
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const toggle = (k: string) => setCollapsed((s) => ({ ...s, [k]: !s[k] }));
+  // K-10 (docs/13 §2): setelah login TIDAK ada grup yang terbuka. Karena itu
+  // state-nya `expanded` (default kosong = semua tertutup), bukan `collapsed` —
+  // dengan `collapsed` kosong, `!collapsed[key]` justru membuka semuanya.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setExpanded((s) => ({ ...s, [k]: !s[k] }));
 
   return (
     <aside
@@ -149,9 +200,13 @@ export function Sidebar({
         {GROUPS.map((group, gi) => {
           const items = group.items.filter((i) => !i.roles || i.roles.includes(role));
           if (items.length === 0) return null;
-          // Grup dengan halaman aktif tak boleh disembunyikan; selain itu ikuti state.
+          // AI-33 (catatan 1.2): grup yang memuat halaman aktif kini BISA
+          // ditutup — dulu `hasActive` memaksa isOpen sehingga tombolnya seperti
+          // rusak. hasActive tetap dihitung untuk penanda titik pada header
+          // tertutup, supaya orientasi tidak hilang saat semua grup tertutup
+          // (konsekuensi K-10 yang dicatat di keputusannya).
           const hasActive = items.some((i) => i.href === activeHref);
-          const isOpen = !group.key || hasActive || !collapsed[group.key];
+          const isOpen = !group.key || Boolean(expanded[group.key]);
 
           return (
             <div key={group.key ?? `standalone-${gi}`} className="mb-2">
@@ -162,7 +217,15 @@ export function Sidebar({
                   aria-expanded={isOpen}
                   className="flex w-full items-center justify-between rounded-md px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-600"
                 >
-                  <span>{d(group.key)}</span>
+                  <span className="flex items-center gap-1.5">
+                    {d(group.key)}
+                    {/* Titik emerald = halaman aktif ada di dalam grup yang sedang
+                        tertutup. Tanpa ini, dengan semua grup tertutup (K-10),
+                        pengguna kehilangan jejak sedang berada di mana. */}
+                    {hasActive && !isOpen && (
+                      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                    )}
+                  </span>
                   <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !isOpen && "-rotate-90")} />
                 </button>
               )}
