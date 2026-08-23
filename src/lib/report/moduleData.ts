@@ -1,20 +1,35 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
-import { companyName } from "@/lib/repo/reports";
-import { statusLabelId, type ModuleReport, type ModuleColumn, type ReportMeta } from "./types";
+import { buildReportMeta } from "./meta";
+import { OPERATIONAL_TIME_ZONE } from "@/lib/date";
+import { statusLabelId, type ModuleReport, type ModuleColumn } from "./types";
 import { CROP } from "@/lib/labels";
 
 const nf = (v: number | null, d = 0) => (v === null ? "—" : new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v));
 const N = (v: string | null) => (v === null ? null : Number(v));
-const D = (v: string | null) => (v ? new Date(v).toISOString().slice(0, 10) : "—");
+/**
+ * Tanggal kalender untuk laporan. TIDAK lewat toISOString(): nilai yang masuk ke
+ * sini sebagian timestamptz hasil `::text`, dan toISOString() memformatnya di UTC
+ * sehingga kejadian 00:00–07:00 WIB tercetak sebagai HARI SEBELUMNYA. Terbukti:
+ * '2026-08-22 20:00:00+00' (= 23 Agu 03:00 WIB) menjadi '2026-08-22'.
+ *
+ * Sejak AI-47 jalur ini tidak lagi dipakai PDF/Excel, jadi bug-nya tidak lagi
+ * terjangkau dari mana pun — tapi dibiarkan berarti meninggalkan ranjau bagi
+ * pemakai berikutnya.
+ */
+const D = (v: string | null) => {
+  if (!v) return "—";
+  // Kolom DATE tiba apa adanya 'YYYY-MM-DD' (parser OID 1082 di src/lib/db.ts).
+  if (v.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat("en-CA", { timeZone: OPERATIONAL_TIME_ZONE }).format(d);
+};
 
-async function meta(ctx: RlsContext, o: { title: string; subtitle: string; source: string; note: string }): Promise<ReportMeta> {
-  return {
-    title: o.title, subtitle: o.subtitle, entity: await companyName(ctx),
-    period: "Seluruh data s.d. tanggal cetak", blockScope: "Semua blok",
-    commodity: "Kelapa & Durian", dataStatus: "Semua status (lihat kolom Status)",
-    printedAt: new Date(), source: o.source, note: o.note,
-  };
-}
+// Helper meta dipindah ke ./meta.ts (AI-47): layar, PDF, dan Excel merakit header
+// dari satu tempat yang sama. Alias lokal dipertahankan supaya 14 pemanggil di
+// bawah tidak perlu disentuh.
+const meta = buildReportMeta;
 // Peta komoditas dipusatkan di src/lib/labels.ts (dulu disalin di 4 berkas).
 
 // 01 Kesesuaian Lahan ────────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
 import { statusLabelId } from "./types";
+import { buildReportMeta } from "./meta";
 import type { IndStatus } from "./types";
-import type { ReportScreen, RadarAxis, BarDatum, PieDatum, ProgressItem, Tone } from "./screenTypes";
+import type { ReportScreen, ReportScreenBase, RadarAxis, BarDatum, PieDatum, ProgressItem, Tone } from "./screenTypes";
 import { carbonByBlock, latestCarbonRun } from "@/lib/repo/sustainability";
 import { budgetVsActual, listAllPending, listExpenditures, blockCostSummary } from "@/lib/repo/costing";
 import { reflectedCosts } from "@/lib/repo/pricing";
@@ -39,7 +40,7 @@ const SUIT_DESC: Record<string, string> = { S1: "Sangat Sesuai", S2: "Cukup Sesu
 const suitStatus = (c: string | null): IndStatus => (c === "S1" ? "ok" : c === "S2" ? "perhatian" : c === "S3" ? "perhatian" : c === "N" ? "kritis" : "belum");
 
 // ── 01 · Kesesuaian Lahan (mockup 4) ────────────────────────────────────────
-async function suitabilityScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function suitabilityScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT b.code AS block, b.name AS bname, c.code AS crop_code,
            lsa.suit_class, lsa.subclass, lsa.limiting::text AS limiting, lsa.params::text AS params,
@@ -148,7 +149,7 @@ async function suitabilityScreen(ctx: RlsContext): Promise<ReportScreen> {
 // ── 02 · Persiapan Lahan (mockup 5) ─────────────────────────────────────────
 const PREP_PCT: Record<string, number> = { ready_to_plant: 100, in_progress: 50, not_started: 0 };
 const PREP_LABEL: Record<string, string> = { ready_to_plant: "Siap Tanam", in_progress: "Proses", not_started: "Belum Siap" };
-async function landPrepScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function landPrepScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT lp.checked_at::text, b.code AS block, b.name AS bname, b.area_ha, lp.soil_ph, lp.planting_hole_count,
            lp.effective_area_ha, lp.status::text AS pstatus, lp.approval_status::text AS st
@@ -203,7 +204,7 @@ async function landPrepScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 03 · Bibit & Nursery (mockup 6) ─────────────────────────────────────────
-async function nurseryScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function nurseryScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT sb.code AS batch, c.name AS crop, sb.qty_initial,
            (SELECT ni.qty_alive FROM app.nursery_inspections ni WHERE ni.seed_batch_id=sb.id ORDER BY ni.inspected_at DESC LIMIT 1) AS alive,
@@ -254,7 +255,7 @@ async function nurseryScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 04 · Penyiangan (mockup 7) ──────────────────────────────────────────────
-async function weedingScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function weedingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT w.weeded_on::text, b.code AS block, b.area_ha, w.method, w.area_ha AS weed_area, w.labor_count, u.full_name AS officer, w.approval_status::text AS st
       FROM app.weeding_records w JOIN app.blocks b ON b.id=w.block_id LEFT JOIN app.users u ON u.id=w.created_by ORDER BY w.weeded_on DESC`);
@@ -302,7 +303,7 @@ async function weedingScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 05 · Pemupukan (mockup 8) ───────────────────────────────────────────────
-async function fertilizingScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function fertilizingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT b.code AS block, b.area_ha, fa.crop_code, fa.growth_phase::text AS phase, ft.name AS ftype, fa.total_quantity, uom.name AS uom,
            fa.applied_on::text, u.full_name AS officer, fa.approval_status::text AS st
@@ -348,7 +349,7 @@ async function fertilizingScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 06 · Pruning (mockup 9) ─────────────────────────────────────────────────
-async function pruningScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function pruningScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT pr.pruned_on::text, b.code AS block, pr.tree_count, pr.note, u.full_name AS officer, pr.approval_status::text AS st
       FROM app.pruning_records pr JOIN app.blocks b ON b.id=pr.block_id LEFT JOIN app.users u ON u.id=pr.created_by ORDER BY pr.pruned_on DESC`);
@@ -383,7 +384,7 @@ async function pruningScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 07 · Penyemprotan (mockup 10) ───────────────────────────────────────────
-async function sprayingScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function sprayingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT s.sprayed_on::text, b.code AS block, b.area_ha, ch.name AS material, s.target, s.dose_per_ha, s.total_volume, s.unit,
            u.full_name AS officer, s.approval_status::text AS st
@@ -423,7 +424,7 @@ async function sprayingScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 08 · Panen (mockup 11) ──────────────────────────────────────────────────
-async function harvestScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function harvestScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT h.harvested_on::text, b.code AS block, b.area_ha, h.crop_code, h.quantity_ton, h.grade, u.full_name AS officer, h.approval_status::text AS st
       FROM app.harvest_records h JOIN app.blocks b ON b.id=h.block_id LEFT JOIN app.users u ON u.id=h.created_by ORDER BY h.harvested_on DESC`);
@@ -475,7 +476,7 @@ async function harvestScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 09 · Katalog & Stok Chemical (mockup 12) ────────────────────────────────
-async function chemicalScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function chemicalScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT code, name, category, is_organic::text AS organik, unit, stock_qty, reorder_level, rec_phase
       FROM app.v_agri_input_stock WHERE is_active ORDER BY name`);
@@ -519,7 +520,7 @@ async function chemicalScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 10 · Katalog Equipment (mockup 13) ──────────────────────────────────────
-async function equipmentScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function equipmentScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT code, name, category, purchase_price_idr, usage_freq, fuel_type, fuel_per_hour, note
       FROM app.agri_input_equipment ORDER BY name`);
@@ -549,7 +550,7 @@ async function equipmentScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 12 · Blok & Peta (mockup 14) ────────────────────────────────────────────
-async function blocksScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function blocksScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT b.code, b.name, e.name AS estate, b.area_ha, b.planting_year,
            (b.geom IS NOT NULL)::text AS has_geom, b.verification_status::text AS st
@@ -599,7 +600,7 @@ async function blocksScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 11 · Carbon Accounting (mockup 15) ──────────────────────────────────────
-async function carbonScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function carbonScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const [blocks, run] = await Promise.all([carbonByBlock(ctx), latestCarbonRun(ctx)]);
   const totEmis = sum(blocks.map((b) => b.emissionTco2e));
   const totSeq = sum(blocks.map((b) => b.sequestrationTco2e));
@@ -643,7 +644,7 @@ async function carbonScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 13 · Pengeluaran (mockup 16) ────────────────────────────────────────────
-async function expenditureScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function expenditureScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const [data, perBlock, reflection] = await Promise.all([
     listExpenditures(ctx, { page: 1, pageSize: 100 }),
     blockCostSummary(ctx, { limit: 1000 }),
@@ -693,7 +694,7 @@ async function expenditureScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 14 · Anggaran (mockup 17) ───────────────────────────────────────────────
-async function budgetScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function budgetScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const b = await budgetVsActual(ctx);
   const totBudget = sum(b.map((x) => x.budgetIdr));
   const totActual = sum(b.map((x) => x.actualIdr));
@@ -728,7 +729,7 @@ async function budgetScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── 15 · Approval Inbox (mockup 18) ─────────────────────────────────────────
-async function approvalScreen(ctx: RlsContext): Promise<ReportScreen> {
+async function approvalScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const p = await listAllPending(ctx, { page: 1, pageSize: 100 });
   const pending = p.rows.length;
   const totReflect = sum(p.rows.map((r) => r.amountIdr ?? null));
@@ -781,7 +782,7 @@ async function approvalScreen(ctx: RlsContext): Promise<ReportScreen> {
 }
 
 // ── dispatcher ───────────────────────────────────────────────────────────────
-export const SCREEN_BUILDERS: Record<string, (ctx: RlsContext) => Promise<ReportScreen>> = {
+export const SCREEN_BUILDERS: Record<string, (ctx: RlsContext) => Promise<ReportScreenBase>> = {
   "kesesuaian-lahan": suitabilityScreen,
   "persiapan-lahan": landPrepScreen,
   "bibit": nurseryScreen,
@@ -799,7 +800,49 @@ export const SCREEN_BUILDERS: Record<string, (ctx: RlsContext) => Promise<Report
   "approval": approvalScreen,
 };
 
+/**
+ * Sumber & catatan header per laporan (AI-47). Teksnya SAMA dengan yang sudah
+ * dipakai jalur lama di moduleData.ts — bukan tulisan baru, supaya isi PDF/Excel
+ * tidak berubah artinya saat jalurnya disatukan.
+ *
+ * `title`/`subtitle` tidak ada di sini: keduanya sudah dimiliki tiap ReportScreen,
+ * jadi mengulangnya akan membuka celah kedua tempat itu berbeda.
+ */
+const SCREEN_META: Record<string, { source: string; note: string }> = {
+  "kesesuaian-lahan": { source: "modul Land Suitability.", note: 'Kelas S1 sangat sesuai – N tidak sesuai. Kosong = "—".' },
+  "persiapan-lahan": { source: "modul Land Preparation.", note: "Status kesiapan: Belum siap / Proses / Siap tanam." },
+  "bibit": { source: "modul Seedling/Nursery.", note: "Survival = hidup ÷ jumlah awal batch. Batch tanpa inspeksi ditandai —." },
+  "penyiangan": { source: "modul Weeding.", note: 'Biaya ter-refleksi saat disetujui. Kosong = "—".' },
+  "pemupukan": { source: "modul Fertilizing.", note: "Tiga pendekatan rekomendasi: uji tanah, analisis jaringan daun, neraca hara." },
+  "pruning": { source: "modul Pruning.", note: "Jumlah pohon jadi dasar biaya tenaga kerja." },
+  "penyemprotan": { source: "modul Spraying.", note: "Material dari katalog Agri-Input; metode bisa manual/drone/outsource." },
+  "panen": { source: "modul Harvesting → Accounting & Traceability.", note: "Revenue = tonase × tarif price list per komoditas. Panen disetujui = titik awal Traceability." },
+  "chemical": { source: "modul Agri-Input / Chemical.", note: "Dua jalur input: organik & sintetik." },
+  "equipment": { source: "modul Agri-Input / Equipment.", note: "Harga & konsumsi jadi dasar biaya operasi." },
+  "karbon": { source: "modul Carbon Accounting.", note: "Faktor emisi masih perlu validasi lokal (EF-LANDCLEAR dll)." },
+  "blok": { source: "modul Blocks & Map.", note: "Basemap Sentinel-2 & OSM. Luas dari PostGIS." },
+  "pengeluaran": { source: "modul Costing/Pengeluaran.", note: 'Hanya nilai Disetujui yang dihitung. Filter: Draft/Diajukan/Disetujui/Ditolak. Kosong ditulis "—", bukan 0.' },
+  "anggaran": { source: "modul Costing/Anggaran vs Pengeluaran disetujui.", note: "Realisasi dihitung pada tingkat lingkup anggaran, digulung dari sub-kategori (migrasi 0047)." },
+  "approval": { source: "modul Approval.", note: "Nilai = rupiah ter-refleksi. Penolakan wajib menyertakan alasan." },
+};
+
+/**
+ * Satu-satunya pintu membangun layar laporan — dan sejak AI-47 juga satu-satunya
+ * pintu untuk PDF & Excel. Header dirakit DI SINI, sekali, sehingga ketiga format
+ * secara struktural mustahil menampilkan kolom atau header yang berbeda.
+ */
 export async function buildReportScreen(ctx: RlsContext, slug: string): Promise<ReportScreen | null> {
   const b = SCREEN_BUILDERS[slug];
-  return b ? b(ctx) : null;
+  if (!b) return null;
+  const screen = await b(ctx);
+  const m = SCREEN_META[slug] ?? { source: `modul ${slug}.`, note: "" };
+  return {
+    ...screen,
+    meta: await buildReportMeta(ctx, {
+      title: screen.title,
+      subtitle: screen.subtitle ?? "",
+      source: m.source,
+      note: m.note,
+    }),
+  };
 }

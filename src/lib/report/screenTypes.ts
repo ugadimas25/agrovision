@@ -6,7 +6,7 @@
  *
  * Prinsip data tetap: kosong = "—" (bukan 0).
  */
-import type { IndStatus } from "./types";
+import type { IndStatus, ReportMeta } from "./types";
 
 export type Tone = "ok" | "perhatian" | "kritis" | "belum" | "info" | "default";
 
@@ -73,7 +73,11 @@ export type ScreenTable = {
   footNote?: string;
 };
 
-export type ReportScreen = {
+/**
+ * Apa yang DIKEMBALIKAN tiap builder layar. Tanpa `meta` — header dirakit sekali
+ * di buildReportScreen(), bukan diulang 15 kali.
+ */
+export type ReportScreenBase = {
   slug: string;
   title: string;
   subtitle?: string;
@@ -83,3 +87,11 @@ export type ReportScreen = {
   table: ScreenTable;
   rail?: RecoRail;
 };
+
+/**
+ * Apa yang DIPAKAI konsumen: layar, PDF, dan Excel. Sejak AI-47 ketiganya dirender
+ * dari objek ini, sehingga kolom dan header mereka secara struktural mustahil
+ * berbeda. `meta` dipisahkan dari ReportScreenBase supaya menambahkannya tidak
+ * menuntut perubahan di 15 builder.
+ */
+export type ReportScreen = ReportScreenBase & { meta: ReportMeta };

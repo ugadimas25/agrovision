@@ -223,12 +223,12 @@ Pekerjaannya berlapis dan harus dikerjakan berurutan: (1) bentuk tipe `Dashboard
 | ID | Item | Sumber | Prioritas | Estimasi | Owner usul |
 |---|---|---|---|---|---|
 | AI-37 | Sesi penggabungan laporan: Penyiangan + Penyemprotan + Pruning → satu "Aktivitas Pemeliharaan" berfilter modul | catatan 7 · K-07 | P2 | Sesi 1 jam + M (2 hari) | Dimas + Fullstack |
-| **AI-47** | **Satukan jalur laporan layar & ekspor** — PDF/Excel dirender dari objek `ReportScreen` yang sama | Temuan kode · K-07 | **P1** | L (3–4 hari) | Backend |
+| ~~**AI-47**~~ | ~~**Satukan jalur laporan layar & ekspor**~~ **SELESAI 24 Agu 2026** — PDF/Excel dirender dari objek `ReportScreen` yang sama. `meta` dipindah ke `ReportScreen` (dipisah jadi `ReportScreenBase`, jadi 15 builder tidak disentuh selain anotasi tipe); `screenToModuleReport()` menjembatani ke renderer yang sudah ada karena `ScreenTable.columns` dan `ModuleColumn` ternyata IDENTIK. KPI layar ikut dicetak. Dijaga `at:verify`: kolom layar = kolom Excel di **15/15** laporan. | Temuan kode · K-07 | **P1** | L (3–4 hari) | Backend |
 | **AI-48** | **Batas 8 kolom di mobile + baris detail yang bisa dibuka**, untuk 15 laporan modul | catatan 7, G-04 · K-07 | P1 | L (4–5 hari) | Frontend |
 | **AI-49** | Perluas seed demo agar laporan Panen/Bibit/Karbon/Equipment punya isi + penanda "contoh" — **jembatan sementara**, exit criteria: dihapus lewat `db:purge:demo` begitu AI-19/AI-20/AI-50 selesai dan data nyata mengalir | K-07 | P2 | M (1–2 hari) | Backend |
 | AI-38 | Selesaikan uji F-01…F-05 (PDF, Excel, silang-cek angka) — **jalankan SETELAH AI-47**, kalau tidak yang diuji akan dibuang | 5 skenario belum diuji | P1 | M (1–2 hari) | QA |
 
-Urutannya mengikat: **AI-47 lebih dulu** (satukan jalur), baru AI-48 (batas kolom), baru AI-38 (uji ekspor). Membalik urutan berarti mengerjakan tata letak dua kali dan menguji jalur yang akan dibuang. AI-37 dan AI-49 bisa jalan paralel.
+**AI-47 sudah selesai (24 Agu 2026)**, jadi AI-48 dan AI-38 kini bebas jalan. Urutannya tetap mengikat untuk keduanya: AI-48 (batas kolom) sebelum AI-38 (uji ekspor). Membalik urutan berarti mengerjakan tata letak dua kali dan menguji jalur yang akan dibuang. AI-37 dan AI-49 bisa jalan paralel.
 
 ---
 

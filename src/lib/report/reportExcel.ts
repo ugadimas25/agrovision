@@ -82,8 +82,18 @@ export function dashboardExcelHtml(report: DashboardReport): string {
 }
 
 // ── Modul ───────────────────────────────────────────────────────────────────
-export function moduleExcelHtml(report: ModuleReport): string {
+/**
+ * AI-47: `kpis` opsional — angka ringkas yang tampil di atas tabel LAYAR. Tanpa
+ * ini unduhan kehilangan justru angka yang paling dibaca manajemen, dan klaim
+ * "ekspor tidak berbeda dari layar" hanya berlaku untuk tabelnya.
+ */
+export function moduleExcelHtml(report: ModuleReport, kpis?: { label: string; value: string }[]): string {
   const { meta, columns, rows, visual } = report;
+  const kpiBlock = kpis?.length
+    ? `<h2>Ringkasan</h2><table class="data"><tbody>${kpis
+        .map((k) => `<tr><td class="lbl">${esc(k.label)}</td><td style="font-weight:bold">${esc(k.value)}</td></tr>`)
+        .join("")}</tbody></table>`
+    : "";
   const head = columns.map((c) =>
     `<th style="background:${c.kind === "new" ? "#2563eb" : "#1a6c2c"};${c.align === "right" ? "text-align:right" : ""}">${esc(c.label)}</th>`).join("");
   const body = rows.map((row) =>
@@ -96,6 +106,7 @@ export function moduleExcelHtml(report: ModuleReport): string {
 
   const legend = `<div class="note">■ Header hijau = kolom eksisting &nbsp; ■ Header biru = rekomendasi tambahan (baru), digabung langsung.</div>`;
   const inner = metaBlock(meta)
+    + kpiBlock
     + `<table class="data"><thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${columns.length}">Belum ada data.</td></tr>`}</tbody></table>`
     + legend
     + (visual ? `<div class="visual">Visual pendamping: ${esc(visual)}</div>` : "")

@@ -685,6 +685,49 @@ async function main() {
       && /tidak memakai driver/.test(salah.html));
   }
 
+  console.log("\n=== AI-47: layar, PDF, dan Excel satu sumber ===");
+  {
+    // Sebelum AI-47 layar memakai screens.ts sementara PDF/Excel memakai
+    // moduleData.ts -- DUA jalur data terpisah, dan kolomnya menyimpang sampai 4
+    // kolom. Uji ini membandingkan jumlah kolom tabel detail di layar dengan yang
+    // dikeluarkan Excel, untuk SETIAP laporan modul. Kalau seseorang menambah
+    // kolom di satu jalur saja, uji ini yang menangkapnya.
+    const SLUGS = ["kesesuaian-lahan", "persiapan-lahan", "bibit", "penyiangan", "pemupukan",
+      "pruning", "penyemprotan", "panen", "chemical", "equipment", "karbon", "blok",
+      "pengeluaran", "anggaran", "approval"];
+
+    // Tabel detail adalah <thead> TERLEBAR di halaman; panel lain punya tabel kecil.
+    const widestThead = (html) => {
+      let max = 0;
+      for (const m of html.matchAll(/<thead[\s\S]*?<\/thead>/g)) {
+        const n = [...m[0].matchAll(/<th\b/g)].length;
+        if (n > max) max = n;
+      }
+      return max;
+    };
+
+    const beda = [];
+    let pdfGagal = 0;
+    for (const slug of SLUGS) {
+      const scr = await admin.get(`/laporan/${slug}`);
+      const xls = await admin.get(`/laporan/${slug}/excel`);
+      const a = widestThead(visible(scr.html));
+      const b = widestThead(xls.html);
+      if (a === 0 || a !== b) beda.push(`${slug}: layar ${a} vs excel ${b}`);
+      const pdf = await fetch(`${BASE}/laporan/${slug}/pdf`, { headers: { cookie: admin.header() } });
+      if (pdf.status !== 200) pdfGagal++;
+    }
+    ok(`kolom layar = kolom Excel di ${SLUGS.length} laporan modul`, beda.length === 0,
+      beda.join(" · ") || "seluruhnya identik");
+    ok(`PDF ke-${SLUGS.length} laporan modul terender`, pdfGagal === 0, `${pdfGagal} gagal`);
+
+    // Header ekspor harus datang dari meta yang sama, bukan dirakit ulang.
+    const xl = await admin.get("/laporan/penyemprotan/excel");
+    ok("header Excel memuat entitas & sumber dari meta bersama",
+      /Entitas/.test(xl.html) && /modul Spraying/.test(xl.html));
+    ok("KPI layar ikut tercetak di Excel", /Ringkasan/.test(xl.html));
+  }
+
   console.log("\n=== AT6: tidak ada literal numerik menyerupai data ===");
   {
     const { readFileSync } = await import("node:fs");
