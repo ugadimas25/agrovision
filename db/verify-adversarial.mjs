@@ -168,6 +168,53 @@ async function run() {
   r = await c.query(`SELECT approved_by FROM app.emission_factors WHERE code='EF-X'`)
   ok('approved_by diambil dari sesi, tak bisa dipalsukan', r.rows[0].approved_by === U_APPROVER)
 
+  // =========================================================================
+  // AI-44a / K-09 §19 — jalur create tarif baru dibuka, jadi gerbangnya harus
+  // dibuktikan dari sisi penyerang: tarif adalah pengendali SELURUH angka
+  // keuangan (K-06 Keputusan 3 menyempitkannya ke super_admin saja).
+  // =========================================================================
+  console.log('\n=== AI-44a: tarif hanya boleh disentuh super_admin ===')
+  await as(U_ADMIN, 'super_admin', CA)
+  await c.query(`SELECT app.publish_price(
+                   p_code => 'ADV-WEED', p_rate_idr => 500000, p_valid_from => '2026-01-01',
+                   p_unit => 'ha', p_kind => 'cost', p_category => 'Penyiangan',
+                   p_driver => 'weeding_area_ha')`)
+  r = await c.query(`SELECT id FROM app.price_list WHERE company_id=$1 AND code='ADV-WEED'`, [CA])
+  const advPrice = r.rows[0]?.id
+  ok('super_admin bisa membuat baris tarif', Boolean(advPrice))
+
+  for (const [peran, uid] of [['approver', U_APPROVER], ['creator', U_CREATOR], ['viewer', U_VIEWER]]) {
+    await as(uid, peran, CA)
+    await mustFail(c, `${peran} MEMBUAT baris tarif DITOLAK`,
+      `SELECT app.publish_price(p_code => 'ADV-${peran.toUpperCase()}', p_rate_idr => 1,
+                               p_valid_from => '2026-09-01', p_unit => 'ha',
+                               p_kind => 'cost', p_category => 'x')`, [], /super_admin/i)
+    await mustFail(c, `${peran} MENERBITKAN versi tarif DITOLAK`,
+      `SELECT app.publish_price('ADV-WEED', 9999, '2026-09-01')`, [], /super_admin/i)
+    await mustFail(c, `${peran} MENGEDIT metadata tarif DITOLAK`,
+      `SELECT app.update_price_meta($1, p_category => 'disusupi')`, [advPrice], /super_admin/i)
+    await mustFail(c, `${peran} UPDATE langsung ke price_list DITOLAK`,
+      `UPDATE app.price_list SET rate_idr = 1 WHERE id = $1`, [advPrice], /permission denied|row-level security/i)
+  }
+
+  // Bahkan super_admin tidak boleh menulis LANGSUNG: satu-satunya pintu adalah
+  // fungsi bergerbang, dan itu ditegakkan REVOKE (ledger 0041 §7) -- bukan oleh
+  // kesepakatan lapisan aplikasi.
+  await as(U_ADMIN, 'super_admin', CA)
+  await mustFail(c, 'super_admin pun tidak bisa INSERT langsung ke price_list',
+    `INSERT INTO app.price_list (company_id,code,kind,category,unit,rate_idr,version,valid_from)
+     VALUES ($1,'ADV-DIRECT','cost','x','ha',1,1,'2026-09-01')`, [CA], /permission denied|row-level security/i)
+  await mustFail(c, 'super_admin pun tidak bisa DELETE baris tarif',
+    `DELETE FROM app.price_list WHERE id = $1`, [advPrice], /permission denied|row-level security/i)
+  // Backdating: tarif tidak boleh dimundurkan ke periode yang sudah dilewati.
+  await mustFail(c, 'menerbitkan tarif dengan tanggal mundur DITOLAK',
+    `SELECT app.publish_price('ADV-WEED', 1, '2025-01-01')`, [], /backdating dilarang/i)
+  // Tenant lain: tarif entitas B tidak boleh disentuh dari sesi entitas A.
+  await mustFail(c, 'menerbitkan tarif untuk entitas di luar akses DITOLAK',
+    `SELECT app.publish_price(p_code => 'ADV-LINTAS', p_rate_idr => 1, p_valid_from => '2026-09-01',
+                             p_unit => 'ha', p_company_id => $1, p_kind => 'cost', p_category => 'x')`,
+    [CB], /di luar akses/i)
+
   console.log('\n=== #14 BLOCKER: v_budget_vs_actual fan-out pada scope non-blok ===')
   await as(U_APPROVER, 'approver', CA)
   // 1 budget company-scope, 3 pengeluaran di 2 blok berbeda

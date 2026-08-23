@@ -40,34 +40,80 @@ export async function getPriceList(ctx: RlsContext): Promise<PriceRow[]> {
 
 // Metrik volume operasional per driver. Semua di-scope RLS lewat join ke blocks
 // (aman walau tabel sumber punya kebijakan berbeda).
+//
+// Daftar ini WAJIB sama dengan CASE modul di app.decide_record() (migrasi 0044
+// §1) dan dengan CHECK price_list_driver_check (0041 §2). Kalau kedua daftar
+// berbeda, layar Refleksi dan realisasi anggaran menyebut angka berbeda untuk
+// hal yang sama: baris tarif ber-driver yang tidak dikenal di sini dilewati
+// oleh reflectedCosts() -- dulu tanpa suara. Itulah yang terjadi antara 0041
+// dan perbaikan ini: WEED-HA/SPRAY-L/PRUNE-TREE mendapat driver di database,
+// DRIVER_SQL tidak ikut diperluas, dan Rp 37 jt (DEMO) / Rp 414 jt (PILOT)
+// hilang dari layar sementara app.decide_record() memateralisasikannya dengan
+// benar. Sekarang driver tak dikenal dilaporkan lewat `unknownDrivers`.
+//
+// TANPA COALESCE(...,0), sengaja: SUM atas nol baris mengembalikan NULL, dan
+// NULL berarti "belum ada volume" -- dirender em-dash. COALESCE membuat tarif
+// yang belum punya aktivitas apa pun tampil sebagai "Rp 0", yaitu angka
+// fabrikasi yang dilarang concept:40 (AI-06, tapi di sisi TypeScript).
 const DRIVER_SQL: Record<string, string> = {
-  block_area_ha: `SELECT COALESCE(SUM(area_ha), 0)::float8 AS v FROM app.blocks WHERE archived_at IS NULL`,
-  landprep_area_ha: `SELECT COALESCE(SUM(lp.effective_area_ha), 0)::float8 AS v
+  block_area_ha: `SELECT SUM(area_ha)::float8 AS v FROM app.blocks WHERE archived_at IS NULL`,
+  landprep_area_ha: `SELECT SUM(lp.effective_area_ha)::float8 AS v
                        FROM app.land_preparations lp JOIN app.blocks b ON b.id = lp.block_id
                       WHERE lp.approval_status = 'approved'`,
-  seedling_qty: `SELECT COALESCE(SUM(sd.qty), 0)::float8 AS v
+  seedling_qty: `SELECT SUM(sd.qty)::float8 AS v
                    FROM app.seed_distributions sd JOIN app.blocks b ON b.id = sd.block_id
                   WHERE b.archived_at IS NULL`,
-  fertilizer_qty: `SELECT COALESCE(SUM(fa.total_quantity), 0)::float8 AS v
+  fertilizer_qty: `SELECT SUM(fa.total_quantity)::float8 AS v
                      FROM app.fertilizer_applications fa JOIN app.blocks b ON b.id = fa.block_id
                     WHERE fa.approval_status = 'approved'`,
+  // Tiga di bawah menyusul migrasi 0041/0044 (AI-02). Kolom sumbernya dipilih
+  // supaya IDENTIK dengan yang dipakai app.decide_record() saat materialisasi:
+  // weeding_records.area_ha, spraying_records.total_volume, pruning_records
+  // .tree_count -- keduanya harus mengukur hal yang sama.
+  weeding_area_ha: `SELECT SUM(w.area_ha)::float8 AS v
+                      FROM app.weeding_records w JOIN app.blocks b ON b.id = w.block_id
+                     WHERE w.approval_status = 'approved'`,
+  spraying_volume: `SELECT SUM(s.total_volume)::float8 AS v
+                      FROM app.spraying_records s JOIN app.blocks b ON b.id = s.block_id
+                     WHERE s.approval_status = 'approved'`,
+  pruning_tree_count: `SELECT SUM(pr.tree_count)::float8 AS v
+                         FROM app.pruning_records pr JOIN app.blocks b ON b.id = pr.block_id
+                        WHERE pr.approval_status = 'approved'`,
 };
+
+/**
+ * Driver yang boleh dipilih saat membuat baris tarif (AI-44a).
+ *
+ * Diturunkan dari kunci DRIVER_SQL, BUKAN daftar terpisah: driver yang tidak
+ * punya query volume tidak akan pernah menghasilkan biaya di layar Refleksi,
+ * jadi menawarkannya di form hanya membuat baris tarif yang diam. CHECK
+ * price_list_driver_check (0041 §2) adalah gerbang otoritatifnya; ini
+ * penyaring di depan supaya pesannya enak dibaca.
+ */
+export function driverOptions(): { value: string; label: string }[] {
+  return Object.keys(DRIVER_SQL).map((d) => ({ value: d, label: DRIVER_LABEL[d] ?? d }));
+}
 
 const DRIVER_LABEL: Record<string, string> = {
   block_area_ha: "Total luas blok",
   landprep_area_ha: "Luas persiapan lahan (disetujui)",
   seedling_qty: "Bibit terdistribusi",
   fertilizer_qty: "Pupuk diaplikasikan (disetujui)",
+  weeding_area_ha: "Luas penyiangan (disetujui)",
+  spraying_volume: "Volume semprot (disetujui)",
+  pruning_tree_count: "Pohon dipruning (disetujui)",
 };
 
 export type ReflectedLine = {
   code: string;
   category: string;
   driverLabel: string;
-  volume: number;
+  /** null = belum ada volume sumber sama sekali (SUM atas nol baris), BUKAN 0. */
+  volume: number | null;
   unit: string;
   rateIdr: number;
-  amountIdr: number;
+  /** null bila volumenya null — tarif tanpa volume bukan biaya Rp 0. */
+  amountIdr: number | null;
 };
 
 export type RevenueLine = {
@@ -80,9 +126,22 @@ export type RevenueLine = {
 
 export type Reflection = {
   lines: ReflectedLine[];
+  /** Jumlah baris yang volumenya DIKETAHUI. Baris ber-volume null tidak ikut. */
   totalCostIdr: number;
   /** Baris biaya tarif-manual (mis. upah) yang butuh input volume terpisah. */
   manualCost: PriceRow[];
+  /**
+   * Baris tarif aktif yang drivernya tidak dikenal DRIVER_SQL. Sebelumnya
+   * dilewati tanpa suara; ditampilkan supaya selisih dengan realisasi anggaran
+   * terlihat, bukan menghilang.
+   */
+  unknownDrivers: { code: string; category: string; driver: string }[];
+  /**
+   * Baris tarif aktif yang drivernya sudah dipakai baris lain. Volume driver
+   * hanya boleh dihitung SEKALI: mengalikannya ke dua baris menggandakan biaya.
+   * Baris yang kalah dilaporkan di sini, bukan dijumlahkan diam-diam.
+   */
+  driverConflicts: { code: string; category: string; driver: string; dipakaiOleh: string }[];
   revenueRates: PriceRow[];
   revenueLines: RevenueLine[];
   totalRevenueIdr: number;
@@ -97,19 +156,49 @@ const REVENUE_CODE: Record<string, string> = { DURIAN: "REV-DUR-A", COCONUT: "RE
 export async function reflectedCosts(ctx: RlsContext): Promise<Reflection> {
   const prices = await getPriceList(ctx);
   const lines: ReflectedLine[] = [];
+  const unknownDrivers: Reflection["unknownDrivers"] = [];
+  const driverConflicts: Reflection["driverConflicts"] = [];
 
-  for (const p of prices) {
-    if (p.kind !== "cost" || !p.isActive || !p.driver) continue;
-    const sql = DRIVER_SQL[p.driver];
-    if (!sql) continue;
-    const res = await rlsQuery<{ v: number }>(ctx, sql);
-    const volume = res[0]?.v ?? 0;
+  // Urut per kode supaya pemenang konflik driver deterministik (bukan bergantung
+  // pada ORDER BY kind, category di getPriceList yang bisa berubah).
+  const costRows = prices
+    .filter((p) => p.kind === "cost" && p.isActive && p.driver)
+    .sort((a, b) => a.code.localeCompare(b.code));
+
+  // Volume di-query SEKALI per driver, bukan per baris tarif: dua baris yang
+  // berbagi driver mengukur volume yang SAMA, jadi mengalikannya dua kali
+  // menggandakan biaya. Baris kedua dilaporkan sebagai konflik.
+  const volumeByDriver = new Map<string, number | null>();
+  const winnerByDriver = new Map<string, string>();
+
+  for (const p of costRows) {
+    const driver = p.driver!;
+    const sql = DRIVER_SQL[driver];
+    if (!sql) {
+      unknownDrivers.push({ code: p.code, category: p.category, driver });
+      continue;
+    }
+    const pemenang = winnerByDriver.get(driver);
+    if (pemenang) {
+      driverConflicts.push({ code: p.code, category: p.category, driver, dipakaiOleh: pemenang });
+      continue;
+    }
+    winnerByDriver.set(driver, p.code);
+
+    if (!volumeByDriver.has(driver)) {
+      const res = await rlsQuery<{ v: number | null }>(ctx, sql);
+      // res[0].v null = SUM atas nol baris. Dipertahankan sebagai null: "belum
+      // ada volume" bukan "volumenya nol".
+      volumeByDriver.set(driver, res[0]?.v ?? null);
+    }
+    const volume = volumeByDriver.get(driver) ?? null;
     lines.push({
-      code: p.code, category: p.category, driverLabel: DRIVER_LABEL[p.driver] ?? p.driver,
-      volume, unit: p.unit, rateIdr: p.rateIdr, amountIdr: Math.round(volume * p.rateIdr),
+      code: p.code, category: p.category, driverLabel: DRIVER_LABEL[driver] ?? driver,
+      volume, unit: p.unit, rateIdr: p.rateIdr,
+      amountIdr: volume === null ? null : Math.round(volume * p.rateIdr),
     });
   }
-  const totalCostIdr = lines.reduce((a, l) => a + l.amountIdr, 0);
+  const totalCostIdr = lines.reduce((a, l) => a + (l.amountIdr ?? 0), 0);
 
   // Revenue dari panen DISETUJUI × tarif per komoditas.
   const harvest = await rlsQuery<{ crop_code: string; ton: number }>(
@@ -137,6 +226,8 @@ export async function reflectedCosts(ctx: RlsContext): Promise<Reflection> {
     lines,
     totalCostIdr,
     manualCost: prices.filter((p) => p.kind === "cost" && p.isActive && !p.driver),
+    unknownDrivers,
+    driverConflicts,
     revenueRates: prices.filter((p) => p.kind === "revenue" && p.isActive),
     revenueLines,
     totalRevenueIdr,
@@ -167,6 +258,70 @@ export async function publishPriceRate(
     `SELECT app.publish_price($1, $2, $3::date)`,
     [input.code, input.rateIdr, input.berlakuDari],
   );
+}
+
+/**
+ * BUAT baris tarif baru (AI-44a, K-09 §19).
+ *
+ * Sebelum ini `INSERT INTO app.price_list` hanya ada di `db/seed-demo.mjs` —
+ * tarif hanya bisa lahir dari seed atau SQL manual, dan itu memblokir K-03
+ * (harga per grade butuh satu baris revenue per grade).
+ *
+ * Jalurnya SAMA dengan penerbitan versi: app.publish_price(). Fungsi itu
+ * mengenali "kode belum ada" dan menempuh cabang versi 1, tempat kind/category/
+ * unit menjadi WAJIB. Tidak ada INSERT langsung di sini — app_rw tidak punya
+ * privilege INSERT ke price_list (ledger app.privilege_revocations, 0041 §7),
+ * jadi satu pintu tulis itu bukan kesepakatan lapisan aplikasi tapi ditegakkan
+ * database.
+ *
+ * `chemical_id` SENGAJA tidak diekspos. Tarif per bahan adalah kemampuan nyata
+ * (app.price_for_driver memilih baris ber-chemical_id di atas baris generik),
+ * tetapi "bahan mana yang pantas punya tarif sendiri" adalah keputusan produk
+ * yang belum diambil — dan indeks 0046 membuat pilihan yang salah tidak bisa
+ * diperbaiki dengan menimpa. Biarkan seed/migrasi yang mengisinya sampai
+ * keputusannya ada.
+ */
+export async function createPriceRow(
+  ctx: RlsContext,
+  input: {
+    code: string;
+    kind: "cost" | "revenue";
+    category: string;
+    unit: string;
+    rateIdr: number;
+    berlakuDari: string;
+    driver: string | null;
+    costCategoryId: string | null;
+    note: string | null;
+  },
+): Promise<void> {
+  await rlsQuery(
+    ctx,
+    `SELECT app.publish_price(
+              p_code             => $1,
+              p_rate_idr         => $2,
+              p_valid_from       => $3::date,
+              p_unit             => $4,
+              p_kind             => $5,
+              p_category         => $6,
+              p_driver           => $7,
+              p_cost_category_id => $8::uuid,
+              p_note             => $9)`,
+    [
+      input.code, input.rateIdr, input.berlakuDari, input.unit, input.kind,
+      input.category, input.driver, input.costCategoryId, input.note,
+    ],
+  );
+}
+
+/** Kode tarif yang sudah dipakai entitas ini — untuk pesan galat yang menyebut sebabnya. */
+export async function priceCodeExists(ctx: RlsContext, code: string): Promise<boolean> {
+  const rows = await rlsQuery<{ ada: boolean }>(
+    ctx,
+    `SELECT EXISTS (SELECT 1 FROM app.price_list WHERE code = $1) AS ada`,
+    [code],
+  );
+  return rows[0]?.ada ?? false;
 }
 
 /**

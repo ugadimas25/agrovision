@@ -211,6 +211,12 @@ async function main() {
   await psql(`DELETE FROM app.budgets WHERE company_id='00000000-0000-4000-8000-000000000001'`);
   await psql(`DELETE FROM app.fiscal_periods WHERE code LIKE 'FASE-UJI%'`);
   await psql(`DELETE FROM app.master_items WHERE code LIKE 'TEST%'`);
+  // Baris tarif fixture AI-44a. audit_log lebih dulu: trigger price_list_audit
+  // (0041 §8) menulis satu baris per perubahan dan entity_id-nya menunjuk ke
+  // sini. price_list append-only untuk aplikasi, tapi psql ini superuser.
+  await psql(`DELETE FROM app.audit_log WHERE entity_type='price_list' AND entity_id IN (
+                SELECT id FROM app.price_list WHERE code LIKE 'UJITARIF%')`);
+  await psql(`DELETE FROM app.price_list WHERE code LIKE 'UJITARIF%'`);
   // Inbox harus terisolasi: sisa transaksi 'submitted' dari run lama akan
   // membuat hitungan item dan pemilihan baris ikut kacau.
   await psql(`DELETE FROM app.evidence_links WHERE entity_id IN (
@@ -463,6 +469,92 @@ async function main() {
     const blokPage2 = await creator.get("/operasional/blok");
     ok("halaman blok memuat MapLibre + basemap gratis",
       /maplibre/.test(blokPage2.html) && /Sentinel-2/.test(blokPage2.html));
+  }
+
+  console.log("\n=== AI-44a: tambah baris tarif baru (K-09 §19) ===");
+  {
+    // Penanda form adalah data-testid, BUKAN prosa: halaman ini punya beberapa
+    // <form> (satu per baris tarif untuk penerbitan versi), dan mencocokkan
+    // kalimat membuat uji menembak form yang salah -- kegagalannya lalu muncul
+    // jauh kemudian sebagai angka yang aneh.
+    const MARK = 'data-testid="tambah-tarif"';
+    const refAdmin = await admin.get("/costing/refleksi");
+    ok("form tambah tarif ADA di HTML server (jalan tanpa JavaScript)",
+      Boolean(pickForm(refAdmin.html, MARK)));
+
+    // Gerbang peran: tarif adalah pengendali seluruh angka keuangan, jadi
+    // creator/approver tidak boleh melihat FORM-nya maupun berhasil POST.
+    const refCreator = await creator.get("/costing/refleksi");
+    ok("creator tidak melihat form tambah tarif", pickForm(refCreator.html, MARK) === null);
+    const refApprover = await approver.get("/costing/refleksi");
+    ok("approver tidak melihat form tambah tarif", pickForm(refApprover.html, MARK) === null);
+
+    const kode = `UJITARIF-REV${stamp}`;
+    const kodeBiaya = `UJITARIF-WEED${stamp}`;
+    const nilai = 7_500_000;
+
+    // POST langsung oleh creator: hidden field $ACTION_* dipinjam dari sesi
+    // admin, jadi yang diuji benar-benar gerbang server -- bukan UI yang
+    // menyembunyikan tombol.
+    const formAdmin = pickForm(refAdmin.html, MARK);
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(formAdmin.hidden)) fd.append(k, v);
+    for (const [k, v] of Object.entries({ code: `${kode}-CURANG`, kind: "revenue",
+      category: "Curang", unit: "ton", rateIdr: "1", berlakuDari: "2026-09-01", driver: "" })) fd.set(k, v);
+    await fetch(`${BASE}/costing/refleksi`, {
+      method: "POST", headers: { cookie: creator.header() }, body: fd, redirect: "manual",
+    });
+    ok("POST langsung oleh creator tidak membuat baris tarif",
+      Number(await psql(`SELECT count(*) FROM app.price_list WHERE code='${kode}-CURANG'`)) === 0);
+
+    // Jalur bahagia: baris revenue baru -- ini kasus yang memblokir K-03
+    // (harga per grade = satu baris revenue per grade).
+    await admin.submit("/costing/refleksi",
+      { code: kode, kind: "revenue", category: `Durian grade B uji ${stamp}`, unit: "ton",
+        rateIdr: String(nilai), berlakuDari: "2026-09-01", driver: "", costCategoryId: "", note: "" },
+      { formMarker: MARK });
+    const dbRow = await psql(`SELECT kind||'|'||unit||'|'||rate_idr::int||'|'||version||'|'||
+                                     COALESCE(driver,'-')||'|'||is_active
+                                FROM app.price_list WHERE code='${kode}'`);
+    ok("baris revenue baru tercatat sebagai versi 1 yang berlaku",
+      dbRow === `revenue|ton|${nilai}|1|-|true`, dbRow || "tidak ada baris");
+
+    const refAfter = await admin.get("/costing/refleksi");
+    ok("baris baru tampil di tabel Price List", refAfter.html.includes(kode));
+    // Tiga kolom yang sebelumnya tidak pernah terlihat (K-09 konsekuensi 2).
+    ok("kolom driver/satuan/status tampil di Price List",
+      /Driver volume/.test(refAfter.html) && /tarif manual/.test(refAfter.html)
+      && /Aktif/.test(refAfter.html));
+
+    // Driver: satu tarif aktif per driver (indeks 0046). Baris pertama boleh,
+    // baris kedua dengan driver sama harus ditolak dengan pesan yang menyebut
+    // sebabnya -- bukan galat constraint mentah.
+    await admin.submit("/costing/refleksi",
+      { code: kodeBiaya, kind: "cost", category: `Penyiangan uji ${stamp}`, unit: "ha",
+        rateIdr: "1000", berlakuDari: "2026-09-01", driver: "weeding_area_ha",
+        costCategoryId: "", note: "" },
+      { formMarker: MARK });
+    ok("baris biaya ber-driver dibuat",
+      Number(await psql(`SELECT count(*) FROM app.price_list WHERE code='${kodeBiaya}'`)) === 1);
+
+    const dobel = await admin.submit("/costing/refleksi",
+      { code: `${kodeBiaya}-B`, kind: "cost", category: "Penyiangan dobel", unit: "ha",
+        rateIdr: "1", berlakuDari: "2026-09-01", driver: "weeding_area_ha",
+        costCategoryId: "", note: "" },
+      { formMarker: MARK });
+    ok("driver kedua yang sama DITOLAK dengan sebab yang dijelaskan",
+      Number(await psql(`SELECT count(*) FROM app.price_list WHERE code='${kodeBiaya}-B'`)) === 0
+      && /dihitung dua kali/.test(dobel.html));
+
+    // Pasangan salah (revenue + driver) ditolak zod di server, bukan hanya UI.
+    const salah = await admin.submit("/costing/refleksi",
+      { code: `${kode}-SALAH`, kind: "revenue", category: "Pasangan salah", unit: "ton",
+        rateIdr: "1", berlakuDari: "2026-09-01", driver: "weeding_area_ha",
+        costCategoryId: "", note: "" },
+      { formMarker: MARK });
+    ok("revenue + driver DITOLAK di server",
+      Number(await psql(`SELECT count(*) FROM app.price_list WHERE code='${kode}-SALAH'`)) === 0
+      && /tidak memakai driver/.test(salah.html));
   }
 
   console.log("\n=== AT6: tidak ada literal numerik menyerupai data ===");

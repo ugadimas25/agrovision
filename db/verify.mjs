@@ -11,6 +11,7 @@ const E1 = '22222222-2222-2222-2222-222222222221'
 const E2 = '22222222-2222-2222-2222-222222222222'
 const U_CREATOR = '33333333-3333-3333-3333-333333333331'
 const U_APPROVER = '33333333-3333-3333-3333-333333333332'
+const U_ADMIN = '33333333-3333-3333-3333-333333333333' // super_admin: satu-satunya yang boleh menyentuh tarif (K-06 Keputusan 3)
 
 let pass = 0, fail = 0
 const ok = (n, c, extra = '') => { c ? (pass++, console.log(`  PASS  ${n}${extra && ' — ' + extra}`)) : (fail++, console.log(`  FAIL  ${n}${extra && ' — ' + extra}`)) }
@@ -27,6 +28,9 @@ async function setup() {
   for (const sql of [
     `DELETE FROM app.cost_transactions WHERE company_id IN ($1,$2)`,
     `DELETE FROM app.budgets WHERE company_id IN ($1,$2)`,
+    // price_list menunjuk companies; tanpa baris ini DELETE companies gagal FK
+    // begitu bagian AI-44a di bawah pernah membuat satu baris tarif.
+    `DELETE FROM app.price_list WHERE company_id IN ($1,$2)`,
     `DELETE FROM app.land_suitability_assessments WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id IN ($1,$2))`,
     `DELETE FROM app.evidence_verifications WHERE evidence_id IN (SELECT id FROM app.evidence_files WHERE company_id IN ($1,$2))`,
     `DELETE FROM app.evidence_files WHERE company_id IN ($1,$2)`,
@@ -46,13 +50,15 @@ async function setup() {
   await c.query(`INSERT INTO app.companies (id,code,name) VALUES ($1,'A','PT A'),($2,'B','PT B')`, [C1, C2])
   await c.query(`INSERT INTO app.estates (id,company_id,code,name) VALUES ($1,$3,'E1','Estate 1'),($2,$4,'E2','Estate 2')`, [E1, E2, C1, C1])
   await c.query(`INSERT INTO app.users (id,company_id,external_id,email,full_name,role,app_role)
-                 VALUES ($1,$3,'idp|c','c@x.co','Creator','surveyor','creator'),
-                        ($2,$3,'idp|a','a@x.co','Approver','approver','approver')`, [U_CREATOR, U_APPROVER, C1])
+                 VALUES ($1,$4,'idp|c','c@x.co','Creator','surveyor','creator'),
+                        ($2,$4,'idp|a','a@x.co','Approver','approver','approver'),
+                        ($3,$4,'idp|s','s@x.co','Super','manager','super_admin')`,
+                [U_CREATOR, U_APPROVER, U_ADMIN, C1])
   // creator hanya boleh Estate 1
   await c.query(`INSERT INTO app.user_estate_access VALUES ($1,$2)`, [U_CREATOR, E1])
   // kedua user punya akses company A; approver JUGA company B (uji multi-tenant)
-  await c.query(`INSERT INTO app.user_company_access (user_id,company_id) VALUES ($1,$3),($2,$3),($2,$4)
-                 ON CONFLICT DO NOTHING`, [U_CREATOR, U_APPROVER, C1, C2])
+  await c.query(`INSERT INTO app.user_company_access (user_id,company_id) VALUES ($1,$4),($2,$4),($2,$5),($3,$4)
+                 ON CONFLICT DO NOTHING`, [U_CREATOR, U_APPROVER, U_ADMIN, C1, C2])
 
   const g = (lon, lat) => `ST_Multi(ST_GeomFromText('POLYGON((${lon} ${lat},${lon + 0.009} ${lat},${lon + 0.009} ${lat - 0.009},${lon} ${lat - 0.009},${lon} ${lat}))',4326))`
   await c.query(`INSERT INTO app.blocks (company_id,estate_id,code,geom,boundary_source)
@@ -230,6 +236,91 @@ async function run() {
   await c.query(lsaIns, [blk.id, cropB.id, 'approved'])
   ok('blok yang sama BOLEH dinilai komoditas berbeda (K-04)', true,
      `${cropA.code} + ${cropB.code}`)
+
+  // =========================================================================
+  // AI-44a / K-09 §19: tiga kelas field pada price_list.
+  //
+  // Sebelum ini tidak ada jalur create sama sekali (INSERT hanya di seed-demo),
+  // jadi belum ada satu pun cek yang membuktikan kelas mana yang boleh berubah.
+  // Yang dibuktikan di sini persis daftar "Cara membuktikan" §19.
+  // =========================================================================
+  console.log('\n=== AI-44a jalur create + tiga kelas field (K-09 §19) ===')
+  await asUser(U_ADMIN, 'super_admin', C1)
+
+  await c.query(`SELECT app.publish_price(
+                   p_code => 'UJI-WEED', p_rate_idr => 750000, p_valid_from => '2026-01-01',
+                   p_unit => 'ha', p_kind => 'cost', p_category => 'Penyiangan uji',
+                   p_driver => 'weeding_area_ha')`)
+  let pr = await c.query(`SELECT id, version, valid_to, is_active, driver, unit, rate_idr
+                            FROM app.price_list WHERE company_id=$1 AND code='UJI-WEED'`, [C1])
+  ok('super_admin bisa MEMBUAT baris tarif baru', pr.rows.length === 1,
+     pr.rows.length ? `versi ${pr.rows[0].version}, valid_to ${pr.rows[0].valid_to ?? 'NULL'}` : 'tidak ada baris')
+
+  const priceId = pr.rows[0]?.id
+
+  // Kelas KEKAL: code, kind, driver. app_rw tidak punya UPDATE pada price_list
+  // (ledger 0041 §7), jadi yang membuktikan kekalnya adalah revocation itu --
+  // bukan sekadar kesepakatan lapisan aplikasi.
+  const kekal = [['code', `code='UJI-WEED-2'`], ['kind', `kind='revenue'`], ['driver', `driver='block_area_ha'`]]
+  for (const [nama, setSql] of kekal) {
+    try {
+      await c.query(`UPDATE app.price_list SET ${setSql} WHERE id=$1`, [priceId])
+      ok(`ubah ${nama} langsung DITOLAK`, false, 'UPDATE berhasil padahal seharusnya ditolak')
+    } catch (e) {
+      ok(`ubah ${nama} langsung DITOLAK`, /permission denied|row-level security/i.test(e.message),
+         e.message.slice(0, 60))
+    }
+  }
+
+  // Kelas BERVERSI: rate_idr + unit hanya lewat publish_price.
+  try {
+    await c.query(`UPDATE app.price_list SET rate_idr=1 WHERE id=$1`, [priceId])
+    ok('ubah rate_idr langsung (bukan publish_price) DITOLAK', false, 'UPDATE berhasil')
+  } catch (e) {
+    ok('ubah rate_idr langsung (bukan publish_price) DITOLAK',
+       /permission denied|row-level security/i.test(e.message), e.message.slice(0, 60))
+  }
+  await c.query(`SELECT app.publish_price('UJI-WEED', 825000, '2026-08-01')`)
+  pr = await c.query(`SELECT version, rate_idr::float8 r, valid_from, valid_to
+                        FROM app.price_list WHERE company_id=$1 AND code='UJI-WEED' ORDER BY version`, [C1])
+  ok('publish_price menutup versi lama dan membuka versi baru',
+     pr.rows.length === 2 && pr.rows[0].valid_to !== null && pr.rows[1].valid_to === null,
+     pr.rows.map(x => `v${x.version} ${x.r}`).join(' → '))
+  // Inti K-02: harga historis TIDAK ikut berubah.
+  let at = await c.query(`SELECT rate_idr::float8 r FROM app.price_at('UJI-WEED','2026-03-01',$1)`, [C1])
+  ok('tarif per tanggal LAMA tetap nilai lama', at.rows[0]?.r === 750000, `Rp ${at.rows[0]?.r}`)
+  at = await c.query(`SELECT rate_idr::float8 r FROM app.price_at('UJI-WEED','2026-08-15',$1)`, [C1])
+  ok('tarif per tanggal BARU memakai nilai baru', at.rows[0]?.r === 825000, `Rp ${at.rows[0]?.r}`)
+
+  // Indeks 0046: satu tarif AKTIF per (entitas, driver, bahan). Tanpa ini
+  // app.price_for_driver() memilih pemenang berdasarkan urutan KODE.
+  try {
+    await c.query(`SELECT app.publish_price(
+                     p_code => 'UJI-WEED-LAIN', p_rate_idr => 1, p_valid_from => '2026-09-01',
+                     p_unit => 'ha', p_kind => 'cost', p_category => 'Penyiangan dobel',
+                     p_driver => 'weeding_area_ha')`)
+    ok('tarif AKTIF kedua untuk driver sama DITOLAK', false, 'berhasil padahal seharusnya ditolak')
+  } catch (e) {
+    ok('tarif AKTIF kedua untuk driver sama DITOLAK',
+       /price_list_one_active_per_driver_idx/.test(e.message), e.message.slice(0, 70))
+  }
+
+  // Kelas EDIT IN-PLACE: category/note/is_active lewat update_price_meta, dan
+  // menonaktifkan baris lama HARUS membebaskan drivernya (aturan K-09 "driver
+  // salah = baris baru + baris lama is_active false").
+  await c.query(`SELECT app.update_price_meta($1, p_category => 'Penyiangan (label diperbaiki)')`, [priceId])
+  pr = await c.query(`SELECT DISTINCT category FROM app.price_list WHERE company_id=$1 AND code='UJI-WEED'`, [C1])
+  ok('category bisa diedit in-place, ke SEMUA versi',
+     pr.rows.length === 1 && pr.rows[0].category === 'Penyiangan (label diperbaiki)', pr.rows[0]?.category)
+
+  await c.query(`SELECT app.update_price_meta($1, p_is_active => false)`, [priceId])
+  await c.query(`SELECT app.publish_price(
+                   p_code => 'UJI-WEED-BARU', p_rate_idr => 900000, p_valid_from => '2026-09-01',
+                   p_unit => 'ha', p_kind => 'cost', p_category => 'Penyiangan pengganti',
+                   p_driver => 'weeding_area_ha')`)
+  pr = await c.query(`SELECT count(*)::int n FROM app.price_list
+                       WHERE company_id=$1 AND code='UJI-WEED-BARU'`, [C1])
+  ok('nonaktifkan baris lama MEMBEBASKAN drivernya untuk baris baru', pr.rows[0].n === 1)
 
   await c.end()
   console.log(`\n${'='.repeat(52)}\nPASS ${pass}   FAIL ${fail}`)
