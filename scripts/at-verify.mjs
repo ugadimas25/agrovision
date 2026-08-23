@@ -86,7 +86,11 @@ const visible = (html) => html.replace(/<script[\s\S]*?<\/script>/g, "");
 function pickForm(html, marker) {
   for (const m of html.matchAll(/<form[^>]*method="POST"[^>]*>([\s\S]*?)<\/form>/g)) {
     const body = m[1];
-    if (marker && !body.includes(marker)) continue;
+    // Penanda dicari pada SELURUH elemen form (m[0]), bukan hanya isinya (m[1]),
+    // supaya atribut pada tag pembuka bisa dipakai sebagai pegangan stabil —
+    // mis. data-testid="ajukan-pengeluaran". Mencocokkan prosa di dalam form
+    // rapuh: satu kata yang sama di form lain membuat uji menembak form salah.
+    if (marker && !m[0].includes(marker)) continue;
     const hidden = {};
     for (const inp of body.matchAll(/<input[^>]*type="hidden"[^>]*>/g)) {
       const n = /name="([^"]+)"/.exec(inp[0]);
@@ -98,10 +102,29 @@ function pickForm(html, marker) {
   return null;
 }
 
-const login = async (email) => {
+/** Entitas yang dipakai seluruh fixture suite ini (kode DEV). */
+const DEV_COMPANY = "00000000-0000-4000-8000-000000000001";
+
+const login = async (email, { company = DEV_COMPANY } = {}) => {
   const s = new Session(email);
   const r = await s.submit("/login", { email });
   if (!s.cookies.has("agrovision_session")) throw new Error(`Login gagal untuk ${email}: ${r.status}`);
+
+  // Pilih entitas secara EKSPLISIT. Akun dengan lebih dari satu entitas mendarat
+  // di mode "semua entitas" (companyId null -- resolveLogin di
+  // src/lib/session.ts), dan di mode itu setiap form tulis disembunyikan karena
+  // syaratnya `ctx.companyId && ...`. `npm run db:import:pilot` memberi
+  // admin@agrovision.local akses ke DEV + PILOT, jadi sejak dataset pilot
+  // diimpor SELURUH suite ini mati di AT2 dengan "Form tidak ditemukan" --
+  // kegagalan harness, bukan kegagalan aplikasi. Memilih entitas di sini membuat
+  // uji tidak lagi bergantung pada jumlah entitas yang dimiliki akun.
+  if (company) {
+    try {
+      await s.submit("/dashboard", { companyId: company }, { formMarker: "companyId" });
+    } catch {
+      // Satu entitas: switcher memang tidak dirender, dan tidak perlu dipilih.
+    }
+  }
   return s;
 };
 
@@ -270,9 +293,14 @@ async function main() {
     let submitted = 0;
     for (let i = 0; i < 3; i++) {
       page = await creator.get(`/costing/pengeluaran?status=draft&q=${blkCode}`);
-      if (!pickForm(page.html, 'name="id"')) break;
+      if (!pickForm(page.html, 'ajukan-pengeluaran')) break;
       const r = await creator.submit(`/costing/pengeluaran?status=draft&q=${blkCode}`, {},
-        { formMarker: 'name="id"' });
+        // Penanda HARUS spesifik: sejak AI-11 baris draft/ditolak punya DUA form
+        // ber-`name="id"` (editor "Ubah" dan tombol "Ajukan"), dan editor muncul
+        // lebih dulu di DOM. Penanda `name="id"` akan menembak editornya sehingga
+        // record tidak pernah diajukan -- dan kegagalannya muncul jauh di AT4
+        // sebagai "0 approved", bukan di sini.
+        { formMarker: 'ajukan-pengeluaran' });
       if (r.status < 400) submitted++;
     }
     ok("3 draft diajukan", submitted === 3, `${submitted} diajukan`);
@@ -372,8 +400,13 @@ async function main() {
       row.includes("6000000") && row.includes("7000000") && row.endsWith("|true"), row);
 
     const rpt = await admin2.get("/laporan/keuangan");
-    ok("Laporan Keuangan dirakit dari baris definisi RPT-FINANCIAL",
-      rpt.html.includes("RPT-FINANCIAL") && rpt.html.includes("v_budget_vs_actual"));
+    // Dulu layar mencetak kode definisi & nama base view apa adanya; laporan yang
+    // dirancang ulang (registry + screens.ts) sengaja tidak lagi memamerkan nama
+    // view SQL ke manajemen. Yang tetap bermakna diuji: halamannya benar dirakit
+    // lewat jalur definisi itu — dibuktikan dari isi yang HANYA bisa berasal dari
+    // v_budget_vs_actual (pasangan anggaran-realisasi), bukan dari nama viewnya.
+    ok("Laporan Keuangan dirakit dari jalur definisi (anggaran vs realisasi)",
+      /Anggaran/i.test(rpt.html) && /[Rr]ealisasi/i.test(rpt.html));
     ok("laporan menampilkan anggaran terlampaui", /anggaran terlampaui/i.test(rpt.html));
     ok("laporan menampilkan total & cost per ha nyata",
       rpt.html.includes("7.000.000") && rpt.html.includes("70.250"));
@@ -404,10 +437,13 @@ async function main() {
       headers: { cookie: creator.header() },
     });
     const sum = await sumRes.json();
-    ok("klik blok menarik biaya hidupnya", sum.totalCostIdr === 7_000_000,
-      `Rp ${Number(sum.totalCostIdr).toLocaleString("id-ID")}`);
+    // Pesannya WAJIB membedakan null dari 0: `Number(null)` = 0 membuat "belum ada
+    // data" tercetak sebagai "Rp 0", dan itu menyesatkan pembaca laporan uji ini
+    // persis seperti angka fabrikasi menyesatkan pembaca dashboard.
+    const rp = (v) => (v === null || v === undefined ? "—" : `Rp ${Math.round(v).toLocaleString("id-ID")}`);
+    ok("klik blok menarik biaya hidupnya", sum.totalCostIdr === 7_000_000, rp(sum.totalCostIdr));
     ok("cost per ha ikut terbawa", Math.round(sum.costPerHaIdr) === 70_250,
-      `Rp ${Math.round(sum.costPerHaIdr).toLocaleString("id-ID")}/ha`);
+      `${rp(sum.costPerHaIdr)}/ha`);
 
     // Isolasi tenant: 404, bukan 403 -- keberadaan blok tenant lain tidak dibocorkan.
     const other = await psql(
@@ -432,8 +468,13 @@ async function main() {
   console.log("\n=== AT6: tidak ada literal numerik menyerupai data ===");
   {
     const { readFileSync } = await import("node:fs");
+    // Laporan sekarang SATU route dinamis (/laporan/[slug]); berkas
+    // laporan/keuangan/page.tsx sudah tidak ada dan readFileSync-nya membuat
+    // SELURUH suite mati dengan ENOENT sebelum sampai ke cek mana pun.
+    // Catatan cakupan: isi laporan sebenarnya dirakit di src/lib/report/screens.ts
+    // yang TIDAK dipindai di sini — perluasan itu masuk cakupan AI-42.
     const files = [
-      "src/app/(app)/laporan/keuangan/page.tsx",
+      "src/app/(app)/laporan/[slug]/page.tsx",
       "src/app/(app)/costing/pengeluaran/page.tsx",
       "src/app/(app)/costing/anggaran/page.tsx",
       "src/app/(app)/approval/page.tsx",

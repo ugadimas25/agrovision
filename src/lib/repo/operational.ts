@@ -1,4 +1,6 @@
 import { rlsQuery, withRls, type RlsContext } from "@/lib/db";
+import { EMPTY } from "@/lib/format";
+import { CROP, PREP_STATUS, WEEDING_METHOD, labelOf } from "@/lib/labels";
 import type { Page } from "./blocks";
 
 /**
@@ -16,7 +18,8 @@ export type OpRecord = {
   approvalStatus: string;
   rejectionReason: string | null;
   eventDate: string | null;
-  detail: string;
+  /** null = tidak ada rincian yang bisa dirakit; dirender EMPTY, bukan string kosong. */
+  detail: string | null;
   createdByName: string | null;
 };
 
@@ -24,11 +27,27 @@ type OpTable = {
   table: string;
   dateCol: string;
   ownerCol: string;
-  /** ekspresi SQL untuk kolom "detail" yang ditampilkan */
-  detailExpr: string;
+  /**
+   * Ekspresi SQL untuk kolom "detail" yang ditampilkan. Hanya untuk tabel yang
+   * rinciannya TIDAK memuat nilai enum — begitu ada enum, pakai extraCols +
+   * buildDetail supaya labelnya dipetakan di TypeScript (lihat src/lib/labels.ts).
+   */
+  detailExpr?: string;
+  /** alias -> ekspresi SQL kolom mentah tambahan yang ikut di-SELECT. */
+  extraCols?: Record<string, string>;
+  /** Perakitan detail di TypeScript dari kolom mentah. Menang atas detailExpr. */
+  buildDetail?: (r: Record<string, unknown>) => string | null;
   /** join tambahan (mis. ke fertilizer_types) */
   join?: string;
 };
+
+/** Gabung bagian rincian yang ada; null bila tidak ada satu pun (jangan "" ). */
+const joinParts = (parts: (string | null)[]): string | null => {
+  const ada = parts.filter((x): x is string => x !== null && x !== "");
+  return ada.length ? ada.join(" · ") : null;
+};
+const txt = (v: unknown): string | null =>
+  v === null || v === undefined || v === "" ? null : String(v);
 
 const TABLES: Record<string, OpTable> = {
   fertilizer_applications: {
@@ -43,8 +62,19 @@ const TABLES: Record<string, OpTable> = {
     table: "land_preparations",
     dateCol: "checked_at",
     ownerCol: "created_by",
-    detailExpr:
-      "'pH ' || COALESCE(t.soil_ph::text,'—') || ' · ' || COALESCE(t.planting_hole_count::text,'?') || ' lubang · ' || t.status",
+    // `t.status` dulu dirangkai mentah di sini sehingga "in_progress" /
+    // "ready_to_plant" tampil apa adanya di UI (catatan.md §3).
+    extraCols: {
+      soil_ph: "t.soil_ph::text",
+      hole_count: "t.planting_hole_count::text",
+      prep_status: "t.status::text",
+    },
+    buildDetail: (r) =>
+      joinParts([
+        `pH ${txt(r.soil_ph) ?? EMPTY}`,
+        txt(r.hole_count) ? `${txt(r.hole_count)} lubang` : null,
+        labelOf(PREP_STATUS, txt(r.prep_status)),
+      ]),
   },
   land_suitability_assessments: {
     table: "land_suitability_assessments",
@@ -63,7 +93,13 @@ const TABLES: Record<string, OpTable> = {
     table: "weeding_records",
     dateCol: "weeded_on",
     ownerCol: "created_by",
-    detailExpr: "t.method || COALESCE(' · ' || t.area_ha::text || ' ha','')",
+    // "penutup_tanah" tidak layak tampil; dilabeli di TypeScript.
+    extraCols: { method: "t.method", area_ha: "t.area_ha::text" },
+    buildDetail: (r) =>
+      joinParts([
+        labelOf(WEEDING_METHOD, txt(r.method)),
+        txt(r.area_ha) ? `${txt(r.area_ha)} ha` : null,
+      ]),
   },
   spraying_records: {
     table: "spraying_records",
@@ -76,7 +112,37 @@ const TABLES: Record<string, OpTable> = {
     table: "harvest_records",
     dateCol: "harvested_on",
     ownerCol: "created_by",
-    detailExpr: "t.crop_code || ' · ' || t.quantity_ton || ' ton' || COALESCE(' · ' || t.grade,'')",
+    // crop_code ('DURIAN'/'COCONUT') adalah kode, bukan label.
+    extraCols: {
+      crop_code: "t.crop_code",
+      quantity_ton: "t.quantity_ton::text",
+      grade: "t.grade",
+    },
+    buildDetail: (r) =>
+      joinParts([
+        labelOf(CROP, txt(r.crop_code)),
+        txt(r.quantity_ton) ? `${txt(r.quantity_ton)} ton` : null,
+        txt(r.grade) ? `Grade ${txt(r.grade)}` : null,
+      ]),
+  },
+  dbh_measurements: {
+    table: "dbh_measurements",
+    dateCol: "measured_at",
+    ownerCol: "measured_by",
+    // Hanya MEREKAM hasil ukur. Biomassa/serapan dihitung carbon run memakai
+    // koefisien alometrik yang masih requires_validation — bukan di daftar ini.
+    extraCols: {
+      crop_name: "c.name",
+      dbh_cm: "t.dbh_cm::text",
+      height_m: "t.height_m::text",
+    },
+    buildDetail: (r) =>
+      joinParts([
+        txt(r.crop_name),
+        txt(r.dbh_cm) ? `DBH ${txt(r.dbh_cm)} cm` : null,
+        txt(r.height_m) ? `tinggi ${txt(r.height_m)} m` : null,
+      ]),
+    join: "JOIN app.crops c ON c.id = t.crop_id",
   },
 };
 
@@ -94,10 +160,16 @@ export async function listOpRecords(
     const total = await client.query<{ n: string }>(
       `SELECT count(*) AS n FROM app.${t.table} t`,
     );
+    // Alias & ekspresi extraCols didefinisikan di TABLES (konstanta di berkas ini),
+    // bukan dari input pengguna — tidak ada jalur injeksi di sini.
+    const extra = Object.entries(t.extraCols ?? {})
+      .map(([alias, expr]) => `, (${expr}) AS ${alias}`)
+      .join("");
     const rows = await client.query(
       `SELECT t.id, b.code AS block_code, t.approval_status, t.rejection_reason,
-              t.${t.dateCol}::date AS event_date, (${t.detailExpr}) AS detail,
-              u.full_name AS created_by_name
+              t.${t.dateCol}::date AS event_date,
+              ${t.detailExpr ? `(${t.detailExpr})` : "NULL"} AS detail,
+              u.full_name AS created_by_name${extra}
          FROM app.${t.table} t
          JOIN app.blocks b ON b.id = t.block_id
          LEFT JOIN app.users u ON u.id = t.${t.ownerCol}
@@ -112,8 +184,10 @@ export async function listOpRecords(
         blockCode: (r.block_code as string) ?? null,
         approvalStatus: String(r.approval_status),
         rejectionReason: (r.rejection_reason as string) ?? null,
-        eventDate: r.event_date ? new Date(r.event_date as string).toISOString().slice(0, 10) : null,
-        detail: String(r.detail ?? ""),
+        // event_date sudah ::date di SQL → string 'YYYY-MM-DD' (lihat parser di src/lib/db.ts).
+        eventDate: (r.event_date as string) ?? null,
+        // buildDetail menang; null dipertahankan supaya UI merender EMPTY, bukan "".
+        detail: t.buildDetail ? t.buildDetail(r as Record<string, unknown>) : txt(r.detail),
         createdByName: (r.created_by_name as string) ?? null,
       })),
       total: Number(total.rows[0].n),
@@ -338,7 +412,8 @@ export async function listSurveySubmissions(
     const total = await client.query<{ n: string }>(`SELECT count(*) AS n FROM app.survey_submissions`);
     const rows = await client.query(
       `SELECT ss.id, f.name AS form_name, b.code AS block_code, ss.approval_status,
-              ss.submitted_at, u.full_name AS submitted_by_name
+              (ss.submitted_at AT TIME ZONE 'Asia/Jakarta')::date::text AS submitted_at,
+              u.full_name AS submitted_by_name
          FROM app.survey_submissions ss
          JOIN app.form_versions fv ON fv.id = ss.form_version_id
          JOIN app.forms f ON f.id = fv.form_id
@@ -354,7 +429,7 @@ export async function listSurveySubmissions(
         formName: String(r.form_name),
         blockCode: (r.block_code as string) ?? null,
         approvalStatus: String(r.approval_status),
-        submittedAt: r.submitted_at ? new Date(r.submitted_at as string).toISOString().slice(0, 10) : null,
+        submittedAt: (r.submitted_at as string) ?? null,
         submittedByName: (r.submitted_by_name as string) ?? null,
       })),
       total: Number(total.rows[0].n),

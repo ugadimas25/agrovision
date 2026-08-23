@@ -6,6 +6,8 @@
  * belum ada adalah angka fabrikasi -- persis yang dilarang concept:40.
  */
 
+import { OPERATIONAL_TIME_ZONE } from "./date";
+
 const idr = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 });
 const dec2 = new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -41,9 +43,37 @@ export function formatPct(v: number | null | undefined): string {
   return `${dec2.format(v)}%`;
 }
 
+/** Tanggal kalender dari Postgres: 'YYYY-MM-DD' — tanpa jam, tanpa zona. */
+const TANGGAL_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+// timeZone dipatok UTC: tanggal kalender harus dirender sama di zona mana pun.
+const fmtTanggal = new Intl.DateTimeFormat("id-ID", {
+  day: "2-digit", month: "short", year: "numeric", timeZone: "UTC",
+});
+
+/**
+ * Tanggal kalender dirender apa adanya: string di-parse sebagai UTC lalu
+ * diformat DI UTC, jadi hasilnya tidak bergantung zona proses/peramban.
+ * Memformatnya di zona lokal menggeser tanggal satu hari di zona ber-offset
+ * negatif; DATE tidak punya jam, jadi tidak ada instant yang benar untuk
+ * digeser. Nilai Date (kolom timestamptz = instant sungguhan) tetap dirender
+ * di zona lokal seperti sebelumnya.
+ */
 export function formatDate(v: string | Date | null | undefined): string {
   if (!v) return EMPTY;
+  if (typeof v === "string" && TANGGAL_ISO.test(v)) {
+    const [y, m, tgl] = v.split("-").map(Number);
+    return fmtTanggal.format(Date.UTC(y, m - 1, tgl));
+  }
   const d = typeof v === "string" ? new Date(v) : v;
   if (Number.isNaN(d.getTime())) return EMPTY;
-  return d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+  // timeZone DIPAKU: tanpa ini fungsi memakai zona runtime, yang BERBEDA antara
+  // server (Cloud Run = UTC) dan perangkat pengguna (WIB). Client Component yang
+  // memformat timestamptz lalu memicu hydration mismatch — terbukti di /approval
+  // lewat Emulation.setTimezoneOverride — dan React membuang seluruh HTML server
+  // untuk route itu.
+  return d.toLocaleDateString("id-ID", {
+    day: "2-digit", month: "short", year: "numeric", timeZone: OPERATIONAL_TIME_ZONE,
+  });
 }
+

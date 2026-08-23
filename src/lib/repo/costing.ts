@@ -418,9 +418,7 @@ export async function listPendingApprovals(
       rows: rows.rows.map((r) => ({
         id: String(r.id),
         module: String(r.module),
-        transactionDate: r.transaction_date instanceof Date
-          ? r.transaction_date.toISOString().slice(0, 10)
-          : String(r.transaction_date),
+        transactionDate: String(r.transaction_date),
         blockCode: (r.block_code as string) ?? null,
         costCategoryName: (r.cost_category_name as string) ?? null,
         amountIdr: Number(r.amount_idr),
@@ -453,7 +451,7 @@ export type FiscalPeriod = {
 export async function listFiscalPeriods(ctx: RlsContext): Promise<FiscalPeriod[]> {
   const rows = await rlsQuery<{
     id: string; code: string; name: string; kind: string;
-    starts_on: Date; ends_on: Date; is_closed: boolean;
+    starts_on: string; ends_on: string; is_closed: boolean;
   }>(
     ctx,
     `SELECT id, code, name, kind, starts_on, ends_on, is_closed
@@ -464,8 +462,8 @@ export async function listFiscalPeriods(ctx: RlsContext): Promise<FiscalPeriod[]
     code: r.code,
     name: r.name,
     kind: r.kind,
-    startsOn: new Date(r.starts_on).toISOString().slice(0, 10),
-    endsOn: new Date(r.ends_on).toISOString().slice(0, 10),
+    startsOn: r.starts_on,
+    endsOn: r.ends_on,
     isClosed: r.is_closed,
   }));
 }

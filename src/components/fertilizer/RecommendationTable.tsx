@@ -8,8 +8,8 @@ import { approachLabel, phaseLabel } from "@/lib/fertParams";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
 import { formatDate, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { CROP as CROP_LABEL } from "@/lib/labels";
 
-const CROP_LABEL: Record<string, string> = { DURIAN: "Durian", COCONUT: "Kelapa" };
 // Semua dosis hara memakai satuan gram hara per pohon per tahun (g/pohon).
 const UNIT = "g/pohon";
 

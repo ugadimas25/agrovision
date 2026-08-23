@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from "pg";
+import { Pool, types as pgTypes, type PoolClient } from "pg";
 
 /**
  * Lapisan akses database.
@@ -14,6 +14,28 @@ import { Pool, type PoolClient } from "pg";
  *    RLS mengembalikan 0 baris TANPA error -- terlihat seperti "belum ada data",
  *    bukan seperti bug. Karena itu `withRls` gagal keras bila konteks kosong.
  */
+
+/**
+ * DATE (OID 1082) dikembalikan APA ADANYA sebagai string 'YYYY-MM-DD'.
+ *
+ * Bawaan driver `pg` mem-parse DATE menjadi objek Date pada tengah malam waktu
+ * LOKAL proses. Di WIB (+07:00) `2026-08-23` menjadi `2026-08-22T17:00:00Z`,
+ * sehingga pola `new Date(v).toISOString().slice(0, 10)` di lapisan repo
+ * menghasilkan `2026-08-22` -- tanggal bergeser satu hari ke belakang di SETIAP
+ * zona ber-offset positif. Tanggal kalender (weeded_on, transaction_date,
+ * valid_until, ...) tidak punya jam dan tidak punya zona; mengubahnya menjadi
+ * instant selalu salah, dan tidak ada nilai TZ proses yang bisa membenarkannya.
+ *
+ * Dengan parser identitas ini nilai DATE tidak pernah menyentuh zona waktu:
+ * string dari Postgres = string yang dirender UI. timestamptz (OID 1184) tetap
+ * memakai parser bawaan -- kolom itu memang instant dan objek Date-nya benar.
+ *
+ * Cakupan: registry pg-types bersifat per-proses. Berkas ini hanya dimuat proses
+ * Next.js; skrip `db/*.mjs` adalah proses terpisah dan tidak terpengaruh.
+ * Bukti: `db/verify-dates.mjs` (jalankan di TZ=Asia/Jakarta DAN TZ=UTC).
+ */
+const PG_OID_DATE = 1082;
+pgTypes.setTypeParser(PG_OID_DATE, (v) => v);
 
 declare global {
   // Dev hot-reload membuat modul dievaluasi ulang; pool harus tunggal.

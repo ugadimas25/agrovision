@@ -2,6 +2,7 @@ import { requireContext } from "@/lib/session";
 import { reportBySlug } from "@/lib/report/registry";
 import { dashboardExcelHtml, moduleExcelHtml } from "@/lib/report/reportExcel";
 import { excelResponse } from "@/lib/excel";
+import { todayInOperationalZone } from "@/lib/date";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,5 +17,5 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
   const html = entry.kind === "dashboard"
     ? dashboardExcelHtml(await entry.load(ctx))
     : moduleExcelHtml(await entry.load(ctx));
-  return excelResponse(html, `laporan-${slug}-${new Date().toISOString().slice(0, 10)}`);
+  return excelResponse(html, `laporan-${slug}-${todayInOperationalZone()}`);
 }

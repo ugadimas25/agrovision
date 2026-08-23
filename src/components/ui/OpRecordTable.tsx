@@ -13,12 +13,15 @@ export function OpRecordTable({
   emptyIcon,
   emptyTitle,
   canWrite,
+  blockHeader = "Blok",
 }: {
   rows: OpRecord[];
   moduleKey: string;
   emptyIcon: LucideIcon;
   emptyTitle: string;
   canWrite: boolean;
+  /** Label kolom induk record — default "Blok"; nursery memakai "Batch". */
+  blockHeader?: string;
 }) {
   if (rows.length === 0) {
     return (
@@ -34,7 +37,7 @@ export function OpRecordTable({
           <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs text-slate-500">
             <tr>
               <th className="px-4 py-2.5 font-medium">Tanggal</th>
-              <th className="px-4 py-2.5 font-medium">Blok</th>
+              <th className="px-4 py-2.5 font-medium">{blockHeader}</th>
               <th className="px-4 py-2.5 font-medium">Detail</th>
               <th className="px-4 py-2.5 font-medium">Petugas</th>
               <th className="px-4 py-2.5 font-medium">Status</th>
@@ -45,8 +48,8 @@ export function OpRecordTable({
             {rows.map((r) => (
               <tr key={r.id} className="border-b border-slate-50 align-top last:border-0">
                 <td data-label="Tanggal" className="whitespace-nowrap px-4 py-2.5 text-slate-600">{formatDate(r.eventDate)}</td>
-                <td data-label="Blok" className="px-4 py-2.5 font-mono text-xs text-slate-600">{r.blockCode ?? EMPTY}</td>
-                <td data-label="Detail" className="px-4 py-2.5 text-slate-700">{r.detail}</td>
+                <td data-label={blockHeader} className="px-4 py-2.5 font-mono text-xs text-slate-600">{r.blockCode ?? EMPTY}</td>
+                <td data-label="Detail" data-empty={!r.detail} className="px-4 py-2.5 text-slate-700">{r.detail ?? EMPTY}</td>
                 <td data-label="Petugas" className="px-4 py-2.5 text-slate-500">{r.createdByName ?? EMPTY}</td>
                 <td data-label="Status" className="px-4 py-2.5">
                   <RecordStatusBadge status={r.approvalStatus} />

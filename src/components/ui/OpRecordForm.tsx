@@ -24,11 +24,14 @@ export function OpRecordForm({
   action,
   fields,
   hidden,
+  submitLabel,
 }: {
   title: string;
   action: (prev: ActionState, fd: FormData) => Promise<ActionState>;
   fields: Field[];
   hidden?: Record<string, string>;
+  /** Teks tombol simpan; default "Simpan draft" (modul ber-approval). */
+  submitLabel?: string;
 }) {
   const [state, formAction, pending] = useActionState(action, { ok: false, message: "" });
 
@@ -72,7 +75,7 @@ export function OpRecordForm({
             className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-md bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60 sm:w-auto"
           >
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Simpan draft
+            {submitLabel ?? "Simpan draft"}
           </button>
         </div>
       </form>

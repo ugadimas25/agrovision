@@ -69,7 +69,16 @@ export function EstateMap({ status, heightClass = "h-[42dvh] md:h-[300px]" }: { 
       } catch { /* abaikan */ }
     });
 
-    return () => { cancelled = true; m.remove(); map.current = null; };
+    return () => {
+      cancelled = true;
+      // m.remove() MELEMPAR bila init peta gagal (WebGL2 tak tersedia: Lockdown
+      // Mode iOS, GPU diblokir, kuota canvas Safari habis) -- MapLibre hanya
+      // melog GPUInitializationError lalu mengembalikan Map tanpa painter.
+      // Galat di cleanup effect membatalkan commit React saat pindah halaman:
+      // terbukti <main> hilang seluruhnya dan app tampak macet. Ditelan.
+      try { m.remove(); } catch { /* peta tak pernah terinisialisasi */ }
+      map.current = null;
+    };
   }, [color]);
 
   return (

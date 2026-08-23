@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { destroySession, resolveLogin, switchCompany } from "@/lib/session";
+import { LOCALE_SWITCHER_ENABLED } from "@/lib/i18n";
 
 export type AuthState = { ok: boolean; message: string };
 
@@ -44,8 +45,16 @@ export async function switchCompanyAction(formData: FormData): Promise<void> {
   revalidatePath("/", "layout");
 }
 
-/** Ganti bahasa antarmuka (id/en). Disimpan di cookie, berlaku seluruh app. */
+/**
+ * Ganti bahasa antarmuka (id/en). Disimpan di cookie, berlaku seluruh app.
+ *
+ * Selama LOCALE_SWITCHER_ENABLED false action ini tidak melakukan apa pun.
+ * UI-nya sudah disembunyikan, tapi Server Action tetap bisa dipanggil POST
+ * langsung, dan cookie yang ditulis toh diabaikan getLocale(). Lebih jujur
+ * menolak di sini daripada menyimpan preferensi yang tidak berpengaruh.
+ */
 export async function setLocaleAction(formData: FormData): Promise<void> {
+  if (!LOCALE_SWITCHER_ENABLED) return;
   const raw = formData.get("locale");
   const locale = raw === "en" ? "en" : "id";
   const { cookies } = await import("next/headers");

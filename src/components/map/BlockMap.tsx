@@ -78,7 +78,10 @@ function buildStyle(): StyleSpecification {
       // ?v=2 = cache-buster: tile lama (latar putih opak) sudah diganti versi
       // transparan (nearblack). URL identik → browser bisa sajikan cache basi;
       // query param memaksa fetch ulang.
-      ortho: { type: "raster", tiles: [`${TILES_BASE}/tiles/ortho/{z}/{x}/{y}.png?v=2`], tileSize: 256, minzoom: 14, maxzoom: 19, attribution: "Drone orthophoto" },
+      // `bounds` bukan kosmetik: tanpa itu MapLibre meminta seluruh grid
+      // viewport dan tile di luar extent drone membalas 404 -- 13 error merah
+      // di console tiap kali halaman dibuka.
+      ortho: { type: "raster", tiles: [`${TILES_BASE}/tiles/ortho/{z}/{x}/{y}.png?v=2`], tileSize: 256, minzoom: 14, maxzoom: 19, bounds: [ORTHO.west, ORTHO.south, ORTHO.east, ORTHO.north], attribution: "Drone orthophoto" },
     },
     layers: [
       { id: "bg", type: "background", paint: { "background-color": "#0f172a" } },
@@ -338,7 +341,13 @@ export function BlockMap({ blockCount, heightClass = "h-[60dvh] md:h-[520px]" }:
       }
     });
 
-    return () => { cancelled = true; m.remove(); map.current = null; };
+    return () => {
+      cancelled = true;
+      // Lihat catatan di EstateMap: m.remove() melempar bila init WebGL gagal,
+      // dan galat di cleanup effect membatalkan commit React saat navigasi.
+      try { m.remove(); } catch { /* peta tak pernah terinisialisasi */ }
+      map.current = null;
+    };
   }, []);
 
   // Zoom ke blok saat baris tabel diklik (event dari komponen lain).
