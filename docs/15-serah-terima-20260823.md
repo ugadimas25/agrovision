@@ -20,12 +20,52 @@
 | `npm run at:verify` | **65 PASS / 0 FAIL** | naik dari 43 (10 cek AI-44a, 12 cek AI-05) |
 | `app.check_rls_coverage()` | 0 baris | |
 | `app.check_privilege_revocations()` | 0 baris | |
-| `npm run db:verify` | tanpa drift | **45** migrasi terpasang |
+| `npm run db:verify` | tanpa drift | **46** migrasi terpasang (0038 milik PR #9, punya saya 0039–0046) |
 | `npm run db:check` | 4 penghalang | stub login + 3 tenant demo — semuanya diketahui |
 
-**Sudah di-commit, BELUM di-push.** Branch `feat/sprint-1-2`, tiga commit:
-`3a15d75` (Sprint 1 & 2 sampai 0044, 79 berkas) · `ae6e0e7` (AI-44a + AI-02 yang
-tertinggal, migrasi 0045) · commit dokumen ini.
+**Dikirim sebagai stack 8 PR**, bukan satu PR besar. Tiap PR menargetkan branch
+di bawahnya, jadi diff yang direview hanya potongannya sendiri:
+
+| # | Branch | Isi | Berkas |
+|---|---|---|---|
+| 1 | `feat/s1-fondasi-perkakas` | tanggal kalender, label enum, i18n, peta, `db:check` & `at:verify` yang tidak pernah jalan, dokumen | 36 |
+| 2 | `feat/s2-role-akses` | AI-27 pemagaran route, AI-29, AI-31, AI-13 | 12 |
+| 3 | `feat/s3-angka-jujur` | 0039 COALESCE, 0040 kode enum Inbox, AI-03 | 10 |
+| 4 | `feat/s4-tarif-berversi` | 0041 K-02 | 6 |
+| 5 | `feat/s5-stok-jalur-input` | 0042 + 0043, nursery/DBH/distribusi bibit | 12 |
+| 6 | `feat/s6-materialisasi-biaya` | 0044 + 0045 K-01, AI-52, AI-11, AI-14 | 10 |
+| 7 | `feat/s7-tambah-tarif` | AI-44a + 0046, AI-02 yang tertinggal | 9 |
+| 8 | `feat/s8-anggaran-dinamis` | AI-05 | 6 |
+
+Commit monolit lamanya ditinggalkan di tag `backup/monolith-20260823`. Invarian
+yang diperiksa: pohon PR 8 **identik** dengan tag itu kecuali satu perubahan
+`ci.yml` yang disengaja — pemecahan 79 berkas tidak menghilangkan atau menambah
+apa pun.
+
+`.github/workflows/ci.yml` menambahkan `feat/**` ke trigger (PR 1). Tanpa itu
+hanya PR paling bawah yang mendapat CI, karena PR ke-2 dan seterusnya
+menargetkan branch, bukan `main`.
+
+Job `db-verify` CI diuji lokal untuk **kedelapan** PR dengan database dibuat dari
+nol (migrate → bootstrap → db:test → adversarial). Angkanya monoton naik, tidak
+pernah turun:
+
+| PR | migrasi | `db:test` | `db:test:adversarial` |
+|---|---|---|---|
+| 1 | 37 | 21/0 | 36/0 |
+| 2 | 37 | 21/0 | 36/0 |
+| 3 | 40 | 21/0 | 36/0 |
+| 4 | 41 | 21/0 | 36/0 |
+| 5 | 43 | 21/0 | 37/0 |
+| 6 | 45 | 23/0 | 37/0 |
+| 7 | 46 | 34/0 | 54/0 |
+| 8 | 46 | 34/0 | 54/0 |
+
+PR 1 & 2 diukur pada basis lamanya (sebelum insiden §1b diketahui); PR 3–8 diukur ulang
+SETELAH rebase ke `main` terkini, jadi hitungan migrasinya sudah memuat 0038 milik PR #9.
+
+`at:verify` BUKAN bagian dari CI, dan baru hijau penuh dari PR 6 ke atas —
+sebagian assertion-nya menguji fitur yang menyusul di stack.
 
 > **`main` lokal tertinggal 10 commit.** `git rev-parse main` menunjuk `d1b6722`,
 > sedangkan `origin/main` sudah di `ac33655` — PR #3–#10 (CI pipeline, migrasi di
@@ -37,20 +77,99 @@ tertinggal, migrasi 0045) · commit dokumen ini.
 
 ---
 
-## 2. Migrasi yang ditambahkan sesi ini (0038–0045)
+## 1b. Insiden: stack dibangun di atas `origin/main` yang basi
+
+Ditulis lengkap karena akarnya prosedural dan mudah terulang.
+
+**Apa yang terjadi.** Stack 8 PR dibangun dengan basis `ac33655`, hasil membaca
+`git rev-parse origin/main` **tanpa `git fetch` lebih dulu**. Ref remote-tracking lokal
+itu basi: `main` sebenarnya sudah memuat dua PR lain —
+
+| commit | isi |
+|---|---|
+| `6d6d7f2` | feat: Cloud Storage untuk bukti + aktifkan `evidence_links` (B-1, B-13) (#9) |
+| `c1e9f10` | docs: refine tiket Ridwan (#11) |
+
+Yang menyesatkan: sesi itu **sudah** menandai bahwa branch `main` LOKAL tertinggal 10
+commit, lalu menyimpulkan `origin/main` pasti terkini. Dua ref berbeda, dan yang kedua
+tidak pernah diperiksa kesegarannya.
+
+**Akibatnya, dan yang paling berbahaya lebih dulu.**
+
+1. **Migrasi akan GAGAL dan memblokir deploy.** PR #9 membawa
+   `0038_evidence_traceability.sql` yang menambahkan kolom `evidence_id` ke
+   `app.v_pending_approvals`. Migrasi inbox saya menulis ulang view yang sama dengan
+   definisi yang ditulis SEBELUM #9 ada — tanpa `evidence_id`. PostgreSQL menolak view
+   yang kehilangan kolom:
+
+   ```
+   CREATE VIEW v AS SELECT 1 AS a, 2 AS b;
+   CREATE OR REPLACE VIEW v AS SELECT 1 AS a;
+   → ERROR:  cannot drop columns from view
+   ```
+
+   `cloudbuild.yaml` menjalankan migrasi SEBELUM deploy dan deploy tidak jalan bila
+   migrasi gagal. Jadi ini bukan PR merah, ini pipeline mati.
+
+2. **Tabrakan nomor 0038** — `0038_evidence_traceability` (#9) vs
+   `0038_honest_null_cost_views` (saya).
+
+3. Konflik tekstual di `PendingTable.tsx` dan `repo/costing.ts`.
+
+**Kenapa CI tidak menangkapnya.** Job `db-verify` menjalankan `db:migrate` pada DB kosong
+dari branch PR itu sendiri. Branch saya tidak memuat 0038 milik #9, jadi rantai yang diuji
+tidak pernah berisi keduanya. Kegagalannya hanya muncul setelah keduanya berada di satu
+rantai — yaitu setelah merge. **Pelajaran: CI per-branch tidak menguji interaksi dengan
+apa pun yang menyusul di `main`.**
+
+**Yang dikerjakan untuk memperbaiki.** #12 dan #13 sudah lebih dulu masuk dan ternyata
+BERSIH — perubahan #9 tetap utuh (diperiksa: `evidence_links` 5 kemunculan di
+`repo/costing.ts`, sama dengan `main`). #14–#19 di-rebase ke `main` terkini, migrasi
+dinomori ulang, dan migrasi inbox ditulis ulang di atas definisi #9 sehingga urutan
+kolomnya menjadi `… params, evidence_id, crop_code, method_code` — `evidence_id`
+dipertahankan, dua kolom baru ditambahkan SESUDAHnya (satu-satunya arah yang diizinkan
+`CREATE OR REPLACE VIEW`).
+
+**Renomorinya menaik sesuai urutan merge**, bukan sekadar menghindari tabrakan — supaya DB
+berumur panjang dan instalasi baru menerapkan urutan yang SAMA:
+
+| lama | baru | PR |
+|---|---|---|
+| 0038_honest_null_cost_views | **0039** | #14 |
+| 0039_inbox_enum_codes | **0040** | #14 |
+| 0041_price_list_versioning | 0041 (tetap) | #15 |
+| 0040_seed_distribution_input | **0042** | #16 |
+| 0042_agri_input_stock_ledger | **0043** | #16 |
+| 0043_decide_record_materialization | **0044** | #17 |
+| 0044_backfill_reflected_costs | **0045** | #17 |
+| 0045_price_driver_uniqueness | **0046** | #18 |
+
+107 rujukan tekstual ke nomor lama ikut diperbarui di komentar SQL/TS, suite uji, dan
+dokumen ini. Dua positif palsu sengaja dilewati: `'NRS-0042'` (contoh kode di
+`0005_nursery.sql`) dan angka data di `db/data/adoption-observations.json`.
+
+**Aturan untuk sesi berikutnya:** `git fetch origin` SEBELUM bercabang, dan bercabang dari
+`origin/main` yang baru saja di-fetch — bukan dari `main` lokal, dan bukan dari ref
+remote-tracking yang belum di-fetch. Bila `main` bergerak saat stack sedang berjalan,
+rebase seluruh sisa stack dan **jalankan ulang migrasi dari DB kosong**, karena tabrakan
+nomor dan konflik view hanya terlihat di sana.
+
+---
+
+## 2. Migrasi yang ditambahkan sesi ini (0039–0046)
 
 | Berkas | Isi |
 |---|---|
-| `0038_honest_null_cost_views.sql` | Hapus `COALESCE(...,0)` per kolom pada `v_block_cost_summary` & `v_budget_vs_actual`. `remaining_idr` & `is_over_budget` SENGAJA tetap COALESCE |
-| `0039_inbox_enum_codes.sql` | Inbox berhenti merangkai kode enum ke `detail`; dua kolom baru `crop_code`/`method_code` |
-| `0040_seed_distribution_input.sql` | `seed_distributions`: kolom `created_by` + policy viewer_readonly yang tadinya luput |
+| `0039_honest_null_cost_views.sql` | Hapus `COALESCE(...,0)` per kolom pada `v_block_cost_summary` & `v_budget_vs_actual`. `remaining_idr` & `is_over_budget` SENGAJA tetap COALESCE |
+| `0040_inbox_enum_codes.sql` | Inbox berhenti merangkai kode enum ke `detail`; dua kolom baru `crop_code`/`method_code` |
+| `0042_seed_distribution_input.sql` | `seed_distributions`: kolom `created_by` + policy viewer_readonly yang tadinya luput |
 | `0041_price_list_versioning.sql` | K-02 §14: `version`/`valid_from`/`valid_to`, `app.price_at()`, `app.publish_price()`, `app.update_price_meta()`, append-only + ledger, driver diperluas, kolom `cost_category_id`/`chemical_id` |
-| `0042_agri_input_stock_ledger.sql` | K-06 §17: `agri_input_stock_movements` (append-only), saldo awal dimigrasikan, **`stock_qty` DIHAPUS**, view `v_agri_input_stock` |
-| `0043_decide_record_materialization.sql` | `app.decide_record()` ditulis ulang SEKALI: materialisasi biaya (K-01 §13), larangan self-approval (AI-17), supersede kesesuaian (K-04 §16) |
-| `0044_backfill_reflected_costs.sql` | Materialisasi mundur 20 record approved (Rp 1,397 M) |
-| `0045_price_driver_uniqueness.sql` | AI-44a: indeks unik `(company_id, driver, chemical_id) NULLS NOT DISTINCT` untuk tarif aktif ber-kind `cost`. Menegakkan andaian `LIMIT 1` di `app.price_for_driver()` yang tidak pernah ditegakkan |
+| `0043_agri_input_stock_ledger.sql` | K-06 §17: `agri_input_stock_movements` (append-only), saldo awal dimigrasikan, **`stock_qty` DIHAPUS**, view `v_agri_input_stock` |
+| `0044_decide_record_materialization.sql` | `app.decide_record()` ditulis ulang SEKALI: materialisasi biaya (K-01 §13), larangan self-approval (AI-17), supersede kesesuaian (K-04 §16) |
+| `0045_backfill_reflected_costs.sql` | Materialisasi mundur 20 record approved (Rp 1,397 M) |
+| `0046_price_driver_uniqueness.sql` | AI-44a: indeks unik `(company_id, driver, chemical_id) NULLS NOT DISTINCT` untuk tarif aktif ber-kind `cost`. Menegakkan andaian `LIMIT 1` di `app.price_for_driver()` yang tidak pernah ditegakkan |
 
-**Peringatan penting:** 0041–0044 **diterapkan tanpa telaah adversarial**. Empat dari lima agen
+**Peringatan penting:** 0041–0045 **diterapkan tanpa telaah adversarial**. Empat dari lima agen
 workflow mati kena batas kuota bulanan organisasi; hanya arsiteknya selesai. Saya menelaah sendiri
 (satu lensa) dan memverifikasi tiap migrasi terhadap DB nyata. Sepanjang sesi ini SETIAP ronde telaah
 adversarial menemukan temuan blocking, jadi ketiadaannya di sini adalah risiko nyata. **Telaah ulang
@@ -102,7 +221,25 @@ Ini bagian paling berharga dari dokumen ini.
    () => false)`: `false` di server, `true` di klien, tanpa render kedua.
 12. **`psql -tAc` mencetak boolean sebagai `true`/`false`, bukan `t`/`f`.** Assertion
    string yang mengharapkan `|t` gagal walau datanya benar.
-13. **Akun multi-entitas berbahaya untuk fixture uji.** `resolveLogin` menaruh akun ber-2-entitas di
+13. **`db:seed:demo` RUSAK oleh dua migrasi sendiri, dan tidak ada yang menyadarinya
+   karena data demo sudah ada.** Keduanya baru terlihat saat DB dibangun dari nol:
+   - `ON CONFLICT (company_id, code)` pada `price_list` gagal setelah 0041 menggantinya
+     dengan indeks **PARSIAL** `price_list_one_open (… WHERE valid_to IS NULL)`.
+     PostgreSQL tidak bisa menyimpulkan indeks parsial tanpa predikat yang sama:
+     `there is no unique or exclusion constraint matching the ON CONFLICT specification`.
+     Perbaikan: tambahkan `WHERE valid_to IS NULL` pada klausa ON CONFLICT-nya.
+   - INSERT `agri_input_chemicals` masih mengisi `stock_qty` yang sudah DIHAPUS 0043:
+     `column "stock_qty" does not exist`. Perbaikan: kolomnya dibuang dan saldo awal
+     ditulis sebagai baris mutasi di `agri_input_stock_movements`, meniru cara 0043
+     memindahkan saldo lama.
+
+   Ini bukan cacat kosmetik: `db:purge:demo` → `db:seed:demo` adalah jalur pemulihan yang
+   didokumentasikan, dan `check_production_readiness()` **menyuruh** menjalankan
+   `db:purge:demo`. Purge tanpa seed yang bisa jalan berarti data demo hilang permanen.
+   **Pelajaran: setiap migrasi yang menghapus kolom atau mengubah unique constraint wajib
+   diikuti satu kali `db:seed:demo` dari DB kosong**, karena suite `db:test` membuat
+   fixture-nya sendiri dan tidak pernah menyentuh jalur seed.
+14. **Akun multi-entitas berbahaya untuk fixture uji.** `resolveLogin` menaruh akun ber-2-entitas di
    mode "semua entitas" (`companyId` null); di mode itu form tulis hilang dan `createMasterItem`
    menulis `company_id = NULL` (item jadi GLOBAL lintas tenant). `admin@agrovision.local` sudah
    begitu (DEV + PILOT dari `db:import:pilot`) — itu yang mematikan `at:verify` di AT2 sampai
@@ -150,7 +287,7 @@ Flag itu mematikan SEMUA konfirmasi tool. Di pekerjaan ini yang perlu diwaspadai
 - **`npm run db:purge:demo`** menghapus tenant demo tanpa tanya. Sudah terjadi sekali tanpa backup.
   Ambil dump lebih dulu:
   `docker exec -i agrovision-db pg_dump -U postgres --no-owner agrovision > db/backups/agrovision-$(date +%Y%m%d-%H%M).sql`
-- **Migrasi ber-`DROP COLUMN`/`DROP INDEX`** tidak bisa dibatalkan tanpa restore. 0042 sudah menghapus
+- **Migrasi ber-`DROP COLUMN`/`DROP INDEX`** tidak bisa dibatalkan tanpa restore. 0043 sudah menghapus
   `stock_qty`; sisa rencana tidak ada lagi yang menghapus kolom, tapi periksa tiap migrasi baru.
 - **Tabel append-only** (`price_list`, `agri_input_stock_movements`, `audit_log`, `evidence_files`)
   tidak bisa di-UPDATE/DELETE oleh aplikasi. Koreksi = baris pembalik, bukan menulis ulang.
@@ -159,7 +296,7 @@ Flag itu mematikan SEMUA konfirmasi tool. Di pekerjaan ini yang perlu diwaspadai
 
 ```bash
 docker compose up -d db
-npm run db:migrate && npm run db:verify        # 45 migrasi, tanpa drift
+npm run db:migrate && npm run db:verify        # 46 migrasi, tanpa drift
 npm run db:test && npm run db:test:adversarial # 34/0 dan 54/0
 npx tsc --noEmit && npm run lint              # 0 error
 npm run dev                                    # terminal lain

@@ -293,7 +293,7 @@ dibaca dari isi halaman (`data-testid="akses-ditolak"`).
 | `npm run db:test:adversarial` | 36 PASS · 0 FAIL |
 | `npm run at:verify` | 18 PASS · 11 FAIL — kesebelasnya known-fail, lihat dokumen 14 §E |
 | `npm run db:check` | 4 penghalang (stub login + 3 tenant demo), 4 catatan non-blocking — semuanya memang diketahui |
-| `app.check_rls_coverage()` | 0 baris (diperiksa di dalam migrasi 0038, migrasi gagal bila bocor) |
+| `app.check_rls_coverage()` | 0 baris (diperiksa di dalam migrasi 0039, migrasi gagal bila bocor) |
 
 ### Dua temuan tambahan yang ikut diperbaiki
 
@@ -403,24 +403,24 @@ dibaca dari isi halaman (`data-testid="akses-ditolak"`).
 
 ## 10c. Status pelaksanaan Sprint 2 — diperbarui 23 Agustus 2026
 
-Rantai migrasi **0040–0044** terpasang. Verifikasi akhir: `tsc` 0 error · `lint` 0 error/13 warning ·
+Rantai migrasi **0042–0045** terpasang. Verifikasi akhir: `tsc` 0 error · `lint` 0 error/13 warning ·
 `db:test` **23/0** (naik dari 21, tiga cek baru K-04) · `db:test:adversarial` **37/0** (naik dari 36,
-cek policy 0040) · `at:verify` 18/11 (known-fail tak berubah) · `check_rls_coverage()` dan
+cek policy 0042) · `at:verify` 18/11 (known-fail tak berubah) · `check_rls_coverage()` dan
 `check_privilege_revocations()` **nol baris** · tanpa drift checksum.
 
 | Item | Status | Bukti terukur |
 |---|---|---|
 | AI-02 driver refleksi lengkap | **selesai** | 0041: `weeding_area_ha`, `spraying_volume`, `pruning_tree_count` terisi — akar B-05/B-07 |
 | AI-04 penguncian tarif per periode | **selesai** | 0041 + TS. Terbit 750rb→825rb: versi 1 ditutup, `price_at('WEED-HA','2026-08-01')` **tetap 750rb** |
-| AI-45 buku besar stok | **selesai** | 0042: saldo awal 5 item/2.500 unit pindah ke ledger, `stock_qty` dihapus, alert reorder hidup (QA D-01 akhirnya bisa diuji) |
-| AI-01 materialisasi biaya | **selesai** | 0043 + backfill 0044 (20 baris, Rp 1,397 M). Approve penyiangan 4 ha → `4.000 × 750.000 = 3.000.000`, kategori LABOR, periode dari **tanggal kejadian** |
+| AI-45 buku besar stok | **selesai** | 0043: saldo awal 5 item/2.500 unit pindah ke ledger, `stock_qty` dihapus, alert reorder hidup (QA D-01 akhirnya bisa diuji) |
+| AI-01 materialisasi biaya | **selesai** | 0044 + backfill 0045 (20 baris, Rp 1,397 M). Approve penyiangan 4 ha → `4.000 × 750.000 = 3.000.000`, kategori LABOR, periode dari **tanggal kejadian** |
 | AI-17 larangan self-approval | **selesai** | `ERROR: creator tidak boleh memutuskan record buatannya sendiri (AI-17)` |
-| AI-18 supersede kesesuaian | **selesai** | 0043: indeks aktif per `(block_id, crop_id)`; blok boleh dinilai durian **dan** kelapa |
-| AI-19 / AI-20 / AI-50 jalur input | **selesai** | AI-19 teruji end-to-end sampai Disetujui; 0040 untuk AI-50 |
+| AI-18 supersede kesesuaian | **selesai** | 0044: indeks aktif per `(block_id, crop_id)`; blok boleh dinilai durian **dan** kelapa |
+| AI-19 / AI-20 / AI-50 jalur input | **selesai** | AI-19 teruji end-to-end sampai Disetujui; 0042 untuk AI-50 |
 | **AI-52** form overhead & upah | **selesai** | Form dipasang kembali dengan peringatan berbasis data (`autoMaterializedCategories`). Ini yang membuka 11 known-fail: **at:verify 18/11 → 43/0** |
 | **AI-11** edit record ditolak | **selesai** | Editor per baris draft/ditolak; invarian `ct_role_split` menuntut status kembali ke `draft` — diuji 6/6 |
 | AI-05 form anggaran per scope | **selesai** | `budgetSchema` superRefine dua arah + `BudgetForm` dinamis pasca-hidrasi. 12 cek `at:verify` baru (6 pasangan ditolak, 2 sah, 4 struktur form) |
-| AI-44a tambah baris tarif | **selesai** | `createPriceRowAction` + `PriceRowForm` (`<details>`, jalan tanpa JS) + kolom driver/satuan/status + migrasi 0045. 11 cek `db:test`, 17 cek adversarial, 10 cek `at:verify` |
+| AI-44a tambah baris tarif | **selesai** | `createPriceRowAction` + `PriceRowForm` (`<details>`, jalan tanpa JS) + kolom driver/satuan/status + migrasi 0046. 11 cek `db:test`, 17 cek adversarial, 10 cek `at:verify` |
 
 ### Catatan §6.7 terjawab: anggaran ↔ realisasi kini ter-link
 
@@ -495,7 +495,7 @@ Tiga hal yang muncul saat mengerjakannya:
    (`price_for_driver` memenangkan baris ber-`chemical_id`), tapi "bahan mana yang
    pantas punya tarif sendiri" adalah keputusan produk yang belum diambil.
 
-**Migrasi 0045 — satu tarif aktif per (entitas, driver, bahan).** `app.price_for_driver()`
+**Migrasi 0046 — satu tarif aktif per (entitas, driver, bahan).** `app.price_for_driver()`
 memilih baris dengan `LIMIT 1` dan MENGANDAIKAN hanya ada satu kandidat generik;
 andaian itu tidak pernah ditegakkan. Dua baris aktif ber-driver sama membuat biaya
 yang dimaterialisasi `app.decide_record()` bergantung pada urutan **kode**, bukan pada
@@ -542,7 +542,7 @@ Terukur dari halaman terender `/costing/refleksi` (DEMO, `admin@demo.invalid`):
 
 Selisih Rp 37.000.000 = penyiangan 47 ha × 750rb + penyemprotan 70 liter × 25rb.
 PILOT understate **Rp 414.130.000** (SPRAY-L 15.734,8 liter + PRUNE-TREE 1.384 pohon).
-Angka yang sama sudah benar di `cost_transactions` sejak 0043, jadi layar Refleksi dan
+Angka yang sama sudah benar di `cost_transactions` sejak 0044, jadi layar Refleksi dan
 Dashboard Finansial menyebut angka berbeda untuk hal yang sama — pola yang AI-47 ada
 untuk menghapus.
 
@@ -576,7 +576,7 @@ dan `driverConflicts` dirender sebagai peringatan di layar.
 
 ### Yang harus diketahui sebelum melanjutkan
 
-- **Rantai 0041–0044 diterapkan TANPA telaah adversarial.** Empat dari lima agen workflow mati kena
+- **Rantai 0041–0045 diterapkan TANPA telaah adversarial.** Empat dari lima agen workflow mati kena
   batas kuota bulanan organisasi; hanya arsiteknya selesai. Saya menelaah sendiri (satu lensa) dan
   memverifikasi tiap migrasi terhadap DB nyata sebelum menerapkan — tapi sepanjang sesi ini SETIAP
   ronde telaah adversarial menemukan temuan blocking, jadi ketiadaannya di sini adalah risiko nyata,
