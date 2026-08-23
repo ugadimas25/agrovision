@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { queryWithoutRlsContext } from "./db";
 import type { RlsContext } from "./db";
@@ -167,6 +168,44 @@ export async function requireRole(...allowed: string[]): Promise<RlsContext & { 
   const ctx = await requireContext();
   if (!allowed.includes(ctx.role)) throw new Error("FORBIDDEN");
   return ctx;
+}
+
+/**
+ * Gate untuk Server Component HALAMAN. Server Action dan route handler tetap
+ * memakai requireRole() -- keduanya tidak merender apa pun.
+ *
+ * Dua kegagalan yang berbeda tidak boleh diperlakukan sama:
+ *   - BELUM LOGIN -> redirect("/login"), dilempar dari dalam fungsi ini, jadi
+ *     halaman tidak perlu try/catch lagi.
+ *   - ROLE SALAH  -> { ok: false }, supaya halaman merender <AksesDitolak/>.
+ *     Membuang pengguna yang SUDAH login ke /login hanya membingungkan: ia akan
+ *     mengira sesinya habis, login ulang, lalu mendarat di penolakan yang sama.
+ *
+ * Kenapa union dan bukan forbidden() dari next/navigation: pada Next 16.2.9
+ * fungsi itu masih eksperimental dan menuntut flag experimental.authInterrupts
+ * (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/forbidden.md).
+ * Menyalakan flag eksperimental untuk perbaikan keamanan P0 bukan pertukaran
+ * yang sehat. Konsekuensinya halaman penolakan berstatus HTTP 200, bukan 403 --
+ * karena itu scripts/at-verify.mjs membuktikannya dari ISI halaman.
+ *
+ * `allowed` kosong = cukup login (setara requireContext). Halaman baca yang
+ * memang terbuka untuk semua peran (skenario QA A-03) tidak perlu diubah.
+ */
+export type PageGate =
+  | { ok: true; ctx: RlsContext & { session: Session } }
+  | { ok: false; role: string };
+
+export async function requirePageRole(...allowed: string[]): Promise<PageGate> {
+  let ctx: RlsContext & { session: Session };
+  try {
+    ctx = await requireContext();
+  } catch {
+    redirect("/login");
+  }
+  if (allowed.length > 0 && !allowed.includes(ctx.role)) {
+    return { ok: false, role: ctx.role };
+  }
+  return { ok: true, ctx };
 }
 
 async function issue(sub: string, companyId: string | null): Promise<void> {

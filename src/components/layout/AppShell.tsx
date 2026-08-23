@@ -83,7 +83,7 @@ export function AppShell({
         <main className="flex-1 overflow-y-auto p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-6 md:pb-6">
           {children}
         </main>
-        <BottomNav locale={locale} onMenu={() => setOpen(true)} />
+        <BottomNav role={role} locale={locale} onMenu={() => setOpen(true)} />
       </div>
     </div>
   );

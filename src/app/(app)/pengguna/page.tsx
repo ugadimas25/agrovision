@@ -1,6 +1,6 @@
-import { Users, ShieldAlert } from "lucide-react";
-import { redirect } from "next/navigation";
-import { requireContext } from "@/lib/session";
+import { Users } from "lucide-react";
+import { requirePageRole } from "@/lib/session";
+import { AksesDitolak } from "@/components/ui/AksesDitolak";
 import { listUsers } from "@/lib/repo/master";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getLocale } from "@/lib/i18n-server";
@@ -13,24 +13,26 @@ export const metadata = { title: "Pengguna & Akses — AgroVision" };
 
 const ROLE = { super_admin: "Super Admin", approver: "Approver", creator: "Petugas Lapangan", viewer: "Pembaca" };
 
-export default async function Page() {
-  let ctx;
-  try { ctx = await requireContext(); } catch { redirect("/login"); }
-  const t = getDict(await getLocale());
+/**
+ * Daftar pengguna & akses -- hanya super_admin dan approver.
+ *
+ * Gate-nya di baris pertama halaman, bukan cuma di menu: item Sidebar yang
+ * disembunyikan (AI-27a) tetap bisa dicapai dengan menempel URL. Peran yang
+ * tidak berhak mendapat halaman penolakan, BUKAN /login -- sesinya sah, jadi
+ * mengirimnya ke layar login hanya membuatnya login ulang ke penolakan sama.
+ *
+ * Daftar peran satu tempat: gate dan pesan penolakan tidak boleh bisa berbeda.
+ */
+const BOLEH_LIHAT_PENGGUNA = ["super_admin", "approver"];
 
-  if (!["super_admin", "approver"].includes(ctx.session.role)) {
-    return (
-      <div>
-        <PageHeader title={t("nav.users")} />
-        <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-4">
-          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
-          <p className="text-sm text-amber-900">Peran <strong>{ctx.session.role}</strong> tidak berhak melihat daftar pengguna.</p>
-        </div>
-      </div>
-    );
+export default async function Page() {
+  const gate = await requirePageRole(...BOLEH_LIHAT_PENGGUNA);
+  const t = getDict(await getLocale());
+  if (!gate.ok) {
+    return <AksesDitolak title={t("nav.users")} role={gate.role} allowed={BOLEH_LIHAT_PENGGUNA} />;
   }
 
-  const users = await listUsers(ctx);
+  const users = await listUsers(gate.ctx);
   return (
     <div>
       <PageHeader title={t("nav.users")} subtitle={t("sub.users")} />

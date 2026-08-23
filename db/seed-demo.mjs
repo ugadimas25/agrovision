@@ -8,7 +8,12 @@
  * lingkungan sungguhan dan disangka nyata.
  *
  *   npm run db:seed:demo    tambahkan data demo
- *   npm run db:purge:demo   hapus seluruhnya
+ *   npm run db:purge:demo   hapus seluruhnya (DEMO + DEMO2)
+ *
+ * Seed ini membuat DUA entitas demo: 'DEMO' (Kalimantan Tengah, data lengkap)
+ * dan 'DEMO2' (Mamuju, data minimal). Hanya admin@demo.invalid yang diberi akses
+ * ke keduanya -- itu yang memunculkan switcher entitas di Topbar dan membuat uji
+ * isolasi tenant (QA A-07) bisa dijalankan sungguhan.
  *
  * Komponen biaya mengikuti docs/00-refinement-concept.md:158 — delapan
  * kategori yang klien sebut sendiri, beserta sub-kategorinya.
@@ -24,6 +29,9 @@ if (!url) { console.error('MIGRATION_DATABASE_URL wajib.'); process.exit(1) }
 const PURGE = process.argv.includes('--purge')
 
 const CO = '00000000-0000-4000-8000-0000000000d0'
+// Entitas demo KEDUA -- ada khusus supaya isolasi tenant bisa diuji (QA A-07).
+// Lihat blok "ENTITAS KEDUA" di bagian akhir seed().
+const CO2 = '00000000-0000-4000-8000-0000000000d1'
 
 // ---------------------------------------------------------------------------
 // Komponen biaya perkebunan (concept:158)
@@ -75,7 +83,11 @@ const c = new pg.Client({ connectionString: url })
 await c.connect()
 
 async function purge() {
-  const ids = (await c.query(`SELECT id FROM app.companies WHERE is_demo AND code = 'DEMO'`)).rows.map(r => r.id)
+  // Dua entitas demo: 'DEMO' (Kalimantan) + 'DEMO2' (Mamuju). Keduanya WAJIB ikut
+  // terhapus; kalau tidak, app.check_production_readiness() tetap menandai sisa
+  // data demo sebagai penghalang produksi. Daftar eksplisit -- bukan LIKE 'DEMO%'
+  // -- supaya entitas 'DEV' dan 'PILOT' (yang juga is_demo) tidak ikut terhapus.
+  const ids = (await c.query(`SELECT id FROM app.companies WHERE is_demo AND code IN ('DEMO','DEMO2')`)).rows.map(r => r.id)
   if (ids.length === 0) { console.log('Tidak ada data demo.'); return }
   await c.query('BEGIN')
   for (const t of [
@@ -824,10 +836,178 @@ async function seed() {
       [blockIds[bi], on, crop, ton, grade, status, users[2][0]])
   }
 
+  // =========================================================================
+  // ENTITAS KEDUA -- prasyarat uji isolasi tenant (QA A-07)
+  //
+  // Switcher entitas di Topbar sudah ada, tapi hanya tampil bila pengguna punya
+  // lebih dari satu entitas (`multi = companies.length > 1`,
+  // src/components/layout/Topbar.tsx:62). Dengan satu entitas saja, A-07 tidak
+  // bisa dijalankan dan terpaksa di-SKIP.
+  //
+  // Yang diberi akses ganda HANYA admin@demo.invalid. approver, creator, dan
+  // direktur tetap satu entitas: kalau semua orang multi-entitas, "uji isolasi"
+  // tidak menguji apa pun lagi. Sebagai pembanding arah sebaliknya ditambahkan
+  // satu viewer yang MEMANG milik entitas kedua -- ia tidak boleh melihat
+  // sebutir pun data 'DEMO'.
+  //
+  // Datanya dibuat berbeda dengan sengaja: pulau lain (Mamuju, Sulawesi Barat),
+  // kode blok MJU-xx, luas 18 ha (bukan 30), tahun tanam 2024 (bukan 2026),
+  // satuan "Butir", kategori biaya khas kelapa, dan nilai rupiah satu orde lebih
+  // kecil. Kebocoran lintas tenant jadi terlihat mata, tanpa perlu membandingkan
+  // uuid. Angkanya ILUSTRATIF, sama seperti seluruh isi seed ini.
+  //
+  // Catatan keamanan: INSERT langsung ke app.user_company_access DISENGAJA di
+  // sini karena seed berjalan sebagai superuser (MIGRATION_DATABASE_URL) --
+  // polanya sama dengan blok user entitas pertama di atas. Dari aplikasi
+  // (app_rw) hak tulis tabel ini tetap dicabut dan satu-satunya pintu tetap
+  // app.grant_company_access(); lihat ledger app.privilege_revocations (0019).
+  // =========================================================================
+  await c.query(
+    `INSERT INTO app.companies (id, code, name, is_demo) VALUES ($1,'DEMO2','PT Demo Kelapa Mamuju', true)
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, is_demo = true`, [CO2])
+
+  // Akun multi-entitas SENGAJA akun BARU, bukan admin@demo.invalid.
+  //
+  // Alasannya bukan selera: resolveLogin() (src/lib/session.ts) hanya memilih
+  // entitas otomatis bila pengguna punya SATU entitas. Begitu akun punya dua, ia
+  // selalu mendarat di mode "semua entitas" (companyId null), dan di mode itu:
+  //   - form tulis yang bersyarat `ctx.companyId` HILANG dari layar (mis. form
+  //     blok baru di /operasional/blok), dan
+  //   - createMasterItem menulis company_id = NULL, yang diloloskan policy
+  //     master_items_global_admin_only untuk super_admin -> item master menjadi
+  //     GLOBAL dan terlihat oleh SETIAP tenant. Justru kebocoran lintas tenant,
+  //     di seed yang dibuat untuk membuktikan isolasi.
+  // Ini bukan kekhawatiran teoretis: hal yang sama sudah terjadi pada
+  // admin@agrovision.local (DEV + PILOT dari db:import:pilot) dan membuat
+  // scripts/at-verify.mjs mati di AT2 sampai harness-nya memilih entitas sendiri.
+  // Karena admin@demo.invalid dipakai skenario QA A-01/A-05/AT1, perilakunya
+  // tidak diubah.
+  const U_ADMIN_MULTI = '00000000-0000-4000-8000-0000000000e6'
+  await c.query(
+    `INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
+     VALUES ($1,$2,'demo|admin-multi','admin.multi@demo.invalid','Sari Admin (Dua Entitas)','viewer','super_admin')
+     ON CONFLICT (id) DO UPDATE SET app_role = EXCLUDED.app_role`, [U_ADMIN_MULTI, CO])
+  for (const co of [CO, CO2]) {
+    await c.query(
+      `INSERT INTO app.user_company_access (user_id, company_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+      [U_ADMIN_MULTI, co])
+  }
+
+  // Viewer milik entitas kedua -- satu entitas saja, jadi ia pembuktian arah
+  // sebaliknya: tidak boleh melihat data 'DEMO'.
+  const U_VIEWER_B = '00000000-0000-4000-8000-0000000000e5'
+  await c.query(
+    `INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
+     VALUES ($1,$2,'demo|viewer-b','direktur.mamuju@demo.invalid','Rina Direktur Mamuju','viewer','viewer')
+     ON CONFLICT (id) DO UPDATE SET app_role = EXCLUDED.app_role`, [U_VIEWER_B, CO2])
+  await c.query(
+    `INSERT INTO app.user_company_access (user_id, company_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+    [U_VIEWER_B, CO2])
+
+  const estateB = (await c.query(
+    `INSERT INTO app.estates (company_id, code, name) VALUES ($1,'EST-MJU','Estate Mamuju Pesisir') RETURNING id`,
+    [CO2])).rows[0].id
+
+  // 4 blok di pesisir Mamuju -- ratusan kilometer dari blok 'DEMO' di Kalimantan
+  // Tengah, sehingga kebocoran lintas tenant langsung terlihat di peta.
+  const blockIdsB = []
+  for (let i = 0; i < 4; i++) {
+    const r = await c.query(
+      `INSERT INTO app.blocks (company_id, estate_id, code, name, planting_year, boundary_source, geom, created_by)
+       VALUES ($1,$2,$3,$4,2024,'shapefile_import',
+               ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($5),4326)), $6) RETURNING id`,
+      [CO2, estateB, `MJU-${String(i + 1).padStart(2, '0')}`, `Blok Pesisir ${i + 1}`,
+       squareAt(118.87 + i * 0.0045, -2.68, 18), users[0][0]])
+    blockIdsB.push(r.rows[0].id)
+  }
+
+  // Master data milik entitas kedua SENDIRI. Memakai master_items entitas
+  // pertama akan membuat kategori & satuan tampil kosong bagi pengguna entitas
+  // kedua (master_items ber-RLS per company) -- persis kebocoran yang sedang diuji.
+  const uomIdsB = {}
+  for (const [i, [code, name]] of [['BUTIR', 'Butir'], ['HOK', 'Hari Orang Kerja'], ['TON', 'Ton']].entries()) {
+    const r = await c.query(
+      `INSERT INTO app.master_items (master_type_id, company_id, code, name, sort_order, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [uomType, CO2, code, name, i, users[0][0]])
+    uomIdsB[code] = r.rows[0].id
+  }
+
+  const parentIdsB = []
+  const leafIdsB = []
+  for (const [i, [code, name, subs]] of [
+    ['COCOPREP', 'Persiapan Kebun Kelapa', ['Pembersihan Lahan Pesisir', 'Pembuatan Saluran Air']],
+    ['COCOHARV', 'Panen & Pascapanen Kelapa', ['Upah Pemanen', 'Angkut ke Gudang Kopra']],
+  ].entries()) {
+    const p = await c.query(
+      `INSERT INTO app.master_items (master_type_id, company_id, code, name, sort_order, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [catType, CO2, code, name, i * 10, users[0][0]])
+    parentIdsB.push({ id: p.rows[0].id, name })
+    for (const [j, sub] of subs.entries()) {
+      const r = await c.query(
+        `INSERT INTO app.master_items (master_type_id, company_id, parent_id, code, name, sort_order, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [catType, CO2, p.rows[0].id, `${code}-${String(j + 1).padStart(2, '0')}`, sub,
+         i * 10 + j + 1, users[0][0]])
+      leafIdsB.push(r.rows[0].id)
+    }
+  }
+
+  const supIdsB = []
+  for (const [code, name] of [
+    ['SUP-MJU-01', 'CV Kopra Mandar Sejahtera'],
+    ['SUP-MJU-02', 'UD Angkutan Mamuju'],
+  ]) {
+    const r = await c.query(
+      `INSERT INTO app.suppliers (company_id, code, name, is_vendor) VALUES ($1,$2,$3,true) RETURNING id`,
+      [CO2, code, name])
+    supIdsB.push(r.rows[0].id)
+  }
+
+  const periodB = (await c.query(
+    `INSERT INTO app.fiscal_periods (company_id, code, name, starts_on, ends_on, sort_order)
+     VALUES ($1,'TB-2026','Tahun Buku 2026','2026-01-01','2026-12-31',0) RETURNING id`, [CO2])).rows[0].id
+
+  for (const [i, p] of parentIdsB.entries()) {
+    await c.query(
+      `INSERT INTO app.budgets (company_id, fiscal_period_id, cost_category_id, scope_type, amount_idr, created_by)
+       VALUES ($1,$2,$3,'company',$4,$5)`,
+      [CO2, periodB, p.id, i === 0 ? 175_000_000 : 260_000_000, users[0][0]])
+  }
+
+  // created_by = admin demo, satu-satunya pengguna yang memang punya akses ke
+  // entitas ini. creator 'DEMO' sengaja TIDAK dipakai: ia tak boleh menyentuh
+  // entitas kedua sama sekali.
+  const STATUSES_B = ['approved', 'approved', 'submitted', 'draft', 'rejected', 'approved']
+  let txCountB = 0
+  for (let i = 0; i < STATUSES_B.length; i++) {
+    const status = STATUSES_B[i]
+    const amount = 3_100_000 + i * 900_000        // 3,1jt - 7,6jt; deterministik
+    const qty = 25 * (i + 1)
+    await c.query(
+      `INSERT INTO app.cost_transactions
+         (company_id, cost_center_id, block_id, cost_category_id, uom_item_id, supplier_id,
+          fiscal_period_id, transaction_date, quantity, unit_price_idr, amount_idr, unit,
+          approval_status, rejection_reason, submitted_at, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+               (SELECT code FROM app.master_items WHERE id=$5),
+               -- $12 dicast eksplisit, alasannya sama dengan blok pengeluaran di atas.
+               $12::app.record_status,$13,
+               CASE WHEN $12::text = 'draft' THEN NULL ELSE now() END,
+               $14,$14)`,
+      [CO2, cc, blockIdsB[i % blockIdsB.length], leafIdsB[i % leafIdsB.length],
+       Object.values(uomIdsB)[i % 3], supIdsB[i % supIdsB.length], periodB,
+       `2026-0${(i % 6) + 1}-1${i}`, qty, Math.round(amount / qty), amount, status,
+       status === 'rejected' ? 'Nota angkut kopra belum dilampirkan' : null,
+       users[0][0]])
+    txCountB++
+  }
+
   await c.query('COMMIT')
 
   console.log('\nData DEMO ditambahkan.\n')
-  console.log(`  entitas            PT Demo Agro Kalimantan (ditandai is_demo)`)
+  console.log(`  entitas            PT Demo Agro Kalimantan (DEMO, ditandai is_demo)`)
+  console.log(`  entitas kedua      PT Demo Kelapa Mamuju (DEMO2, ditandai is_demo)`)
+  console.log(`                     1 estate · ${blockIdsB.length} blok MJU-xx · ${txCountB} pengeluaran · 2 anggaran`)
   console.log(`  estate             ${ESTATES.length}`)
   console.log(`  blok               12 (semua berpolygon)`)
   console.log(`  komponen biaya     ${COST_TREE.length} kategori, ${leafIds.length} sub-kategori`)
@@ -851,6 +1031,14 @@ async function seed() {
   console.log(`  farm activities    3 weeding · 2 spraying · ${harvestRows.length} harvest (2 approved → revenue)`)
   console.log('\nLogin demo (tanpa password):')
   for (const [, , email, name, role] of users) console.log(`  ${role.padEnd(12)} ${email.padEnd(26)} ${name}`)
+  console.log(`  ${'viewer'.padEnd(12)} ${'direktur.mamuju@demo.invalid'} Rina Direktur Mamuju (entitas DEMO2)`)
+  console.log('\nUji isolasi tenant (QA A-07):')
+  console.log('  admin.multi@demo.invalid     2 entitas (DEMO+DEMO2) -> switcher muncul di Topbar')
+  console.log('  admin@demo.invalid           1 entitas (DEMO)  -> perilaku lama, tidak diubah')
+  console.log('  approver/creator/direktur    1 entitas (DEMO)  -> tanpa switcher')
+  console.log('  direktur.mamuju@demo.invalid 1 entitas (DEMO2) -> tanpa switcher')
+  console.log('  Catatan: admin.multi masuk mode "Semua Entitas" setelah login. Pilih satu')
+  console.log('  entitas dulu sebelum MEMBUAT data -- di mode itu entitas aktif kosong.')
   console.log('\n⚠️  Angka biaya di sini ILUSTRATIF, bukan data lapangan.')
   console.log('   check_production_readiness() akan melaporkannya sebagai penghalang produksi.')
   console.log('   Hapus dengan: npm run db:purge:demo')

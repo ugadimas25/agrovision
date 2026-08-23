@@ -1,13 +1,27 @@
 "use client";
 
 import { useActionState } from "react";
-import { Loader2, Send } from "lucide-react";
+import { Check, Loader2, Send } from "lucide-react";
 import { submitOpAction, type ActionState } from "@/lib/actions/operational";
 
 const initial: ActionState = { ok: false, message: "" };
 
 export function OpSubmitButton({ module, id }: { module: string; id: string }) {
   const [state, formAction, pending] = useActionState(submitOpAction, initial);
+
+  // Pada sukses, baris biasanya ikut dirender ulang menjadi "Diajukan" sehingga
+  // tombol ini unmount. Bila revalidate menyusul belakangan, konfirmasinya tetap
+  // terlihat -- sebelumnya pesan {ok:true} dibuang dan pengguna hanya melihat
+  // spinner. Pola sama dengan DecisionForm di layar Approval.
+  if (state.ok) {
+    return (
+      <p className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+        <Check className="h-3.5 w-3.5" />
+        {state.message}
+      </p>
+    );
+  }
+
   return (
     <form action={formAction} className="inline-flex flex-col items-end gap-1">
       <input type="hidden" name="module" value={module} />

@@ -11,24 +11,37 @@ import { getDict, type Locale } from "@/lib/i18n";
  * yang membuka drawer (navigasi lengkap). Bukan duplikasi membingungkan: bottom
  * nav = pintasan cepat, drawer = seluruh IA.
  */
-const ITEMS = [
+/**
+ * Disinkronkan dengan matriks peran → menu di Sidebar.tsx (AI-27a): bentuk
+ * `roles` dan cara memfilternya dibuat identik supaya pintasan mobile tidak
+ * pernah membuka tujuan yang sudah disembunyikan dari drawer.
+ *
+ * Keempat tujuan di bawah terbuka untuk KEEMPAT peran, jadi belum ada yang
+ * ber-`roles`: /dashboard, /survei, /laporan dipakai semua peran, dan /approval
+ * memang boleh dibuka creator (QA A-04) — tombol keputusannya yang digate.
+ * Bila nanti satu tujuan dibatasi, isi `roles` di SINI dan di Sidebar sekaligus.
+ */
+type BottomItem = { href: string; key: string; icon: typeof LayoutDashboard; roles?: string[] };
+
+const ITEMS: BottomItem[] = [
   { href: "/dashboard", key: "nav.bottom.dashboard", icon: LayoutDashboard },
   { href: "/survei", key: "nav.bottom.survey", icon: ClipboardList },
   { href: "/laporan", key: "nav.bottom.report", icon: FileBarChart2 },
   { href: "/approval", key: "nav.bottom.approval", icon: CheckSquare },
 ];
 
-export function BottomNav({ locale, onMenu }: { locale: Locale; onMenu: () => void }) {
+export function BottomNav({ role, locale, onMenu }: { role: string; locale: Locale; onMenu: () => void }) {
   const pathname = usePathname();
   const d = getDict(locale);
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  const items = ITEMS.filter((i) => !i.roles || i.roles.includes(role));
 
   return (
     <nav
       aria-label={d("chrome.bottomNav", "Navigasi cepat")}
       className="z-30 flex shrink-0 items-stretch border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
     >
-      {ITEMS.map(({ href, key, icon: Icon }) => {
+      {items.map(({ href, key, icon: Icon }) => {
         const active = isActive(href);
         return (
           <Link
