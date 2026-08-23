@@ -17,6 +17,9 @@ export type ExpenditureRow = {
   transactionDate: string;
   blockCode: string | null;
   costCategoryName: string | null;
+  /** Dibutuhkan editor AI-11 (defaultValue dropdown), bukan hanya namanya. */
+  costCategoryId: string | null;
+  note: string | null;
   supplierName: string | null;
   quantity: number | null;
   unitName: string | null;
@@ -50,11 +53,11 @@ const EXP_SELECT = `
 function mapExp(r: Record<string, unknown>): ExpenditureRow {
   return {
     id: String(r.id),
-    transactionDate: String(r.transaction_date instanceof Date
-      ? (r.transaction_date as Date).toISOString().slice(0, 10)
-      : r.transaction_date),
+    transactionDate: String(r.transaction_date),
     blockCode: (r.block_code as string) ?? null,
     costCategoryName: (r.cost_category_name as string) ?? null,
+    costCategoryId: (r.cost_category_id as string) ?? null,
+    note: (r.note as string) ?? null,
     supplierName: (r.supplier_name as string) ?? null,
     quantity: r.quantity === null ? null : Number(r.quantity),
     unitName: (r.unit_name as string) ?? null,
@@ -212,6 +215,63 @@ export async function createExpenditure(
 }
 
 /** draft -> submitted. Hanya pembuatnya, dan hanya dari draft/rejected. */
+/**
+ * Perbaiki pengeluaran yang masih draft ATAU sudah ditolak (AI-11, catatan 6.5).
+ *
+ * Tanpa ini, record yang ditolak jadi jalan buntu: creator melihat alasannya
+ * tetapi tidak punya cara memperbaikinya, sehingga satu-satunya jalan adalah
+ * membuat record baru dan meninggalkan yang lama menggantung.
+ *
+ * Yang menjaga batasnya adalah policy `ct_role_split` (migrasi 0018/0025):
+ * `USING` menguji baris LAMA, jadi creator hanya lolos untuk barisnya sendiri
+ * yang berstatus draft/rejected. Klausa WHERE di sini mengulang syarat itu supaya
+ * pemanggil mendapat rowCount 0 yang bisa dijelaskan, bukan "0 baris" senyap dari
+ * RLS. Baris yang sudah approved tidak bisa disentuh — koreksinya lewat baris
+ * pembalik (§13 aturan 3), bukan menulis ulang sejarah.
+ *
+ * rejection_reason TIDAK dihapus di sini: alasannya harus tetap terbaca sampai
+ * record benar-benar diajukan ulang (submitExpenditure yang membersihkannya).
+ */
+export async function updateExpenditure(
+  ctx: RlsContext,
+  id: string,
+  input: {
+    costCategoryId: string;
+    transactionDate: string;
+    amountIdr: number;
+    quantity: number | null;
+    unitPriceIdr: number | null;
+    note: string | null;
+  },
+): Promise<number> {
+  return withRls(ctx, async (client) => {
+    const res = await client.query(
+      // approval_status DIKEMBALIKAN ke 'draft' — bukan pilihan gaya, tapi tuntutan
+      // policy ct_role_split: `USING` menguji baris LAMA (creator boleh menyentuh
+      // draft/rejected miliknya) sementara `WITH CHECK` menguji baris BARU dan hanya
+      // meloloskan draft/submitted. Mempertahankan 'rejected' membuat UPDATE ditolak
+      // RLS. Semantiknya pun benar: begitu diperbaiki, record itu bukan lagi
+      // "ditolak" — ia draft yang menunggu diajukan ulang.
+      //
+      // rejection_reason SENGAJA dipertahankan supaya creator tetap membaca apa yang
+      // harus diperbaiki; submitExpenditure yang membersihkannya saat diajukan ulang.
+      `UPDATE app.cost_transactions
+          SET cost_category_id = $2,
+              transaction_date = $3::date,
+              amount_idr       = $4,
+              quantity         = $5,
+              unit_price_idr   = $6,
+              note             = $7,
+              approval_status  = 'draft',
+              updated_at = now(), updated_by = $8
+        WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+      [id, input.costCategoryId, input.transactionDate, input.amountIdr,
+       input.quantity, input.unitPriceIdr, input.note, ctx.userId],
+    );
+    return res.rowCount ?? 0;
+  });
+}
+
 export async function submitExpenditure(ctx: RlsContext, id: string): Promise<number> {
   return withRls(ctx, async (client) => {
     const res = await client.query(

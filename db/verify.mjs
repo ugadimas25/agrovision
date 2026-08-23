@@ -200,12 +200,36 @@ async function run() {
   r = await c.query(`SELECT code,is_stub FROM app.report_definitions WHERE is_builtin ORDER BY code`)
   ok('3 laporan built-in sebagai baris', r.rows.length === 3, r.rows.map(x => `${x.code}${x.is_stub ? '(stub)' : ''}`).join(' '))
 
-  console.log('\n=== A3 sekali per blok ===')
-  await c.query(`INSERT INTO app.land_suitability_assessments (block_id,assessed_at) VALUES ($1,now())`, [blk.id])
+  console.log('\n=== A3 satu penilaian AKTIF per blok PER KOMODITAS (K-04, migrasi 0044) ===')
+  // Kontrak ini BERUBAH di 0044. Indeks lama `lsa_one_per_block` hanya memakai
+  // block_id, sehingga blok yang sudah dinilai untuk durian tidak bisa dinilai
+  // untuk kelapa -- padahal 0028 menyeed kriteria per komoditas justru untuk
+  // dibandingkan. Itu bug (akar QA B-08), bukan aturan bisnis; docs/13 §16
+  // menggantinya dengan: satu penilaian AKTIF (approved & belum digeser) per
+  // (block_id, crop_id). Draft ganda kini SAH -- creator harus bisa memperbaiki
+  // salah input tanpa minta approver menolak dulu.
+  const crops = await c.query(`SELECT id, code FROM app.crops ORDER BY code`)
+  const cropA = crops.rows[0], cropB = crops.rows[1]
+
+  const lsaIns = `INSERT INTO app.land_suitability_assessments
+                    (block_id, crop_id, assessed_at, approval_status)
+                  VALUES ($1,$2,now(),$3)`
+  await c.query(lsaIns, [blk.id, cropA.id, 'draft'])
+  await c.query(lsaIns, [blk.id, cropA.id, 'draft'])
+  ok('dua DRAFT komoditas sama BOLEH (koreksi salah input, B-08)', true, cropA.code)
+
+  await c.query(lsaIns, [blk.id, cropA.id, 'approved'])
   try {
-    await c.query(`INSERT INTO app.land_suitability_assessments (block_id,assessed_at) VALUES ($1,now())`, [blk.id])
-    ok('assessment kedua DITOLAK', false, 'seharusnya gagal')
-  } catch (e) { ok('assessment kedua DITOLAK', /lsa_one_per_block/.test(e.message)) }
+    await c.query(lsaIns, [blk.id, cropA.id, 'approved'])
+    ok('penilaian AKTIF kedua komoditas sama DITOLAK', false, 'seharusnya gagal')
+  } catch (e) {
+    ok('penilaian AKTIF kedua komoditas sama DITOLAK',
+       /lsa_one_active_per_block_crop/.test(e.message), e.message.slice(0, 60))
+  }
+
+  await c.query(lsaIns, [blk.id, cropB.id, 'approved'])
+  ok('blok yang sama BOLEH dinilai komoditas berbeda (K-04)', true,
+     `${cropA.code} + ${cropB.code}`)
 
   await c.end()
   console.log(`\n${'='.repeat(52)}\nPASS ${pass}   FAIL ${fail}`)

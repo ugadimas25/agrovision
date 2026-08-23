@@ -168,3 +168,35 @@ export async function publishPriceRate(
     [input.code, input.rateIdr, input.berlakuDari],
   );
 }
+
+/**
+ * Kategori biaya yang sudah TER-MATERIALISASI OTOMATIS saat approval — yaitu
+ * kategori yang ditunjuk baris tarif ber-driver (migrasi 0041/0044).
+ *
+ * Dipakai form pengeluaran manual (AI-52) untuk memperingatkan pencatat: biaya
+ * kategori ini lahir sendiri dari aktivitas yang disetujui, jadi mencatatnya
+ * manual akan MENGGANDAKAN realisasi anggaran. Daftarnya diturunkan dari data,
+ * bukan dihardcode, supaya tetap benar saat tarif/pemetaan berubah.
+ *
+ * Catatan penting: satu kategori bisa otomatis DAN manual sekaligus. LABOR
+ * misalnya lahir otomatis dari penyiangan & pruning, tetapi upah harian
+ * (LABOR-DAY, tanpa driver) memang harus dicatat manual. Karena itu ini
+ * peringatan, bukan larangan — memblokir kategorinya akan mematikan justru
+ * kebutuhan yang membuat form ini ada.
+ */
+export async function autoMaterializedCategories(
+  ctx: RlsContext,
+): Promise<{ name: string; adaJalurManual: boolean }[]> {
+  const rows = await rlsQuery<{ name: string; ada_manual: boolean }>(
+    ctx,
+    `SELECT mi.name,
+            bool_or(p.driver IS NULL) AS ada_manual
+       FROM app.price_list p
+       JOIN app.master_items mi ON mi.id = p.cost_category_id
+      WHERE p.valid_to IS NULL AND p.is_active
+      GROUP BY mi.name
+     HAVING bool_or(p.driver IS NOT NULL)
+      ORDER BY mi.name`,
+  );
+  return rows.map((r) => ({ name: r.name, adaJalurManual: r.ada_manual }));
+}

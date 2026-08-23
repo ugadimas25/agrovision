@@ -1,7 +1,19 @@
 import { redirect } from "next/navigation";
 import { Wallet, Paperclip } from "lucide-react";
 import { requireContext } from "@/lib/session";
-import { blockCostSummary, listExpenditures, totalApprovedSpend } from "@/lib/repo/costing";
+import {
+  blockCostSummary,
+  listExpenditures,
+  totalApprovedSpend,
+  listCostCenterOptions,
+  listFiscalPeriodOptions,
+  listSupplierOptions,
+} from "@/lib/repo/costing";
+import { listCategoryOptions, listOptions } from "@/lib/repo/master";
+import { searchBlockOptions } from "@/lib/repo/blocks";
+import { autoMaterializedCategories } from "@/lib/repo/pricing";
+import { ExpenditureForm } from "./ExpenditureForm";
+import { ExpenditureEditor } from "./ExpenditureEditor";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getLocale } from "@/lib/i18n-server";
 import { getDict } from "@/lib/i18n";
@@ -26,8 +38,19 @@ const STATUSES = [
 /**
  * Pengeluaran (biaya).
  *
- * Pencatatan biaya manual DIHAPUS — sesuai model refleksi (docs/11 §4): biaya
- * mengalir dari aktivitas yang disetujui (volume × tarif), bukan input manual.
+ * Dua jalur biaya, dan pembedaannya penting:
+ *
+ *   1. OTOMATIS — aktivitas lapangan yang disetujui memateralisasi biayanya
+ *      sendiri (volume × tarif) di dalam app.decide_record(), migrasi 0044.
+ *      Baris itu bertanda source_table/source_record_id.
+ *   2. MANUAL (AI-52, §13 aturan 5) — biaya yang TIDAK punya aktivitas di
+ *      belakangnya: overhead dan upah harian. Itu yang diinput form di bawah.
+ *
+ * Form manualnya sengaja tidak dibatasi per kategori: LABOR lahir otomatis dari
+ * penyiangan & pruning TAPI upah harian (LABOR-DAY, tanpa driver) memang harus
+ * dicatat tangan. Memblokir kategorinya akan mematikan kebutuhan yang membuat
+ * form ini ada. Penjaganya peringatan berbasis data (autoMaterializedCategories),
+ * bukan larangan.
  * Halaman ini menampilkan transaksi biaya tercatat + biaya per blok. Pendapatan
  * ada di menu terpisah (Revenue).
  */
@@ -54,10 +77,54 @@ export default async function PengeluaranPage({
   ]);
 
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
+  // Opsi form dimuat hanya bila pengguna memang boleh menulis DAN entitas sudah
+  // dipilih — di mode "semua entitas" createExpenditureAction menolak, jadi
+  // merender formnya cuma menjanjikan yang pasti gagal.
+  const formReady = canWrite && Boolean(ctx.companyId);
+  const [categories, units, blockOpts, costCenters, periods, suppliers, autoKategori] = formReady
+    ? await Promise.all([
+        listCategoryOptions(ctx),
+        listOptions(ctx, "unit_of_measure"),
+        searchBlockOptions(ctx),
+        listCostCenterOptions(ctx),
+        listFiscalPeriodOptions(ctx),
+        listSupplierOptions(ctx),
+        autoMaterializedCategories(ctx),
+      ])
+    : [[], [], [], [], [], [], []];
 
   return (
     <div>
       <PageHeader title={t("nav.expenditure")} subtitle={t("sub.expenditure")} />
+
+      {/* AI-52: form manual KHUSUS overhead & upah (§13 aturan 5). */}
+      {formReady && (
+        <div className="mb-5 space-y-3">
+          {autoKategori.length > 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900">
+              <strong>Jangan catat manual di sini</strong> untuk kategori yang biayanya sudah lahir
+              sendiri dari aktivitas yang disetujui — mencatat ulang akan menggandakan realisasi
+              anggaran:{" "}
+              {autoKategori.map((k, i) => (
+                <span key={k.name}>
+                  {i > 0 && ", "}
+                  <span className="font-medium">{k.name}</span>
+                  {k.adaJalurManual && <span className="text-amber-700"> (kecuali upah harian)</span>}
+                </span>
+              ))}
+              . Form ini untuk biaya yang TIDAK punya aktivitas di belakangnya: overhead dan upah.
+            </div>
+          )}
+          <ExpenditureForm
+            categories={categories}
+            units={units}
+            blocks={blockOpts}
+            costCenters={costCenters}
+            periods={periods}
+            suppliers={suppliers}
+          />
+        </div>
+      )}
 
       {/* KPI dari data nyata. Bila belum ada data, tampil em dash — bukan 0. */}
       <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -192,8 +259,24 @@ export default async function PengeluaranPage({
                         )}
                       </td>
                       <td data-action className="px-4 py-2.5 text-right">
+                        {/* Draft & DITOLAK sama-sama bisa diperbaiki lalu diajukan
+                            ulang (AI-11, catatan 6.5): record yang ditolak tidak
+                            boleh jadi jalan buntu. Policy ct_role_split yang
+                            menegakkan batasnya di database. */}
                         {canWrite && (r.approvalStatus === "draft" || r.approvalStatus === "rejected") && (
-                          <SubmitButton id={r.id} />
+                          <div className="flex w-full flex-wrap items-start justify-end gap-x-3 gap-y-2">
+                            {formReady && (
+                              <ExpenditureEditor
+                                id={r.id}
+                                categories={categories}
+                                costCategoryId={r.costCategoryId}
+                                transactionDate={r.transactionDate}
+                                amountIdr={r.amountIdr}
+                                note={r.note}
+                              />
+                            )}
+                            <SubmitButton id={r.id} />
+                          </div>
                         )}
                       </td>
                     </tr>

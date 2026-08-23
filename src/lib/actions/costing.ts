@@ -11,6 +11,7 @@ import {
   decideExpenditure,
   decideRecord,
   submitExpenditure,
+  updateExpenditure,
 } from "@/lib/repo/costing";
 import { createBlock } from "@/lib/repo/blocks";
 
@@ -84,6 +85,17 @@ const expenditureSchema = z
     path: ["blockId"],
   });
 
+/**
+ * Catat pengeluaran manual.
+ *
+ * Formnya (ExpenditureForm.tsx) tidak terpasang di UI sejak model refleksi, TAPI
+ * action ini sengaja dipertahankan: AI-52 akan memakainya kembali untuk overhead
+ * & upah, dan ia satu-satunya pemanggil putEvidence() di repo ini.
+ *
+ * Aman meski bisa dipanggil POST langsung: requireRole menolak viewer, mode
+ * "semua entitas" ditolak, bukti pembelian wajib, dan hasilnya hanya draft --
+ * tidak ada nilai yang masuk laporan sebelum melewati approval.
+ */
 export async function createExpenditureAction(
   _prev: ActionState,
   formData: FormData,
@@ -162,6 +174,64 @@ export async function createExpenditureAction(
 
 const idOnly = z.string().uuid("ID tidak valid");
 
+const updateExpSchema = z.object({
+  id: idOnly,
+  costCategoryId: z.string().uuid("Kategori biaya wajib dipilih"),
+  transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Tanggal wajib diisi"),
+  amountIdr: money.refine((v) => v > 0, "Total biaya harus lebih dari 0"),
+  quantity: z.union([money, z.literal("")]).optional(),
+  unitPriceIdr: z.union([money, z.literal("")]).optional(),
+  note: z.string().trim().max(1000).optional(),
+});
+
+/**
+ * Perbaiki pengeluaran draft/ditolak (AI-11, catatan 6.5).
+ *
+ * Record yang ditolak sebelumnya jadi jalan buntu: alasannya terbaca, tapi tidak
+ * ada cara memperbaikinya. Batas siapa-boleh-apa ditegakkan policy ct_role_split
+ * di database; di sini hanya requireRole + pesan yang bisa dibaca manusia.
+ */
+export async function updateExpenditureAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  try {
+    const ctx = await requireRole("creator", "approver", "super_admin");
+    if (!ctx.companyId) {
+      return { ok: false, message: 'Pilih satu entitas dulu di kanan atas — perubahan tidak bisa dilakukan pada mode "semua entitas".' };
+    }
+    const parsed = updateExpSchema.safeParse({
+      id: formData.get("id"),
+      costCategoryId: formData.get("costCategoryId"),
+      transactionDate: formData.get("transactionDate"),
+      amountIdr: formData.get("amountIdr"),
+      quantity: formData.get("quantity") || "",
+      unitPriceIdr: formData.get("unitPriceIdr") || "",
+      note: formData.get("note") ?? "",
+    });
+    if (!parsed.success) {
+      return { ok: false, message: "Periksa isian yang ditandai.", fieldErrors: fieldErrors(parsed.error) };
+    }
+    const d = parsed.data;
+    const n = await updateExpenditure(ctx, d.id, {
+      costCategoryId: d.costCategoryId,
+      transactionDate: d.transactionDate,
+      amountIdr: d.amountIdr,
+      quantity: typeof d.quantity === "number" ? d.quantity : null,
+      unitPriceIdr: typeof d.unitPriceIdr === "number" ? d.unitPriceIdr : null,
+      note: d.note || null,
+    });
+    if (n === 0) {
+      return { ok: false, message: "Tidak bisa diubah — hanya record milik Anda yang masih draft atau ditolak yang boleh diperbaiki." };
+    }
+    revalidatePath("/costing/pengeluaran");
+    return { ok: true, message: "Perubahan disimpan sebagai draft. Ajukan lagi agar masuk approval." };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+/** Ajukan pengeluaran ke approval. TERPAKAI: SubmitButton.tsx di layar Pengeluaran. */
 export async function submitExpenditureAction(
   _prev: ActionState,
   formData: FormData,
@@ -196,6 +266,32 @@ const decisionSchema = z
     path: ["reason"],
   });
 
+/**
+ * moduleKey (nilai app.v_pending_approvals.module_key — sama dengan daftar CASE
+ * di app.decide_record(), migrasi 0034) -> path halaman modul asalnya.
+ *
+ * Kuncinya TUNGGAL ('harvest_record'). Ini BERBEDA dari MODULE_PATH di
+ * actions/operational.ts yang ber-kunci JAMAK nama tabel ('harvest_records'),
+ * dan keduanya TIDAK boleh dipakai bergantian: kunci yang tidak cocok membuat
+ * revalidatePath() menerima undefined lalu melempar TypeError SESUDAH keputusan
+ * ter-commit di database -- approver melihat "gagal" untuk keputusan yang
+ * sebenarnya berhasil, lalu menekan Setujui lagi dan mendapat "statusnya bukan
+ * menunggu approval". Itu gejala BUG-01/TIKET-03 yang sudah pernah ditutup.
+ */
+const DECIDE_PATH: Record<string, string> = {
+  cost_transaction: "/costing/pengeluaran",
+  fertilizer_application: "/operasional/pemupukan",
+  land_preparation: "/operasional/persiapan-lahan",
+  land_suitability_assessment: "/operasional/kesesuaian-lahan",
+  pruning_record: "/operasional/pruning",
+  nursery_inspection: "/nursery",
+  dbh_measurement: "/keberlanjutan/karbon",
+  survey_submission: "/survei",
+  weeding_record: "/aktivitas/weeding",
+  spraying_record: "/aktivitas/spraying",
+  harvest_record: "/aktivitas/panen",
+};
+
 export async function decideExpenditureAction(
   _prev: ActionState,
   formData: FormData,
@@ -225,6 +321,12 @@ export async function decideExpenditureAction(
     revalidatePath("/laporan/keuangan");
     revalidatePath("/laporan/operasional");
     revalidatePath("/dashboard");
+    // Halaman modul asal -- tanpa ini status di modulnya sendiri masih tampil
+    // lama (setujui Panen, buka /aktivitas/panen: masih "Diajukan"). Defensif:
+    // modul baru di decide_record() tidak boleh menggagalkan keputusan yang
+    // sudah tersimpan hanya karena petanya belum diperbarui.
+    const modulePath = DECIDE_PATH[parsed.data.moduleKey];
+    if (modulePath) revalidatePath(modulePath);
 
     return {
       ok: true,
