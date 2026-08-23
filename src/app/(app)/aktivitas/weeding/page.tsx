@@ -43,7 +43,7 @@ export default async function Page() {
               { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
               { kind: "text", name: "weededOn", label: "Tanggal", type: "date", required: true },
               { kind: "select", name: "method", label: "Metode", options: METHODS, required: true },
-              { kind: "text", name: "areaHa", label: "Luas (ha)", type: "number", step: "0.01", min: "0" },
+              { kind: "text", name: "areaHa", label: "Luas (ha)", type: "number", step: "0.01", min: "0.01", required: true },
               { kind: "text", name: "laborCount", label: "Jumlah tenaga", type: "number", min: "0" },
               { kind: "textarea", name: "note", label: "Catatan (opsional)" },
             ]}

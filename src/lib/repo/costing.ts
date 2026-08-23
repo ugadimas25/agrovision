@@ -260,7 +260,8 @@ export type BlockCostRow = {
   blockCode: string;
   areaHa: number | null;
   transactionCount: number;
-  totalCostIdr: number;
+  /** null bila belum ada transaksi disetujui. JANGAN diganti 0 (migrasi 0039). */
+  totalCostIdr: number | null;
   /** null bila luas belum ada. JANGAN diganti 0 -- itu angka fabrikasi. */
   costPerHaIdr: number | null;
 };
@@ -271,13 +272,15 @@ export async function blockCostSummary(
 ): Promise<BlockCostRow[]> {
   const rows = await rlsQuery<{
     block_id: string; block_code: string; area_ha: string | null;
-    transaction_count: string; total_cost_idr: string; cost_per_ha_idr: string | null;
+    transaction_count: string; total_cost_idr: string | null; cost_per_ha_idr: string | null;
   }>(
     ctx,
     `SELECT block_id, block_code, area_ha, transaction_count, total_cost_idr, cost_per_ha_idr
        FROM app.v_block_cost_summary
       WHERE transaction_count > 0
-      ORDER BY total_cost_idr DESC
+      -- NULLS LAST wajib: pada DESC, Postgres menaruh NULL di ATAS, jadi blok
+      -- "belum ada biaya" akan memimpin daftar "biaya tertinggi".
+      ORDER BY total_cost_idr DESC NULLS LAST
       LIMIT $1`,
     [opts.limit ?? 50],
   );
@@ -286,7 +289,8 @@ export async function blockCostSummary(
     blockCode: r.block_code,
     areaHa: r.area_ha === null ? null : Number(r.area_ha),
     transactionCount: Number(r.transaction_count),
-    totalCostIdr: Number(r.total_cost_idr),
+    // null = belum ada transaksi disetujui. JANGAN `Number(null)` -> 0.
+    totalCostIdr: r.total_cost_idr === null ? null : Number(r.total_cost_idr),
     costPerHaIdr: r.cost_per_ha_idr === null ? null : Number(r.cost_per_ha_idr),
   }));
 }
@@ -297,7 +301,8 @@ export type BudgetVsActualRow = {
   costCategoryName: string;
   scopeType: string;
   budgetIdr: number;
-  actualIdr: number;
+  /** null = belum ada realisasi. Bukan 0 — lihat migrasi 0039. */
+  actualIdr: number | null;
   remainingIdr: number;
   utilisationPct: number | null;
   isOverBudget: boolean;
@@ -306,7 +311,7 @@ export type BudgetVsActualRow = {
 export async function budgetVsActual(ctx: RlsContext): Promise<BudgetVsActualRow[]> {
   const rows = await rlsQuery<{
     budget_id: string; period_name: string; cost_category_name: string; scope_type: string;
-    budget_idr: string; actual_idr: string; remaining_idr: string;
+    budget_idr: string; actual_idr: string | null; remaining_idr: string;
     utilisation_pct: string | null; is_over_budget: boolean;
   }>(
     ctx,
@@ -321,7 +326,7 @@ export async function budgetVsActual(ctx: RlsContext): Promise<BudgetVsActualRow
     costCategoryName: r.cost_category_name,
     scopeType: r.scope_type,
     budgetIdr: Number(r.budget_idr),
-    actualIdr: Number(r.actual_idr),
+    actualIdr: r.actual_idr === null ? null : Number(r.actual_idr),
     remainingIdr: Number(r.remaining_idr),
     utilisationPct: r.utilisation_pct === null ? null : Number(r.utilisation_pct),
     isOverBudget: r.is_over_budget,
@@ -611,6 +616,13 @@ export type PendingItem = {
   eventDate: string | null;
   actorName: string | null;
   approvalStatus: string;
+  /**
+   * Kode enum yang sengaja TIDAK dirangkai ke `detail` oleh view (migrasi 0040):
+   * labelnya dipasang di lapisan tampilan lewat src/lib/labels.ts. null untuk
+   * modul yang tidak punya.
+   */
+  cropCode: string | null;
+  methodCode: string | null;
   /** Nilai tiap parameter record (untuk detail saat baris diklik). */
   params: Record<string, string | number | null>;
   /** Bukti tertaut (baru ada untuk modul Pengeluaran) -- null bila tak ada/modul lain. */
@@ -631,7 +643,8 @@ export async function listAllPending(
     );
     const rows = await client.query(
       `SELECT module_key, module_label, record_id, block_code, detail, amount_idr,
-              event_date, actor_name, approval_status, params, evidence_id
+              event_date, actor_name, approval_status, params,
+              evidence_id, crop_code, method_code
          FROM app.v_pending_approvals
         ORDER BY module_label, event_date NULLS LAST, record_id
         LIMIT $1 OFFSET $2`,
@@ -645,11 +658,11 @@ export async function listAllPending(
         blockCode: (r.block_code as string) ?? null,
         detail: (r.detail as string) ?? null,
         amountIdr: r.amount_idr === null ? null : Number(r.amount_idr),
-        eventDate: r.event_date
-          ? new Date(r.event_date as string).toISOString().slice(0, 10)
-          : null,
+        eventDate: (r.event_date as string) ?? null,
         actorName: (r.actor_name as string) ?? null,
         approvalStatus: String(r.approval_status),
+        cropCode: (r.crop_code as string) ?? null,
+        methodCode: (r.method_code as string) ?? null,
         params: (r.params as Record<string, string | number | null>) ?? {},
         evidenceId: (r.evidence_id as string) ?? null,
       })),

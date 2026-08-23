@@ -34,7 +34,7 @@ export default async function Page() {
             fields={[
               { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
               { kind: "text", name: "prunedOn", label: "Tanggal", type: "date", required: true },
-              { kind: "text", name: "treeCount", label: "Jumlah pohon", type: "number", min: "0" },
+              { kind: "text", name: "treeCount", label: "Jumlah pohon", type: "number", min: "1", required: true },
               { kind: "textarea", name: "note", label: "Catatan (opsional)" },
             ]}
           />
