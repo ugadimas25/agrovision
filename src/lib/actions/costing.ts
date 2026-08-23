@@ -479,6 +479,27 @@ export async function createFiscalPeriodAction(
   }
 }
 
+/**
+ * AI-05 · lingkup anggaran dan pengenalnya adalah SATU PASANGAN (catatan 6.7).
+ *
+ * Dua arah, dan arah kedua yang sebelumnya hilang:
+ *
+ *   1. Lingkup menuntut pengenalnya — estate wajib punya estate, blok wajib
+ *      punya blok. Ini sudah ada sejak awal.
+ *   2. Lingkup MELARANG pengenal yang bukan miliknya. Sebelum ini tidak
+ *      diperiksa, dan `createBudget()` diam-diam mem-NULL-kan pengenal yang
+ *      tidak cocok supaya CHECK `budgets_scope_coherent` tidak menolak. Jadi
+ *      pengguna bisa memilih "Seluruh entitas" + Estate Sungai Danau, menekan
+ *      simpan, dan mendapat pesan "Anggaran tersimpan" — untuk anggaran
+ *      SE-ENTITAS. Pilihan estate-nya hilang tanpa satu kata pun.
+ *
+ * Pada layar anggaran, selisih itu bukan kosmetik: anggaran se-entitas dan
+ * anggaran per-estate dibandingkan dengan realisasi yang berbeda, jadi yang
+ * hilang bukan sebuah field tapi arti angkanya.
+ *
+ * Ditulis sebagai satu superRefine, bukan empat .refine berantai, supaya
+ * SELURUH ketidakcocokan dilaporkan sekaligus — bukan satu per submit.
+ */
 const budgetSchema = z
   .object({
     fiscalPeriodId: z.string().uuid("Periode wajib dipilih"),
@@ -489,11 +510,26 @@ const budgetSchema = z
     amountIdr: money.refine((v) => v > 0, "Nilai anggaran harus lebih dari 0"),
     note: z.string().trim().max(500).optional(),
   })
-  .refine((d) => d.scopeType !== "estate" || Boolean(d.estateId), {
-    message: "Lingkup estate wajib memilih estate", path: ["estateId"],
-  })
-  .refine((d) => d.scopeType !== "block" || Boolean(d.blockId), {
-    message: "Lingkup blok wajib memilih blok", path: ["blockId"],
+  .superRefine((d, ctx) => {
+    const adaEstate = Boolean(d.estateId);
+    const adaBlok = Boolean(d.blockId);
+    const wajib = (path: "estateId" | "blockId", message: string) =>
+      ctx.addIssue({ code: "custom", path: [path], message });
+
+    if (d.scopeType === "company") {
+      // Blok TIDAK boleh dipakai sebagai "estate induknya": CHECK
+      // budgets_scope_coherent menuntut keduanya NULL untuk lingkup company.
+      if (adaEstate) wajib("estateId", "Lingkup seluruh entitas tidak memakai estate — kosongkan, atau pilih lingkup Per estate");
+      if (adaBlok) wajib("blockId", "Lingkup seluruh entitas tidak memakai blok — kosongkan, atau pilih lingkup Per blok");
+    } else if (d.scopeType === "estate") {
+      if (!adaEstate) wajib("estateId", "Lingkup estate wajib memilih estate");
+      if (adaBlok) wajib("blockId", "Lingkup estate tidak memakai blok — kosongkan, atau pilih lingkup Per blok");
+    } else {
+      if (!adaBlok) wajib("blockId", "Lingkup blok wajib memilih blok");
+      // Blok sudah menentukan estate-nya lewat FK; mengisi keduanya membuat dua
+      // sumber kebenaran yang bisa saling bertentangan.
+      if (adaEstate) wajib("estateId", "Lingkup blok tidak memakai estate — estate sudah ditentukan oleh bloknya");
+    }
   });
 
 export async function createBudgetAction(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState, useSyncExternalStore } from "react";
 import { Loader2, Plus, CircleAlert, CircleCheck, ChevronDown } from "lucide-react";
 import {
   createBudgetAction,
@@ -101,6 +101,63 @@ export function PeriodForm({
   );
 }
 
+type Scope = "company" | "estate" | "block";
+
+const SCOPE_OPTIONS: { value: Scope; label: string }[] = [
+  { value: "company", label: "Seluruh entitas" },
+  { value: "estate", label: "Per estate" },
+  { value: "block", label: "Per blok" },
+];
+
+/**
+ * Deteksi hidrasi lewat useSyncExternalStore, BUKAN useEffect(setState).
+ *
+ * Yang dibutuhkan adalah satu nilai yang `false` pada render server dan `true`
+ * di klien — itu persis kontrak getServerSnapshot vs getSnapshot. Versi
+ * useEffect(() => setDinamis(true)) melakukan hal yang sama tapi lewat render
+ * kedua, dan react-hooks memang melarangnya (cascading render).
+ *
+ * Store-nya tidak pernah berubah, jadi `subscribe` mengembalikan unsubscribe
+ * kosong; keduanya di tingkat modul supaya identitasnya stabil antar render.
+ */
+const langganan = () => () => {};
+const diKlien = () => true;
+const diServer = () => false;
+
+const SCOPE_HINT: Record<Scope, string> = {
+  company: "Anggaran se-entitas. Estate dan blok tidak dipakai — realisasinya menjumlahkan seluruh entitas.",
+  estate: "Anggaran satu estate. Blok tidak dipakai; realisasinya hanya blok milik estate itu.",
+  block: "Anggaran satu blok. Estate tidak dipakai — estate sudah ditentukan oleh bloknya.",
+};
+
+/**
+ * AI-05 · form anggaran dinamis per lingkup (catatan 6.7).
+ *
+ * Dua aturan yang menentukan bentuk komponen ini:
+ *
+ * 1. WAJIB tetap bisa disubmit tanpa JavaScript. Karena itu SELURUH field
+ *    dirender di HTML server, dan penyembunyian baru berlaku SESUDAH hidrasi
+ *    (`dinamis`). Kalau show/hide dihitung dari state awal, HTML servernya
+ *    lahir sudah tanpa field estate/blok dan lingkup estate/blok menjadi
+ *    mustahil diisi begitu JS gagal dimuat — persis kelas cacat yang sudah
+ *    tercatat untuk PriceRateEditor dan OrganicTracker.
+ *
+ * 2. Field yang disembunyikan juga di-`disabled`, bukan hanya di-`hidden`.
+ *    Select yang tersembunyi TETAP ikut terkirim; tanpa `disabled`, pengguna
+ *    yang memilih estate lalu berpindah ke lingkup blok akan mengirim estateId
+ *    yang sudah tidak relevan — dan sejak AI-05 server MENOLAKnya (dulu
+ *    dibuang diam-diam). Field `disabled` tidak masuk FormData sama sekali.
+ *
+ * Penegakan sebenarnya tetap di server: `budgetSchema` (superRefine dua arah)
+ * dan CHECK `budgets_scope_coherent`. Yang di sini hanya mengurangi kesempatan
+ * salah, bukan gerbangnya.
+ *
+ * Catatan penyimpangan dari catatan 6.7: catatan itu menulis "Scope Semua →
+ * tampilkan Estate dan Blok". Itu tidak bisa dijalankan — CHECK
+ * budgets_scope_coherent menuntut estate_id DAN block_id NULL untuk lingkup
+ * company, jadi field yang ditampilkan itu pasti ditolak begitu diisi.
+ * Lingkup "Seluruh entitas" karena itu menyembunyikan keduanya.
+ */
 export function BudgetForm({
   periods,
   categories,
@@ -113,6 +170,11 @@ export function BudgetForm({
   blocks: Opt[];
 }) {
   const [state, formAction, pending] = useActionState(createBudgetAction, initial);
+  const [scope, setScope] = useState<Scope>("company");
+  // false pada render server & sebelum hidrasi -> semua field tampil & aktif.
+  const dinamis = useSyncExternalStore(langganan, diKlien, diServer);
+
+  const relevan = (s: Scope) => !dinamis || scope === s;
 
   return (
     <details className="group rounded-xl border border-slate-200 bg-white" open={state.message !== ""}>
@@ -126,7 +188,7 @@ export function BudgetForm({
 
       <Notice state={state} />
 
-      <form action={formAction} className="border-t border-slate-100 p-4" key={state.ok ? "reset" : "form"}>
+      <form action={formAction} data-testid="susun-anggaran" className="border-t border-slate-100 p-4" key={state.ok ? "reset" : "form"}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Select label="Fase proyek" name="fiscalPeriodId" required options={periods} error={state.fieldErrors?.fiscalPeriodId} />
           <Select label="Kategori biaya" name="costCategoryId" required options={categories} error={state.fieldErrors?.costCategoryId} />
@@ -135,31 +197,34 @@ export function BudgetForm({
             name="scopeType"
             required
             defaultValue="company"
-            options={[
-              { value: "company", label: "Seluruh entitas" },
-              { value: "estate", label: "Per estate" },
-              { value: "block", label: "Per blok" },
-            ]}
+            options={SCOPE_OPTIONS}
             error={state.fieldErrors?.scopeType}
+            onChange={(v) => setScope(v as Scope)}
           />
         </div>
 
-        {/* Kedua select selalu ada di HTML: tanpa JS pengguna tetap bisa memilih,
-            dan kombinasi yang tidak konsisten ditolak server + CHECK constraint. */}
+        {dinamis && (
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">{SCOPE_HINT[scope]}</p>
+        )}
+
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Select
-            label="Estate (bila lingkup estate)"
+            label="Estate"
             name="estateId"
             options={estates}
             allowEmpty
             error={state.fieldErrors?.estateId}
+            hint={dinamis ? undefined : "hanya bila lingkup Per estate"}
+            hidden={!relevan("estate")}
           />
           <Select
-            label="Blok (bila lingkup blok)"
+            label="Blok"
             name="blockId"
             options={blocks}
             allowEmpty
             error={state.fieldErrors?.blockId}
+            hint={dinamis ? undefined : "hanya bila lingkup Per blok"}
+            hidden={!relevan("block")}
           />
           <Field
             label="Nilai anggaran"
@@ -232,6 +297,9 @@ function Select({
   required,
   allowEmpty,
   defaultValue,
+  hint,
+  hidden,
+  onChange,
 }: {
   label: string;
   name: string;
@@ -240,18 +308,25 @@ function Select({
   required?: boolean;
   allowEmpty?: boolean;
   defaultValue?: string;
+  hint?: string;
+  /** Disembunyikan DAN dinonaktifkan: select tersembunyi tetap ikut terkirim. */
+  hidden?: boolean;
+  onChange?: (value: string) => void;
 }) {
   return (
-    <div>
+    <div className={hidden ? "hidden" : undefined}>
       <label htmlFor={name} className="mb-1.5 block text-xs font-medium text-slate-500">
         {label}
+        {hint && <span className="font-normal text-slate-400"> — {hint}</span>}
       </label>
       <select
         id={name}
         name={name}
         required={required}
+        disabled={hidden}
         defaultValue={defaultValue ?? ""}
         aria-invalid={error ? true : undefined}
+        onChange={onChange ? (e) => onChange(e.target.value) : undefined}
         className={cn(
           "w-full rounded-md border bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/30",
           error ? "border-red-300" : "border-slate-200",

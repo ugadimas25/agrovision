@@ -396,7 +396,7 @@ async function main() {
     await admin2.submit("/costing/anggaran",
       { fiscalPeriodId: perId, costCategoryId: catId2, scopeType: "block",
         blockId: blkId2, estateId: "", amountIdr: "6000000" },
-      { formMarker: 'name="scopeType"' });
+      { formMarker: 'data-testid="susun-anggaran"' });
 
     // Anggaran 6jt vs realisasi 7jt -> harus terlampaui.
     const row = await psql(`SELECT budget_idr||'|'||actual_idr||'|'||is_over_budget
@@ -418,6 +418,73 @@ async function main() {
       rpt.html.includes("7.000.000") && rpt.html.includes("70.250"));
     ok("pendapatan & break-even tetap kosong jujur (belum ada panen)",
       /sengaja kosong/.test(rpt.html));
+  }
+
+  console.log("\n=== AI-05: form anggaran dinamis + pasangan lingkup↔pengenal ===");
+  {
+    const MARK = 'data-testid="susun-anggaran"';
+    const page = await admin.get("/costing/anggaran");
+    const form = pickForm(page.html, MARK);
+    ok("form anggaran ada di HTML server", Boolean(form));
+
+    // Inti syarat AI-05: SELURUH field harus ada di HTML server, dan tidak ada
+    // yang sudah disabled/hidden sejak render pertama. Kalau show/hide dihitung
+    // dari state awal, lingkup estate/blok jadi mustahil diisi tanpa JavaScript.
+    const html = /<form[^>]*data-testid="susun-anggaran"[^>]*>[\s\S]*?<\/form>/.exec(page.html)?.[0] ?? "";
+    const semuaField = ["fiscalPeriodId", "costCategoryId", "scopeType", "estateId", "blockId", "amountIdr"]
+      .filter((n) => !html.includes(`name="${n}"`));
+    ok("keenam field anggaran ada di HTML server (jalan tanpa JavaScript)",
+      semuaField.length === 0, semuaField.join(", ") || "lengkap");
+    ok("tidak ada field yang sudah disembunyikan di HTML server",
+      !/<select[^>]*disabled/.test(html) && !/class="hidden"/.test(html));
+
+    const perId = optionId(page.html, "fiscalPeriodId", `Fase Uji ${stamp}`);
+    const catId3 = optionId(page.html, "costCategoryId", `Kategori Uji ${stamp}`);
+    const estId3 = optionId(page.html, "estateId", "Estate");
+    const blkId3 = optionId(page.html, "blockId", blkCode);
+    ok("dropdown lingkup terisi dari database", Boolean(perId && catId3 && estId3 && blkId3));
+
+    const jumlah = async () =>
+      Number(await psql(`SELECT count(*) FROM app.budgets
+                          WHERE company_id='${DEV_COMPANY}' AND fiscal_period_id='${perId}'`));
+    const kirim = (extra) => admin.submit("/costing/anggaran",
+      { fiscalPeriodId: perId, costCategoryId: catId3, amountIdr: "1500000", note: "", ...extra },
+      { formMarker: MARK });
+
+    // Enam pasangan yang HARUS ditolak. Sebelum AI-05 tiga di antaranya
+    // "berhasil": createBudget() mem-NULL-kan pengenal yang tidak cocok, jadi
+    // pengguna mendapat "Anggaran tersimpan" untuk lingkup yang BUKAN pilihannya.
+    const tolak = [
+      ["lingkup entitas + estate terisi", { scopeType: "company", estateId: estId3, blockId: "" }, /tidak memakai estate/],
+      ["lingkup entitas + blok terisi", { scopeType: "company", estateId: "", blockId: blkId3 }, /tidak memakai blok/],
+      ["lingkup estate tanpa estate", { scopeType: "estate", estateId: "", blockId: "" }, /wajib memilih estate/],
+      ["lingkup estate + blok terisi", { scopeType: "estate", estateId: estId3, blockId: blkId3 }, /tidak memakai blok/],
+      ["lingkup blok tanpa blok", { scopeType: "block", estateId: "", blockId: "" }, /wajib memilih blok/],
+      ["lingkup blok + estate terisi", { scopeType: "block", estateId: estId3, blockId: blkId3 }, /tidak memakai estate/],
+    ];
+    for (const [nama, extra, pesan] of tolak) {
+      const sebelum = await jumlah();
+      const r = await kirim(extra);
+      const sesudah = await jumlah();
+      ok(`${nama} DITOLAK dan menyebut sebabnya`,
+        sesudah === sebelum && pesan.test(r.html),
+        sesudah === sebelum ? "" : "anggaran TERBUAT padahal seharusnya ditolak");
+    }
+
+    // Dua pasangan yang sah. Lingkup blok sudah dipakai AT3 di atas dengan grain
+    // yang sama, jadi di sini dipakai company & estate supaya tidak menabrak
+    // budgets_grain_uniq -- kegagalan itu akan terbaca seperti AI-05 gagal.
+    for (const [nama, extra, kolom] of [
+      ["lingkup seluruh entitas", { scopeType: "company", estateId: "", blockId: "" }, "estate_id IS NULL AND block_id IS NULL"],
+      ["lingkup estate", { scopeType: "estate", estateId: estId3, blockId: "" }, `estate_id='${estId3}' AND block_id IS NULL`],
+    ]) {
+      const r = await kirim(extra);
+      const n = Number(await psql(`SELECT count(*) FROM app.budgets
+                                    WHERE company_id='${DEV_COMPANY}' AND fiscal_period_id='${perId}'
+                                      AND scope_type='${extra.scopeType}' AND ${kolom}`));
+      ok(`${nama} tersimpan dengan pengenal yang benar`, n === 1 && /Anggaran tersimpan/.test(r.html),
+        `${n} baris`);
+    }
   }
 
   console.log("\n=== AT2 lengkap: peta merender polygon dari database ===");

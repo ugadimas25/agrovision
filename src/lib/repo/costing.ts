@@ -585,6 +585,10 @@ export async function createBudget(
       input.fiscalPeriodId,
       input.costCategoryId,
       input.scopeType,
+      // Defense-in-depth, BUKAN gerbangnya. Sejak AI-05 `budgetSchema`
+      // menolak pasangan yang tidak cocok, jadi baris ini tidak lagi
+      // membuang pilihan pengguna tanpa memberitahu — ia hanya menjaga
+      // pemanggil lain agar tidak menabrak CHECK budgets_scope_coherent.
       input.scopeType === "estate" ? input.estateId : null,
       input.scopeType === "block" ? input.blockId : null,
       input.amountIdr,

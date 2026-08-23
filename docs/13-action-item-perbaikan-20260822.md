@@ -293,7 +293,7 @@ dibaca dari isi halaman (`data-testid="akses-ditolak"`).
 | `npm run db:test:adversarial` | 36 PASS · 0 FAIL |
 | `npm run at:verify` | 18 PASS · 11 FAIL — kesebelasnya known-fail, lihat dokumen 14 §E |
 | `npm run db:check` | 4 penghalang (stub login + 3 tenant demo), 4 catatan non-blocking — semuanya memang diketahui |
-| `app.check_rls_coverage()` | 0 baris (diperiksa di dalam migrasi 0038, migrasi gagal bila bocor) |
+| `app.check_rls_coverage()` | 0 baris (diperiksa di dalam migrasi 0039, migrasi gagal bila bocor) |
 
 ### Dua temuan tambahan yang ikut diperbaiki
 
@@ -403,24 +403,24 @@ dibaca dari isi halaman (`data-testid="akses-ditolak"`).
 
 ## 10c. Status pelaksanaan Sprint 2 — diperbarui 23 Agustus 2026
 
-Rantai migrasi **0040–0044** terpasang. Verifikasi akhir: `tsc` 0 error · `lint` 0 error/13 warning ·
+Rantai migrasi **0042–0045** terpasang. Verifikasi akhir: `tsc` 0 error · `lint` 0 error/13 warning ·
 `db:test` **23/0** (naik dari 21, tiga cek baru K-04) · `db:test:adversarial` **37/0** (naik dari 36,
-cek policy 0040) · `at:verify` 18/11 (known-fail tak berubah) · `check_rls_coverage()` dan
+cek policy 0042) · `at:verify` 18/11 (known-fail tak berubah) · `check_rls_coverage()` dan
 `check_privilege_revocations()` **nol baris** · tanpa drift checksum.
 
 | Item | Status | Bukti terukur |
 |---|---|---|
 | AI-02 driver refleksi lengkap | **selesai** | 0041: `weeding_area_ha`, `spraying_volume`, `pruning_tree_count` terisi — akar B-05/B-07 |
 | AI-04 penguncian tarif per periode | **selesai** | 0041 + TS. Terbit 750rb→825rb: versi 1 ditutup, `price_at('WEED-HA','2026-08-01')` **tetap 750rb** |
-| AI-45 buku besar stok | **selesai** | 0042: saldo awal 5 item/2.500 unit pindah ke ledger, `stock_qty` dihapus, alert reorder hidup (QA D-01 akhirnya bisa diuji) |
-| AI-01 materialisasi biaya | **selesai** | 0043 + backfill 0044 (20 baris, Rp 1,397 M). Approve penyiangan 4 ha → `4.000 × 750.000 = 3.000.000`, kategori LABOR, periode dari **tanggal kejadian** |
+| AI-45 buku besar stok | **selesai** | 0043: saldo awal 5 item/2.500 unit pindah ke ledger, `stock_qty` dihapus, alert reorder hidup (QA D-01 akhirnya bisa diuji) |
+| AI-01 materialisasi biaya | **selesai** | 0044 + backfill 0045 (20 baris, Rp 1,397 M). Approve penyiangan 4 ha → `4.000 × 750.000 = 3.000.000`, kategori LABOR, periode dari **tanggal kejadian** |
 | AI-17 larangan self-approval | **selesai** | `ERROR: creator tidak boleh memutuskan record buatannya sendiri (AI-17)` |
-| AI-18 supersede kesesuaian | **selesai** | 0043: indeks aktif per `(block_id, crop_id)`; blok boleh dinilai durian **dan** kelapa |
-| AI-19 / AI-20 / AI-50 jalur input | **selesai** | AI-19 teruji end-to-end sampai Disetujui; 0040 untuk AI-50 |
+| AI-18 supersede kesesuaian | **selesai** | 0044: indeks aktif per `(block_id, crop_id)`; blok boleh dinilai durian **dan** kelapa |
+| AI-19 / AI-20 / AI-50 jalur input | **selesai** | AI-19 teruji end-to-end sampai Disetujui; 0042 untuk AI-50 |
 | **AI-52** form overhead & upah | **selesai** | Form dipasang kembali dengan peringatan berbasis data (`autoMaterializedCategories`). Ini yang membuka 11 known-fail: **at:verify 18/11 → 43/0** |
 | **AI-11** edit record ditolak | **selesai** | Editor per baris draft/ditolak; invarian `ct_role_split` menuntut status kembali ke `draft` — diuji 6/6 |
-| AI-05 form anggaran per scope | belum | Forms.tsx sudah punya select scope; kurang tampil/sembunyi + zod pasangan |
-| AI-44a tambah baris tarif | belum | `app.publish_price()` sudah siap; kurang action + form |
+| AI-05 form anggaran per scope | **selesai** | `budgetSchema` superRefine dua arah + `BudgetForm` dinamis pasca-hidrasi. 12 cek `at:verify` baru (6 pasangan ditolak, 2 sah, 4 struktur form) |
+| AI-44a tambah baris tarif | **selesai** | `createPriceRowAction` + `PriceRowForm` (`<details>`, jalan tanpa JS) + kolom driver/satuan/status + migrasi 0046. 11 cek `db:test`, 17 cek adversarial, 10 cek `at:verify` |
 
 ### Catatan §6.7 terjawab: anggaran ↔ realisasi kini ter-link
 
@@ -471,9 +471,112 @@ tarifnya masih satu per aktivitas, sub-kategori tidak akan pernah terisi angka.
   pruning TAPI upah harian (`LABOR-DAY`, tanpa driver) memang harus dicatat tangan; memblokir
   kategorinya akan mematikan kebutuhan yang membuat form ini ada. Penjaganya peringatan berbasis data.
 
+### Sprint 2 selesai — dua item terakhir (23 Agu 2026, malam)
+
+**AI-44a · tambah baris tarif (K-09 §19).** Sebelum ini `INSERT INTO app.price_list`
+hanya ada di `db/seed-demo.mjs`, jadi setiap tarif baru menuntut migrasi — itulah
+yang membuat AI-44a menjadi prasyarat K-03. Sekarang ada `createPriceRowAction` →
+`app.publish_price()` (bukan INSERT langsung: `app_rw` tidak punya privilege itu,
+ledger 0041 §7). Kolom `driver`/`unit`/`is_active` yang menentukan perilaku tapi
+tidak pernah terlihat kini menjadi kolom tabel, dan baris tanpa driver ditandai
+"tarif manual" **di barisnya**, bukan sebagai catatan kaki.
+
+Tiga hal yang muncul saat mengerjakannya:
+
+1. **`PriceRateEditor` dipindah dari `useState` ke `<details>`.** Jebakan yang sudah
+   tercatat, tapi akibatnya lebih besar dari perkiraan: form penerbitan tarif TIDAK
+   ADA di HTML server, jadi tanpa JavaScript tarif tidak bisa diubah sama sekali —
+   pada satu-satunya layar yang mengendalikan seluruh angka keuangan.
+2. **Kode yang sudah ada harus ditolak jalur create.** `app.publish_price()` mengenali
+   "kode sudah ada" dan menempuh cabang **versi baru**. Tanpa pemeriksaan terpisah,
+   menekan "tambah baris" pada kode yang sudah ada akan MENGUBAH tarif berjalan dan
+   pesannya tetap berbunyi sukses.
+3. **`chemical_id` sengaja tidak diekspos.** Tarif per bahan adalah kemampuan nyata
+   (`price_for_driver` memenangkan baris ber-`chemical_id`), tapi "bahan mana yang
+   pantas punya tarif sendiri" adalah keputusan produk yang belum diambil.
+
+**Migrasi 0046 — satu tarif aktif per (entitas, driver, bahan).** `app.price_for_driver()`
+memilih baris dengan `LIMIT 1` dan MENGANDAIKAN hanya ada satu kandidat generik;
+andaian itu tidak pernah ditegakkan. Dua baris aktif ber-driver sama membuat biaya
+yang dimaterialisasi `app.decide_record()` bergantung pada urutan **kode**, bukan pada
+fakta ekonomi — dan membuat `reflectedCosts()` mengalikan volume yang sama dua kali.
+Selama tarif hanya lahir dari seed hal itu tidak pernah terjadi; membuka jalur create
+memaksa andaian itu menjadi invarian database. `NULLS NOT DISTINCT` supaya dua baris
+generik tetap bertabrakan.
+
+**AI-05 · form anggaran dinamis per lingkup (catatan 6.7).** Dua bagian:
+
+- **`budgetSchema` menegakkan pasangan DUA ARAH.** Arah pertama (lingkup menuntut
+  pengenalnya) sudah ada. Arah kedua hilang: `createBudget()` diam-diam mem-NULL-kan
+  pengenal yang tidak cocok supaya CHECK `budgets_scope_coherent` tidak menolak. Jadi
+  memilih "Seluruh entitas" + Estate Sungai Danau lalu menekan simpan memberi pesan
+  "Anggaran tersimpan" — untuk anggaran **se-entitas**. Pilihan estate-nya hilang tanpa
+  satu kata pun, dan pada layar anggaran itu bukan kosmetik: yang hilang bukan sebuah
+  field tapi **arti angkanya**.
+- **Tampil/sembunyi berlaku SESUDAH hidrasi.** Seluruh field tetap ada di HTML server;
+  `useSyncExternalStore` memberi `false` di server dan `true` di klien (bukan
+  `useEffect(setState)` — dilarang `react-hooks`, cascading render). Field yang
+  disembunyikan juga di-**`disabled`**: select tersembunyi TETAP ikut terkirim, dan
+  sejak AI-05 server menolaknya.
+
+**Penyimpangan dari catatan 6.7 yang perlu diketahui pemilik produk:** catatan itu
+menulis "Scope Semua → tampilkan Estate dan Blok". Itu tidak bisa dijalankan — CHECK
+`budgets_scope_coherent` menuntut `estate_id` DAN `block_id` NULL untuk lingkup
+`company`, jadi field yang ditampilkan itu pasti ditolak begitu diisi. Lingkup
+"Seluruh entitas" karena itu menyembunyikan keduanya.
+
+### AI-02 ditandai selesai padahal separuhnya tidak dikerjakan
+
+§10c sebelumnya menandai AI-02 selesai dengan bukti migrasi 0041 saja. §3 (AKAR-2)
+mendefinisikannya sebagai migrasi **dan** `DRIVER_SQL`/`DRIVER_LABEL` di
+`src/lib/repo/pricing.ts`. Bagian TypeScript-nya terlewat, dan `reflectedCosts()`
+punya `if (!sql) continue` — jadi tiga baris tarif yang mendapat driver di 0041
+(WEED-HA, SPRAY-L, PRUNE-TREE) **dilewati tanpa suara**.
+
+Terukur dari halaman terender `/costing/refleksi` (DEMO, `admin@demo.invalid`):
+
+| | Baris biaya | Total |
+|---|---|---|
+| sebelum | 4 | Rp 1.016.009.126 |
+| sesudah | 7 | **Rp 1.053.009.126** |
+
+Selisih Rp 37.000.000 = penyiangan 47 ha × 750rb + penyemprotan 70 liter × 25rb.
+PILOT understate **Rp 414.130.000** (SPRAY-L 15.734,8 liter + PRUNE-TREE 1.384 pohon).
+Angka yang sama sudah benar di `cost_transactions` sejak 0044, jadi layar Refleksi dan
+Dashboard Finansial menyebut angka berbeda untuk hal yang sama — pola yang AI-47 ada
+untuk menghapus.
+
+Ikutan yang ikut diperbaiki: `COALESCE(SUM(...),0)` dibuang dari `DRIVER_SQL`. Baris
+"Pupuk (agri-input) — 0 kg — **Rp 0**" adalah angka fabrikasi (doktrin: `null` = belum
+ada data, dirender em-dash, BUKAN 0). AI-06 membersihkan sisi SQL; sisi TypeScript ini
+terlewat dan **tidak tertangkap AT6** karena angkanya dihitung, bukan literal. Satuan
+tidak dicetak di sebelah em-dash — "— ha" terbaca seperti nol hektar.
+
+Driver yang tak dikenal maupun bentrok tidak lagi hilang diam-diam: `unknownDrivers`
+dan `driverConflicts` dirender sebagai peringatan di layar.
+
+### Verifikasi akhir Sprint 2 (23 Agustus 2026, malam)
+
+| Pemeriksaan | Awal sesi | Sekarang |
+|---|---|---|
+| `npx tsc --noEmit` | 0 error | 0 error |
+| `npm run lint` | 0 error · 13 warning | 0 error · 13 warning |
+| `npm run build` | sukses | sukses |
+| `npm run db:verify` | 44 migrasi, tanpa drift | **45** migrasi, tanpa drift |
+| `npm run db:test` | 23 / 0 | **34 / 0** |
+| `npm run db:test:adversarial` | 37 / 0 | **54 / 0** |
+| `npm run at:verify` | 43 / 0 | **65 / 0** |
+| `app.check_rls_coverage()` | 0 baris | 0 baris |
+| `app.check_privilege_revocations()` | 0 baris | 0 baris |
+| `npm run db:check` | 4 penghalang | 4 penghalang (sama) |
+
+`db:test` dan `at:verify` idempoten: dijalankan dua kali berurutan, angkanya sama.
+`db/verify-dates.mjs` 0 FAIL di kedua zona (WIB 20 PASS, UTC 19 PASS + 1 SKIP — cek
+"pola lama terbukti menggeser" memang hanya bermakna di zona offset positif).
+
 ### Yang harus diketahui sebelum melanjutkan
 
-- **Rantai 0041–0044 diterapkan TANPA telaah adversarial.** Empat dari lima agen workflow mati kena
+- **Rantai 0041–0045 diterapkan TANPA telaah adversarial.** Empat dari lima agen workflow mati kena
   batas kuota bulanan organisasi; hanya arsiteknya selesai. Saya menelaah sendiri (satu lensa) dan
   memverifikasi tiap migrasi terhadap DB nyata sebelum menerapkan — tapi sepanjang sesi ini SETIAP
   ronde telaah adversarial menemukan temuan blocking, jadi ketiadaannya di sini adalah risiko nyata,
