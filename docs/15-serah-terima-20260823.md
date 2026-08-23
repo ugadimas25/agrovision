@@ -14,22 +14,30 @@
 |---|---|---|
 | `npx tsc --noEmit` | **0 error** | |
 | `npm run lint` | **0 error**, 13 warning | 13 warning sudah ada sejak awal sesi |
-| `npm run db:test` | **23 PASS / 0 FAIL** | naik dari 21 (3 cek baru K-04) |
-| `npm run db:test:adversarial` | **37 PASS / 0 FAIL** | naik dari 36 (cek policy 0040) |
-| `npm run at:verify` | **43 PASS / 0 FAIL** | **awal sesi: mati sebelum menguji apa pun** |
+| `npm run build` | sukses | |
+| `npm run db:test` | **34 PASS / 0 FAIL** | naik dari 23 (11 cek K-09/AI-44a) |
+| `npm run db:test:adversarial` | **54 PASS / 0 FAIL** | naik dari 37 (17 cek gerbang tarif) |
+| `npm run at:verify` | **65 PASS / 0 FAIL** | naik dari 43 (10 cek AI-44a, 12 cek AI-05) |
 | `app.check_rls_coverage()` | 0 baris | |
 | `app.check_privilege_revocations()` | 0 baris | |
-| `npm run db:verify` | tanpa drift | 44 migrasi terpasang |
+| `npm run db:verify` | tanpa drift | **45** migrasi terpasang |
 | `npm run db:check` | 4 penghalang | stub login + 3 tenant demo — semuanya diketahui |
 
-**Belum di-commit.** Semua perubahan ada di working tree, branch `docs/refine-tiket-ridwan`.
-CLAUDE.md meminta kode branch dari `main` — pindahkan ke `feat/…` sebelum commit.
+**Sudah di-commit, BELUM di-push.** Branch `feat/sprint-1-2`, tiga commit:
+`3a15d75` (Sprint 1 & 2 sampai 0044, 79 berkas) · `ae6e0e7` (AI-44a + AI-02 yang
+tertinggal, migrasi 0045) · commit dokumen ini.
+
+> **`main` lokal tertinggal 10 commit.** `git rev-parse main` menunjuk `d1b6722`,
+> sedangkan `origin/main` sudah di `ac33655` — PR #3–#10 (CI pipeline, migrasi di
+> cloudbuild, tema RSPO, pindah owner) tidak ada di ref lokal itu. Branch
+> `feat/sprint-1-2` karena itu di-root ke **`origin/main`**, bukan ke `main` lokal.
+> Jalankan `git fetch && git branch -f main origin/main` sebelum bercabang lagi.
 
 `npm run dev` mungkin masih hidup di port 3000 (`pkill -f "next dev"` untuk mematikan).
 
 ---
 
-## 2. Migrasi yang ditambahkan sesi ini (0038–0044)
+## 2. Migrasi yang ditambahkan sesi ini (0038–0045)
 
 | Berkas | Isi |
 |---|---|
@@ -40,6 +48,7 @@ CLAUDE.md meminta kode branch dari `main` — pindahkan ke `feat/…` sebelum co
 | `0042_agri_input_stock_ledger.sql` | K-06 §17: `agri_input_stock_movements` (append-only), saldo awal dimigrasikan, **`stock_qty` DIHAPUS**, view `v_agri_input_stock` |
 | `0043_decide_record_materialization.sql` | `app.decide_record()` ditulis ulang SEKALI: materialisasi biaya (K-01 §13), larangan self-approval (AI-17), supersede kesesuaian (K-04 §16) |
 | `0044_backfill_reflected_costs.sql` | Materialisasi mundur 20 record approved (Rp 1,397 M) |
+| `0045_price_driver_uniqueness.sql` | AI-44a: indeks unik `(company_id, driver, chemical_id) NULLS NOT DISTINCT` untuk tarif aktif ber-kind `cost`. Menegakkan andaian `LIMIT 1` di `app.price_for_driver()` yang tidak pernah ditegakkan |
 
 **Peringatan penting:** 0041–0044 **diterapkan tanpa telaah adversarial**. Empat dari lima agen
 workflow mati kena batas kuota bulanan organisasi; hanya arsiteknya selesai. Saya menelaah sendiri
@@ -74,12 +83,26 @@ Ini bagian paling berharga dari dokumen ini.
    di AT4, padahal sebabnya form submit tertukar di AT3). Sudah diperbaiki: `pickForm` mencocokkan
    seluruh elemen form sehingga `data-testid` bisa dipakai sebagai pegangan stabil. **Pakai
    `data-testid`, jangan prosa.**
-7. **Editor tarif & beberapa editor inline tidak jalan tanpa JavaScript.** `PriceRateEditor`,
-   `OrganicTracker`, `RegistryGroup` memakai toggle `useState`, jadi form-nya tidak ada di HTML
-   server. Pola yang benar: `<details>` native (lihat `ExpenditureForm`, `ExpenditureEditor`).
+7. **Beberapa editor inline tidak jalan tanpa JavaScript.** Toggle `useState` membuat form-nya
+   tidak ada di HTML server. Pola yang benar: `<details>` native (lihat `ExpenditureForm`,
+   `ExpenditureEditor`, `PriceRowForm`). `PriceRateEditor` **sudah dipindahkan** bersama AI-44a;
+   yang masih memakai `useState` dan belum diperbaiki: **`OrganicTracker` dan `RegistryGroup`**.
 8. **`CREATE OR REPLACE VIEW` menjatuhkan `security_invoker`.** Selalu `ALTER VIEW … SET
    (security_invoker = true)` sesudahnya, dan akhiri migrasi dengan kanari `check_rls_coverage()`.
-9. **Akun multi-entitas berbahaya untuk fixture uji.** `resolveLogin` menaruh akun ber-2-entitas di
+9. **`app.publish_price()` punya DUA cabang, dan kode yang sudah ada menempuh cabang
+   "versi baru".** Menekan "tambah baris tarif" pada kode yang sudah ada akan MENGUBAH
+   tarif berjalan, dan pesannya tetap berbunyi sukses. Jalur create wajib memeriksa
+   keberadaan kode lebih dulu (`priceCodeExists`).
+10. **Select yang disembunyikan TETAP ikut terkirim.** Menyembunyikan field dengan
+   `class="hidden"` saja membuat nilai lamanya tetap masuk FormData — dan sejak AI-05
+   server menolak pasangan yang tidak cocok. Wajib `disabled` juga; field `disabled`
+   tidak masuk FormData sama sekali.
+11. **`useEffect(() => setState(true), [])` untuk deteksi hidrasi ditolak lint**
+   (`react-hooks`, cascading render). Pakai `useSyncExternalStore(langganan, () => true,
+   () => false)`: `false` di server, `true` di klien, tanpa render kedua.
+12. **`psql -tAc` mencetak boolean sebagai `true`/`false`, bukan `t`/`f`.** Assertion
+   string yang mengharapkan `|t` gagal walau datanya benar.
+13. **Akun multi-entitas berbahaya untuk fixture uji.** `resolveLogin` menaruh akun ber-2-entitas di
    mode "semua entitas" (`companyId` null); di mode itu form tulis hilang dan `createMasterItem`
    menulis `company_id = NULL` (item jadi GLOBAL lintas tenant). `admin@agrovision.local` sudah
    begitu (DEV + PILOT dari `db:import:pilot`) — itu yang mematikan `at:verify` di AT2 sampai
@@ -89,11 +112,15 @@ Ini bagian paling berharga dari dokumen ini.
 
 ## 4. Sisa pekerjaan
 
-### Sprint 2 — tinggal dua
-| Item | Isi | Catatan |
-|---|---|---|
-| **AI-05** | Form anggaran dinamis per scope | `costing/anggaran/Forms.tsx` sudah punya select scope + estate + block; yang kurang: tampil/sembunyi sesuai scope + zod yang menegakkan pasangannya. Harus tetap jalan tanpa JS |
-| **AI-44a** | Tambah baris tarif baru + kolom `driver`/`unit`/`is_active` | §19. `app.publish_price()` sudah ada (11 parameter) — tinggal action + form. **Prasyarat K-03** |
+### Sprint 2 — SELESAI
+AI-05 dan AI-44a keduanya selesai (docs/13 §10c). AI-44a membuka K-03: baris revenue
+per grade sekarang bisa dibuat dari UI tanpa migrasi.
+
+Satu temuan menyusul saat mengerjakannya: **AI-02 ditandai selesai padahal separuhnya
+tidak dikerjakan.** `DRIVER_SQL` di `src/lib/repo/pricing.ts` tidak ikut diperluas
+setelah 0041, dan `reflectedCosts()` melewati driver tak dikenal tanpa suara — layar
+Refleksi understate Rp 37 jt (DEMO) / Rp 414 jt (PILOT) sementara `cost_transactions`
+sudah benar. Sudah diperbaiki; detail terukur di docs/13 §10c.
 
 ### Sprint 3 & 4
 Belum tersentuh. Yang terbesar: **AI-24** filter dashboard (~5 hari, ketiga `page.tsx` masih nol
@@ -132,14 +159,14 @@ Flag itu mematikan SEMUA konfirmasi tool. Di pekerjaan ini yang perlu diwaspadai
 
 ```bash
 docker compose up -d db
-npm run db:migrate && npm run db:verify        # 44 migrasi, tanpa drift
-npm run db:test && npm run db:test:adversarial # 23/0 dan 37/0
+npm run db:migrate && npm run db:verify        # 45 migrasi, tanpa drift
+npm run db:test && npm run db:test:adversarial # 34/0 dan 54/0
 npx tsc --noEmit && npm run lint              # 0 error
 npm run dev                                    # terminal lain
-npm run at:verify                              # 43/0
+npm run at:verify                              # 65/0
 npm run db:check                               # 4 penghalang diketahui
 TZ=Asia/Jakarta node --env-file=.env.local db/verify-dates.mjs   # tanggal tidak bergeser
-TZ=UTC          node --env-file=.env.local db/verify-dates.mjs   # hasil harus sama
+TZ=UTC          node --env-file=.env.local db/verify-dates.mjs   # 0 FAIL; 1 cek SKIP di offset 0
 ```
 
 Turun dari angka mana pun di atas = regresi.
