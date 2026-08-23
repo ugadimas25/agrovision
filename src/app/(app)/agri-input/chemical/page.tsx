@@ -78,6 +78,12 @@ export default async function Page() {
                   // needs_reorder dari view: null bila reorder level belum diisi —
                   // "perlu reorder" memang belum bisa dijawab, bukan "tidak perlu".
                   const low = i.needsReorder === true;
+                  // Saldo NEGATIF berarti pencatatan pemakaian melampaui pemasukan —
+                  // buku besar 0043 tidak punya penjaga saldo (temuan telaah adversarial
+                  // 24 Agu 2026: 'out' yang sah bisa membuat saldo -9.999). Sengaja tidak
+                  // diblokir: stok fisik bisa ada sementara pemasukannya belum dicatat.
+                  // Tapi ia WAJIB terlihat, karena artinya angka stok tidak bisa dipercaya.
+                  const negatif = i.stockQty !== null && i.stockQty < 0;
                   return (
                     <tr key={i.id} className="border-b border-slate-50 last:border-0">
                       <td data-label="Kode" className="px-4 py-2 font-mono text-xs text-slate-500">{i.code}</td>
@@ -88,8 +94,8 @@ export default async function Page() {
                           {i.isOrganic ? "Organik" : "Sintetik"}
                         </span>
                       </td>
-                      <td data-label="Stok" className={cn("px-4 py-2 text-right tabular-nums", low ? "font-semibold text-red-700" : "text-slate-700")}>
-                        {formatNumber(i.stockQty)} {i.unit}{low ? " ⚠" : ""}
+                      <td data-label="Stok" className={cn("px-4 py-2 text-right tabular-nums", negatif || low ? "font-semibold text-red-700" : "text-slate-700")}>
+                        {formatNumber(i.stockQty)} {i.unit}{negatif ? " ⚠ saldo negatif" : low ? " ⚠" : ""}
                       </td>
                       <td data-label="Rekomendasi fase" data-empty={!i.recPhase} className="px-4 py-2 text-slate-600">{i.recPhase ? (PHASE_LABEL[i.recPhase] ?? i.recPhase) : "—"}</td>
                     </tr>

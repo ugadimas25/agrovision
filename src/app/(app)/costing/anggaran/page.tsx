@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PiggyBank, TriangleAlert, ShieldAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
-import { budgetVsActual, listFiscalPeriods } from "@/lib/repo/costing";
+import { budgetVsActual, listFiscalPeriods, unmatchedCosts } from "@/lib/repo/costing";
 import { listParentCategoryOptions } from "@/lib/repo/master";
 import { listEstateOptions, searchBlockOptions } from "@/lib/repo/blocks";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -10,7 +10,7 @@ import { getLocale } from "@/lib/i18n-server";
 import { getDict } from "@/lib/i18n";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
-import { formatIdr, formatPct } from "@/lib/format";
+import { formatIdr, formatPct, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PeriodForm, BudgetForm } from "./Forms";
 
@@ -35,12 +35,13 @@ export default async function AnggaranPage() {
 
   const canWrite = ["super_admin", "approver"].includes(ctx.session.role);
 
-  const [periods, categories, estates, blocks, rows] = await Promise.all([
+  const [periods, categories, estates, blocks, rows, takCocok] = await Promise.all([
     listFiscalPeriods(ctx),
     listParentCategoryOptions(ctx),
     listEstateOptions(ctx),
     searchBlockOptions(ctx),
     budgetVsActual(ctx),
+    unmatchedCosts(ctx),
   ]);
 
   return (
@@ -98,6 +99,68 @@ export default async function AnggaranPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Biaya yang TIDAK bisa dibandingkan ke anggaran (view 0048).
+          Temuan telaah adversarial: tiga jalan berbeda membuat biaya approved
+          hilang dari perbandingan tanpa satu pun peringatan. Keputusan pemilik
+          produk 24 Agu 2026: tampilkan, jangan blokir — memblokir approval karena
+          tarif belum diisi akan menghentikan pekerjaan lapangan.
+          Ditempatkan DI ATAS tabel perbandingan: kalau ada baris di sini, angka di
+          bawahnya belum lengkap, dan pembaca harus tahu itu lebih dulu. */}
+      {takCocok.length > 0 && (
+        <section className="mt-5 overflow-hidden rounded-xl border border-amber-200 bg-white">
+          <h2 className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {takCocok.length} biaya disetujui belum bisa dibandingkan ke anggaran
+              <span className="block font-normal">
+                Angka realisasi di bawah belum memuat baris-baris ini. Selesaikan sebabnya supaya
+                serapan anggaran mencerminkan pekerjaan yang benar-benar terjadi.
+              </span>
+            </span>
+          </h2>
+          <ResponsiveTable>
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs text-slate-500">
+                <tr>
+                  <th className="px-4 py-2 font-medium">Tanggal</th>
+                  <th className="px-4 py-2 font-medium">Blok</th>
+                  <th className="px-4 py-2 font-medium">Sumber</th>
+                  <th className="px-4 py-2 text-right font-medium">Volume</th>
+                  <th className="px-4 py-2 text-right font-medium">Nilai</th>
+                  <th className="px-4 py-2 font-medium">Sebabnya</th>
+                </tr>
+              </thead>
+              <tbody>
+                {takCocok.map((u) => (
+                  <tr key={u.id} className="border-b border-slate-50 last:border-0">
+                    <td data-label="Tanggal" className="px-4 py-2 text-slate-600">{u.transactionDate ?? EMPTY}</td>
+                    <td data-label="Blok" className="px-4 py-2 text-slate-600">{u.blockCode ?? EMPTY}</td>
+                    <td data-label="Sumber" className="px-4 py-2 text-xs text-slate-500">{u.sourceTable ?? "dicatat manual"}</td>
+                    <td data-label="Volume" className="px-4 py-2 text-right tabular-nums text-slate-600">
+                      {u.quantity === null ? EMPTY : `${formatNumber(u.quantity)} ${u.unit ?? ""}`.trim()}
+                    </td>
+                    <td data-label="Nilai" className={cn("px-4 py-2 text-right tabular-nums", u.amountIdr === null ? "text-slate-300" : "text-slate-700")}>
+                      {formatIdr(u.amountIdr)}
+                    </td>
+                    <td data-label="Sebabnya" className="px-4 py-2">
+                      <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700">{u.reason}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ResponsiveTable>
+          <p className="border-t border-slate-100 px-4 py-2 text-xs leading-relaxed text-slate-500">
+            <strong>nilai belum bisa dihitung</strong> — tarif untuk aktivitas itu belum ada atau
+            dinonaktifkan saat record disetujui; terbitkan tarifnya di Refleksi Biaya.{" "}
+            <strong>kategori belum dipetakan</strong> — petakan tarifnya ke kategori akuntansi di
+            Refleksi Biaya.{" "}
+            <strong>di luar periode anggaran</strong> — tanggal kejadiannya tidak masuk fase proyek
+            mana pun; tambahkan fasenya di atas.
+          </p>
+        </section>
       )}
 
       <section className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white">
