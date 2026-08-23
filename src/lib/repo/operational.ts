@@ -200,13 +200,16 @@ export async function listOpRecords(
 /** submit draft/rejected -> submitted, untuk modul mana pun. */
 export async function submitOpRecord(
   ctx: RlsContext,
-  key: keyof typeof TABLES,
+  key: keyof typeof TABLES | "nursery_inspections",
   id: string,
 ): Promise<number> {
-  const t = TABLES[key];
+  // nursery_inspections tidak masuk TABLES karena induknya seed_batches, bukan
+  // blocks (listOpRecords meng-JOIN app.blocks). Jalur Ajukan-nya tetap lewat
+  // satu pintu ini supaya konsisten dengan app.decide_record di sisi approval.
+  const table = key === "nursery_inspections" ? "nursery_inspections" : TABLES[key].table;
   return withRls(ctx, async (client) => {
     const res = await client.query(
-      `UPDATE app.${t.table}
+      `UPDATE app.${table}
           SET approval_status = 'submitted', rejection_reason = NULL
         WHERE id = $1 AND approval_status IN ('draft','rejected')`,
       [id],
@@ -334,6 +337,32 @@ export async function createLandSuitability(
   return rows[0].id;
 }
 
+/** Pengukuran DBH: hanya merekam hasil ukur — tanpa perhitungan biomassa di sini. */
+export async function createDbhMeasurement(
+  ctx: RlsContext,
+  input: { blockId: string; cropId: string; measuredAt: string; dbhCm: number; heightM?: number | null },
+): Promise<string> {
+  const rows = await rlsQuery<{ id: string }>(
+    ctx,
+    `INSERT INTO app.dbh_measurements
+       (block_id, crop_id, measured_at, dbh_cm, height_m, approval_status, measured_by)
+     VALUES ($1,$2,$3::timestamptz,$4,$5,'draft',$6) RETURNING id`,
+    [input.blockId, input.cropId, input.measuredAt, input.dbhCm, input.heightM ?? null, ctx.userId],
+  );
+  return rows[0].id;
+}
+
+/** Opsi tanaman untuk form DBH. app.crops referensi global (rls_exempt, 0018). */
+export async function listCropOptions(
+  ctx: RlsContext,
+): Promise<{ value: string; label: string }[]> {
+  const rows = await rlsQuery<{ id: string; name: string; variety: string | null }>(
+    ctx,
+    `SELECT id, name, variety FROM app.crops WHERE is_tree ORDER BY name`,
+  );
+  return rows.map((r) => ({ value: r.id, label: r.variety ? `${r.name} — ${r.variety}` : r.name }));
+}
+
 export async function listFertilizerTypeOptions(
   ctx: RlsContext,
 ): Promise<{ value: string; label: string }[]> {
@@ -369,7 +398,8 @@ export async function listSeedStock(ctx: RlsContext): Promise<SeedStock[]> {
             s.qty_alive, s.qty_dead, s.qty_damaged,
             CASE WHEN s.qty_initial = 0 OR s.qty_alive IS NULL THEN NULL
                  ELSE round(s.qty_alive * 100.0 / s.qty_initial, 1) END AS survival_pct,
-            s.last_inspected_at
+            -- hari kalender WIB dari instant; dipotong di DB supaya zona proses tidak ikut bermain
+            (s.last_inspected_at AT TIME ZONE 'Asia/Jakarta')::date::text AS last_inspected_at
        FROM app.v_seedling_stock s
        JOIN app.crops c ON c.id = s.crop_id
       ORDER BY s.batch_code`,
@@ -382,9 +412,193 @@ export async function listSeedStock(ctx: RlsContext): Promise<SeedStock[]> {
     qtyDead: r.qty_dead === null ? null : Number(r.qty_dead),
     qtyDamaged: r.qty_damaged === null ? null : Number(r.qty_damaged),
     survivalPct: r.survival_pct === null ? null : Number(r.survival_pct),
-    lastInspectedAt: r.last_inspected_at
-      ? new Date(r.last_inspected_at).toISOString().slice(0, 10)
-      : null,
+    lastInspectedAt: r.last_inspected_at,
+  }));
+}
+
+// --- Inspeksi bibit (nursery_inspections) ---
+// Induknya seed_batches, bukan blocks, jadi tidak ikut TABLES/listOpRecords.
+// Bentuk kembaliannya disamakan dengan OpRecord supaya OpRecordTable dipakai
+// ulang (kolom "Blok" dilabeli "Batch" lewat prop blockHeader).
+
+export type SeedBatchOption = { value: string; label: string; remaining: number };
+
+/**
+ * Pilihan batch bibit — SATU fungsi untuk dua dropdown (inspeksi & distribusi).
+ *
+ * K-05: form hanya MEMILIH batch, tidak pernah membuatnya. `remaining` =
+ * qty_initial − Σ distribusi: fakta turunan, dipakai form distribusi untuk
+ * menolak jumlah yang melebihi sisa (kelebihan distribusi menggelembungkan
+ * driver seedling_qty di Refleksi Biaya).
+ */
+export async function listSeedBatchOptions(ctx: RlsContext): Promise<SeedBatchOption[]> {
+  const rows = await rlsQuery<{
+    id: string; code: string; crop_name: string; variety: string | null;
+    qty_initial: number; distributed: string;
+  }>(
+    ctx,
+    `SELECT sb.id, sb.code, c.name AS crop_name, sb.variety, sb.qty_initial,
+            COALESCE((SELECT SUM(sd.qty) FROM app.seed_distributions sd
+                       WHERE sd.seed_batch_id = sb.id), 0) AS distributed
+       FROM app.seed_batches sb
+       JOIN app.crops c ON c.id = sb.crop_id
+      WHERE sb.archived_at IS NULL
+      ORDER BY sb.code`,
+  );
+  return rows.map((r) => {
+    const remaining = Number(r.qty_initial) - Number(r.distributed);
+    const nama = `${r.code} — ${r.crop_name}${r.variety ? ` · ${r.variety}` : ""}`;
+    return { value: r.id, label: `${nama} (sisa ${remaining} dari ${r.qty_initial})`, remaining };
+  });
+}
+
+export async function createNurseryInspection(
+  ctx: RlsContext,
+  input: { seedBatchId: string; inspectedOn: string; qtyAlive: number; qtyDead: number; qtyDamaged: number },
+): Promise<string> {
+  return withRls(ctx, async (client) => {
+    // Batch di luar tenant tersaring RLS -> 0 baris; pesan galatnya jangan
+    // menebak-nebak sebab (bisa "tidak ada", bisa "bukan milik Anda").
+    const batch = await client.query<{ qty_initial: number }>(
+      `SELECT qty_initial FROM app.seed_batches WHERE id = $1 AND archived_at IS NULL`,
+      [input.seedBatchId],
+    );
+    if (!batch.rows[0]) throw new Error("Batch tidak ditemukan atau di luar akses Anda.");
+    const initial = Number(batch.rows[0].qty_initial);
+    const sum = input.qtyAlive + input.qtyDead + input.qtyDamaged;
+    if (sum > initial) {
+      throw new Error(
+        `Hidup + mati + rusak (${sum}) melebihi jumlah awal batch (${initial}) — survival rate akan menyesatkan. Periksa lagi hitungannya.`,
+      );
+    }
+    // inspector_id = created_by = pencatat (role_split 0025 memakai created_by;
+    // inbox 0040 menampilkan inspector_id). inspected_at bertipe timestamptz;
+    // string tanggal dikirim apa adanya dan di-cast di SQL, tanpa objek Date.
+    const res = await client.query<{ id: string }>(
+      `INSERT INTO app.nursery_inspections
+         (seed_batch_id, inspected_at, qty_alive, qty_dead, qty_damaged,
+          inspector_id, approval_status, created_by)
+       VALUES ($1, $2::date, $3, $4, $5, $6, 'draft', $6) RETURNING id`,
+      [input.seedBatchId, input.inspectedOn, input.qtyAlive, input.qtyDead, input.qtyDamaged, ctx.userId],
+    );
+    return res.rows[0].id;
+  });
+}
+
+export async function listNurseryInspections(
+  ctx: RlsContext,
+  opts: { page?: number; pageSize?: number } = {},
+): Promise<Page<OpRecord>> {
+  const page = Math.max(1, opts.page ?? 1);
+  const pageSize = Math.min(100, Math.max(5, opts.pageSize ?? 25));
+  const offset = (page - 1) * pageSize;
+  return withRls(ctx, async (client) => {
+    const total = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM app.nursery_inspections`,
+    );
+    // inspected_at::date::text: tanggal keluar sebagai string apa adanya —
+    // JANGAN dilewatkan objek Date (bergeser sehari di zona +07:00).
+    const rows = await client.query(
+      `SELECT ni.id, sb.code AS batch_code, ni.approval_status, ni.rejection_reason,
+              ni.inspected_at::date::text AS event_date,
+              'Hidup ' || ni.qty_alive || ' · mati ' || ni.qty_dead || ' · rusak ' || ni.qty_damaged AS detail,
+              u.full_name AS created_by_name
+         FROM app.nursery_inspections ni
+         JOIN app.seed_batches sb ON sb.id = ni.seed_batch_id
+         LEFT JOIN app.users u ON u.id = ni.inspector_id
+        ORDER BY ni.inspected_at DESC, ni.id DESC
+        LIMIT $1 OFFSET $2`,
+      [pageSize, offset],
+    );
+    return {
+      rows: rows.rows.map((r) => ({
+        id: String(r.id),
+        blockCode: (r.batch_code as string) ?? null,
+        approvalStatus: String(r.approval_status),
+        rejectionReason: (r.rejection_reason as string) ?? null,
+        eventDate: (r.event_date as string) ?? null,
+        detail: txt(r.detail),
+        createdByName: (r.created_by_name as string) ?? null,
+      })),
+      total: Number(total.rows[0].n),
+      page,
+      pageSize,
+    };
+  });
+}
+
+/**
+ * Catat distribusi bibit. Guard stok dilakukan di transaksi yang sama:
+ * jumlah melebihi sisa batch akan menggelembungkan driver seedling_qty di
+ * Refleksi Biaya (volume × tarif SEED-UNIT), jadi ditolak dengan pesan yang
+ * menyebut akibatnya. Penegakan di DB (trigger) sengaja belum — lihat docs/13.
+ */
+export async function createSeedDistribution(
+  ctx: RlsContext,
+  input: { seedBatchId: string; blockId: string; qty: number; distributedOn: string },
+): Promise<string> {
+  return withRls(ctx, async (client) => {
+    const stok = await client.query<{ remaining: number }>(
+      `SELECT (sb.qty_initial - COALESCE((SELECT SUM(sd.qty) FROM app.seed_distributions sd
+                 WHERE sd.seed_batch_id = sb.id), 0))::int AS remaining
+         FROM app.seed_batches sb
+        WHERE sb.id = $1 AND sb.archived_at IS NULL`,
+      [input.seedBatchId],
+    );
+    if (stok.rows.length === 0) {
+      throw new Error("Batch bibit tidak ditemukan atau di luar akses Anda.");
+    }
+    const remaining = Number(stok.rows[0].remaining);
+    if (input.qty > remaining) {
+      throw new Error(
+        `Jumlah melebihi sisa batch (${remaining} batang) — kelebihan akan menggelembungkan biaya pengadaan bibit di Refleksi.`,
+      );
+    }
+    const res = await client.query<{ id: string }>(
+      `INSERT INTO app.seed_distributions (seed_batch_id, block_id, qty, distributed_on, created_by)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [input.seedBatchId, input.blockId, input.qty, input.distributedOn, ctx.userId],
+    );
+    return res.rows[0].id;
+  });
+}
+
+export type SeedDistributionRow = {
+  id: string;
+  batchCode: string;
+  blockCode: string;
+  qty: number;
+  /** 'YYYY-MM-DD' langsung dari SQL (::text) — tanpa objek Date, tidak bergeser di +07:00. */
+  distributedOn: string;
+  createdByName: string | null;
+};
+
+export async function listSeedDistributions(
+  ctx: RlsContext,
+  limit = 50,
+): Promise<SeedDistributionRow[]> {
+  const rows = await rlsQuery<{
+    id: string; batch_code: string; block_code: string; qty: number;
+    distributed_on: string; created_by_name: string | null;
+  }>(
+    ctx,
+    `SELECT sd.id, sb.code AS batch_code, b.code AS block_code, sd.qty,
+            sd.distributed_on::text AS distributed_on, u.full_name AS created_by_name
+       FROM app.seed_distributions sd
+       JOIN app.seed_batches sb ON sb.id = sd.seed_batch_id
+       JOIN app.blocks b ON b.id = sd.block_id
+       LEFT JOIN app.users u ON u.id = sd.created_by
+      ORDER BY sd.distributed_on DESC, sd.created_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    batchCode: r.batch_code,
+    blockCode: r.block_code,
+    qty: Number(r.qty),
+    distributedOn: r.distributed_on,
+    createdByName: r.created_by_name ?? null,
   }));
 }
 

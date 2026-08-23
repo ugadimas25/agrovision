@@ -1,6 +1,7 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
 import { companyName } from "@/lib/repo/reports";
 import { statusLabelId, type ModuleReport, type ModuleColumn, type ReportMeta } from "./types";
+import { CROP } from "@/lib/labels";
 
 const nf = (v: number | null, d = 0) => (v === null ? "—" : new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v));
 const N = (v: string | null) => (v === null ? null : Number(v));
@@ -14,7 +15,7 @@ async function meta(ctx: RlsContext, o: { title: string; subtitle: string; sourc
     printedAt: new Date(), source: o.source, note: o.note,
   };
 }
-const CROP: Record<string, string> = { DURIAN: "Durian", COCONUT: "Kelapa" };
+// Peta komoditas dipusatkan di src/lib/labels.ts (dulu disalin di 4 berkas).
 
 // 01 Kesesuaian Lahan ────────────────────────────────────────────────────────
 export async function suitabilityReport(ctx: RlsContext): Promise<ModuleReport> {
@@ -196,7 +197,7 @@ export async function harvestReport(ctx: RlsContext): Promise<ModuleReport> {
 export async function chemicalReport(ctx: RlsContext): Promise<ModuleReport> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT code, name, category, is_organic::text, unit, stock_qty, reorder_level, rec_phase
-    FROM app.agri_input_chemicals WHERE is_active ORDER BY name`);
+    FROM app.v_agri_input_stock WHERE is_active ORDER BY name`);
   const columns: ModuleColumn[] = [
     { label: "No", align: "right" }, { label: "Kode" }, { label: "Nama" }, { label: "Jenis" }, { label: "Organik?" },
     { label: "Stok", align: "right" }, { label: "Stok minimum", align: "right" }, { label: "Reorder alert", kind: "new" }, { label: "Satuan" }, { label: "Rekomendasi fase" },

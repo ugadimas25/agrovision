@@ -7,6 +7,9 @@ import {
   createFertilizerApplication,
   createLandPreparation,
   createLandSuitability,
+  createNurseryInspection,
+  createSeedDistribution,
+  createDbhMeasurement,
   createPruningRecord,
   createWeedingRecord,
   createSprayingRecord,
@@ -305,12 +308,126 @@ export async function createHarvestAction(_p: ActionState, fd: FormData): Promis
   } catch (e) { return { ok: false, message: toMessage(e) }; }
 }
 
+// --- Inspeksi Bibit (Nursery) ---
+// K-05 (diputuskan 23 Agu 2026): jenis/varietas bibit dirujuk dari Master Data.
+// Form ini hanya MEMILIH batch lewat dropdown — tidak ada teks bebas dan tidak
+// ada pembuatan jenis bibit inline.
+//
+// qtyAlive divalidasi dari string mentah, bukan z.coerce: Number("") = 0,
+// padahal 0 bibit hidup adalah nilai sah — kosong dan nol harus dibedakan.
+const nurseryInspSchema = z.object({
+  seedBatchId: uuid,
+  inspectedOn: dateStr,
+  qtyAlive: z
+    .string()
+    .min(1, "Jumlah hidup wajib diisi — angka inilah yang menggerakkan survival rate")
+    .regex(/^\d+$/, "Jumlah hidup harus bilangan bulat, nol atau lebih")
+    .transform(Number),
+  qtyDead: z.union([z.coerce.number().int().min(0), z.literal("")]).optional(),
+  qtyDamaged: z.union([z.coerce.number().int().min(0), z.literal("")]).optional(),
+});
+
+export async function createNurseryInspectionAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const ctx = await requireRole("creator", "approver", "super_admin");
+    if (!ctx.companyId) return { ok: false, message: "Pilih satu entitas dulu di kanan atas." };
+    const parsed = nurseryInspSchema.safeParse({
+      seedBatchId: fd.get("seedBatchId"), inspectedOn: fd.get("inspectedOn"),
+      qtyAlive: String(fd.get("qtyAlive") ?? ""),
+      qtyDead: fd.get("qtyDead") || "", qtyDamaged: fd.get("qtyDamaged") || "",
+    });
+    if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+    // Mati/rusak kosong = 0, BUKAN null: kolomnya NOT NULL DEFAULT 0 dan inspeksi
+    // memang menghitung ketiganya — ini bukan kasus "belum ada data".
+    const zeroIfEmpty = (v: number | "" | undefined) => (typeof v === "number" ? v : 0);
+    return await run(["creator"], ["/nursery", "/approval"], () =>
+      createNurseryInspection(ctx, {
+        seedBatchId: parsed.data.seedBatchId,
+        inspectedOn: parsed.data.inspectedOn,
+        qtyAlive: parsed.data.qtyAlive,
+        qtyDead: zeroIfEmpty(parsed.data.qtyDead),
+        qtyDamaged: zeroIfEmpty(parsed.data.qtyDamaged),
+      }).then(() => {}),
+    );
+  } catch (e) { return { ok: false, message: toMessage(e) }; }
+}
+
+// --- Pengukuran DBH (halaman /keberlanjutan/karbon) ---
+// Form ini hanya MENCATAT hasil ukur lapangan (diameter, tinggi). Biomassa dan
+// serapan karbon TIDAK dihitung di sini — itu tugas carbon run memakai koefisien
+// alometrik yang masih bertanda requires_validation (koefisien sengaja kosong,
+// jangan diisi dari kode).
+const dbhSchema = z.object({
+  blockId: uuid,
+  cropId: uuid,
+  measuredAt: dateStr,
+  dbhCm: z.coerce
+    .number({ message: "DBH wajib diisi" })
+    .refine((v) => v > 0, "DBH harus lebih dari 0 cm — tanpa diameter batang, biomassa dan serapan karbon blok ini tidak bisa dihitung"),
+  heightM: z
+    .union([
+      z.coerce.number().refine((v) => v > 0, "Tinggi harus lebih dari 0 m — kosongkan bila memang tidak diukur"),
+      z.literal(""),
+    ])
+    .optional(),
+});
+
+export async function createDbhAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const ctx = await requireRole("creator", "approver", "super_admin");
+    if (!ctx.companyId) return { ok: false, message: "Pilih satu entitas dulu di kanan atas." };
+    const parsed = dbhSchema.safeParse({
+      blockId: fd.get("blockId"), cropId: fd.get("cropId"), measuredAt: fd.get("measuredAt"),
+      dbhCm: fd.get("dbhCm") || "", heightM: fd.get("heightM") || "",
+    });
+    if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+    return await run(["creator"], ["/keberlanjutan/karbon", "/approval"], () =>
+      createDbhMeasurement(ctx, {
+        blockId: parsed.data.blockId, cropId: parsed.data.cropId, measuredAt: parsed.data.measuredAt,
+        dbhCm: parsed.data.dbhCm, heightM: numOrNull(parsed.data.heightM),
+      }).then(() => {}),
+    );
+  } catch (e) { return { ok: false, message: toMessage(e) }; }
+}
+
+// --- Distribusi bibit (AI-50) ---
+// PENCATATAN LANGSUNG: seed_distributions tidak punya approval_status, jadi
+// action ini tidak memakai run() (pesannya menyebut draft/approval) dan modul
+// ini tidak masuk OP_MODULES. Aman meski di-POST langsung: requireRole menolak
+// viewer, dan policy seed_distributions_viewer_readonly (migrasi 0042) menolak
+// di lapis database.
+const seedDistSchema = z.object({
+  seedBatchId: uuid,
+  blockId: uuid,
+  distributedOn: dateStr,
+  qty: z.coerce
+    .number({ message: "Jumlah bibit wajib diisi" })
+    .int("Jumlah bibit harus bilangan bulat")
+    .refine((v) => v > 0, "Jumlah bibit harus lebih dari 0 — angka inilah yang menggerakkan biaya pengadaan bibit di Refleksi"),
+});
+
+export async function createSeedDistributionAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const ctx = await requireRole("creator", "approver", "super_admin");
+    if (!ctx.companyId) return { ok: false, message: "Pilih satu entitas dulu di kanan atas." };
+    const parsed = seedDistSchema.safeParse({
+      seedBatchId: fd.get("seedBatchId"), blockId: fd.get("blockId"),
+      distributedOn: fd.get("distributedOn"), qty: fd.get("qty") || "",
+    });
+    if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+    await createSeedDistribution(ctx, parsed.data);
+    for (const p of ["/nursery", "/traceability", "/costing/refleksi", "/dashboard/financial"]) revalidatePath(p);
+    return { ok: true, message: "Distribusi bibit tercatat — volume bibit terdistribusi dan Refleksi Biaya ikut diperbarui." };
+  } catch (e) { return { ok: false, message: toMessage(e) }; }
+}
+
 // --- Ajukan (semua modul operasional + aktivitas kebun) ---
 // Halaman per modul (untuk revalidate). Modul aktivitas ada di /aktivitas/*,
 // bukan /operasional/*, jadi pakai peta eksplisit — bukan tebak dari nama tabel.
 const OP_MODULES = [
   "fertilizer_applications", "land_preparations", "land_suitability_assessments",
   "pruning_records", "weeding_records", "spraying_records", "harvest_records",
+  "nursery_inspections", "dbh_measurements",
 ] as const;
 const MODULE_PATH: Record<(typeof OP_MODULES)[number], string> = {
   fertilizer_applications: "/operasional/pemupukan",
@@ -320,6 +437,8 @@ const MODULE_PATH: Record<(typeof OP_MODULES)[number], string> = {
   weeding_records: "/aktivitas/weeding",
   spraying_records: "/aktivitas/spraying",
   harvest_records: "/aktivitas/panen",
+  nursery_inspections: "/nursery",
+  dbh_measurements: "/keberlanjutan/karbon",
 };
 const submitSchema = z.object({ module: z.enum(OP_MODULES), id: uuid });
 

@@ -29,7 +29,9 @@ const chemSchema = z.object({
   category: z.enum(["pupuk", "pestisida", "herbisida", "fungisida", "insektisida"]),
   isOrganic: z.string().optional(),
   unit: z.string().trim().min(1).max(20),
-  stockQty: z.coerce.number().min(0),
+  // stockQty dihapus dari skema: sejak 0043 stok hanya lahir dari buku besar
+  // mutasi, dan 'in'/'adjustment' adalah wewenang super_admin (§17 Keputusan 1).
+  // Katalog baru mulai dari nol.
   reorderLevel: optNum,
   recPhase: z.union([z.enum(["vegetatif", "generatif", "pemulihan"]), z.literal("")]).optional(),
   recNote: z.string().trim().max(300).optional(),
@@ -41,13 +43,13 @@ export async function createChemicalAction(_p: ActionState, fd: FormData): Promi
     if (!ctx.companyId) return { ok: false, message: "Pilih satu entitas dulu di kanan atas." };
     const parsed = chemSchema.safeParse({
       code: fd.get("code"), name: fd.get("name"), category: fd.get("category"),
-      isOrganic: String(fd.get("isOrganic") ?? ""), unit: fd.get("unit") || "kg", stockQty: fd.get("stockQty") || "0",
+      isOrganic: String(fd.get("isOrganic") ?? ""), unit: fd.get("unit") || "kg",
       reorderLevel: fd.get("reorderLevel") || "", recPhase: fd.get("recPhase") ?? "", recNote: fd.get("recNote") ?? "",
     });
     if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
     await createChemical(ctx, {
       code: parsed.data.code, name: parsed.data.name, category: parsed.data.category,
-      isOrganic: parsed.data.isOrganic === "organik", unit: parsed.data.unit, stockQty: parsed.data.stockQty,
+      isOrganic: parsed.data.isOrganic === "organik", unit: parsed.data.unit,
       reorderLevel: numOrNull(parsed.data.reorderLevel), recPhase: parsed.data.recPhase || null, recNote: parsed.data.recNote || null,
     });
     revalidatePath("/agri-input/chemical");

@@ -54,6 +54,8 @@ async function setup() {
     `DELETE FROM app.emission_factors WHERE code IN ('EF-TEST','EF-X','EF-Y','EF-Z','EF-W','EF-VIEWER','EF-NEG')`,
     `DELETE FROM app.master_items WHERE company_id IN ($1,$2) OR code IN ('UOMKG','GLOB')`,
     `DELETE FROM app.report_definitions WHERE company_id IN ($1,$2)`,
+    `DELETE FROM app.seed_distributions WHERE seed_batch_id IN (SELECT id FROM app.seed_batches WHERE company_id IN ($1,$2))`,
+    `DELETE FROM app.seed_batches WHERE company_id IN ($1,$2)`,
     `DELETE FROM app.fiscal_periods WHERE company_id IN ($1,$2)`,
     `DELETE FROM app.blocks WHERE company_id IN ($1,$2)`,
     `DELETE FROM app.estates WHERE company_id IN ($1,$2)`,
@@ -92,6 +94,8 @@ async function setup() {
   await q(`INSERT INTO app.master_items (id,master_type_id,company_id,code,name)
            SELECT '66666666-0000-0000-0000-00000000000a',id,$1,'SEED','Bibit' FROM app.master_types WHERE code='cost_category'`, [CA])
   await q(`INSERT INTO app.cost_centers (id,code,name) VALUES ('77777777-0000-0000-0000-00000000000a','PLT','Plantation')`)
+  await q(`INSERT INTO app.seed_batches (id,company_id,code,crop_id,received_on,qty_initial)
+           SELECT '99999999-0000-0000-0000-00000000000a',$1,'NRS-ADV',id,'2026-01-01',100 FROM app.crops ORDER BY code LIMIT 1`, [CA])
   await c.end()
 }
 
@@ -201,6 +205,11 @@ async function run() {
   await mustFail(c, 'viewer INSERT blok DITOLAK',
     `INSERT INTO app.blocks (company_id,estate_id,code,boundary_source) VALUES ($1,$2,'V-BLK','gps_survey')`,
     [CA, EA], /row-level security/i)
+  // seed_distributions luput dari daftar writable 0018; policy-nya baru dipasang 0042.
+  await mustFail(c, 'viewer INSERT distribusi bibit DITOLAK',
+    `INSERT INTO app.seed_distributions (seed_batch_id,block_id,qty,distributed_on)
+     VALUES ('99999999-0000-0000-0000-00000000000a',$1,10,'2026-02-01')`,
+    ['44444444-0000-0000-0000-00000000000a'], /row-level security/i)
 
   console.log('\n=== #4/#5: laporan built-in & master sistem terlindungi ===')
   await as(U_CREATOR, 'creator', CA)

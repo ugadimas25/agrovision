@@ -5,6 +5,7 @@ import type { ReportScreen, RadarAxis, BarDatum, PieDatum, ProgressItem, Tone } 
 import { carbonByBlock, latestCarbonRun } from "@/lib/repo/sustainability";
 import { budgetVsActual, listAllPending, listExpenditures, blockCostSummary } from "@/lib/repo/costing";
 import { reflectedCosts } from "@/lib/repo/pricing";
+import { CROP } from "@/lib/labels";
 
 const nf = (v: number | null | undefined, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? "—" : new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v));
 const N = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number(v));
@@ -20,7 +21,7 @@ const idrShort = (v: number | null) => {
 const sum = (xs: (number | null)[]) => { const v = xs.filter((x): x is number => x !== null); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
 const GRADE_COLOR: Record<string, string> = { A: "#1f8033", B: "#eab308", C: "#ef4444" };
 const APPROVED = "approved";
-const CROP: Record<string, string> = { DURIAN: "Durian", COCONUT: "Kelapa" };
+// Peta komoditas dipusatkan di src/lib/labels.ts (dulu disalin di 4 berkas).
 
 /** Kode subkelas (limiting) BBSDLP → label & saran. */
 const LIMIT: Record<string, { label: string; advice: string }> = {
@@ -477,7 +478,7 @@ async function harvestScreen(ctx: RlsContext): Promise<ReportScreen> {
 async function chemicalScreen(ctx: RlsContext): Promise<ReportScreen> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT code, name, category, is_organic::text AS organik, unit, stock_qty, reorder_level, rec_phase
-      FROM app.agri_input_chemicals WHERE is_active ORDER BY name`);
+      FROM app.v_agri_input_stock WHERE is_active ORDER BY name`);
   const totItem = rows.length;
   const organikCount = rows.filter((r) => r.organik === "true").length;
   const organikPct = totItem > 0 ? (organikCount / totItem) * 100 : 0;
