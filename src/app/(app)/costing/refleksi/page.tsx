@@ -13,7 +13,11 @@ export const metadata = { title: "Refleksi Biaya — AgroVision" };
 export default async function Page() {
   let ctx;
   try { ctx = await requireContext(); } catch { redirect("/login"); }
-  const canEdit = ["approver", "super_admin"].includes(ctx.session.role);
+  // §17 Keputusan 3: menerbitkan tarif = super_admin SAJA. Ditegakkan berlapis —
+  // policy price_list_writer_* (0041), self-gate app.publish_price(), dan
+  // requireRole di setPriceRateAction. Ini hanya menyembunyikan tombol yang
+  // pasti gagal.
+  const canEdit = ctx.session.role === "super_admin";
 
   const [prices, reflection] = await Promise.all([getPriceList(ctx), reflectedCosts(ctx)]);
   const costRates = prices.filter((p) => p.kind === "cost");
@@ -126,10 +130,10 @@ export default async function Page() {
         )}
       </section>
 
-      {/* Price list — tarif dapat diubah approver */}
+      {/* Price list — tarif diterbitkan berversi oleh super_admin (K-02 §14) */}
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         <h2 className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-800">
-          Price List <span className="font-normal text-slate-500">— {canEdit ? "klik tarif untuk mengubah" : "hanya approver/super admin yang bisa mengubah"}</span>
+          Price List <span className="font-normal text-slate-500">— {canEdit ? "klik tarif untuk menerbitkan versi baru; nilai historis tidak berubah" : "hanya super admin yang bisa menerbitkan tarif"}</span>
         </h2>
         <ResponsiveTable>
           <table className="w-full text-sm">
@@ -152,7 +156,7 @@ export default async function Page() {
                     </span>
                   </td>
                   <td data-label="Tarif" className="px-4 py-2 text-right">
-                    <PriceRateEditor id={p.id} rateIdr={p.rateIdr} unit={p.unit} canEdit={canEdit} />
+                    <PriceRateEditor code={p.code} rateIdr={p.rateIdr} unit={p.unit} canEdit={canEdit} />
                   </td>
                 </tr>
               ))}
