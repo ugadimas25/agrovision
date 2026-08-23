@@ -45,7 +45,9 @@ export default async function Page() {
               { kind: "select", name: "category", label: "Kategori", options: CATEGORIES, required: true },
               { kind: "select", name: "isOrganic", label: "Jalur", options: [{ value: "sintetik", label: "Sintetik" }, { value: "organik", label: "Organik" }], required: true },
               { kind: "text", name: "unit", label: "Satuan", type: "text", placeholder: "kg / liter" },
-              { kind: "text", name: "stockQty", label: "Stok awal", type: "number", step: "any", min: "0" },
+              // "Stok awal" dihapus (§17 Keputusan 1): stok hanya bergerak lewat buku
+              // besar mutasi, dan pemasukan stok adalah wewenang super_admin. Katalog
+              // baru mulai dari nol — angka stok tidak boleh lahir dari form katalog.
               { kind: "text", name: "reorderLevel", label: "Titik pesan ulang", type: "number", step: "any", min: "0" },
               { kind: "select", name: "recPhase", label: "Rekomendasi fase", options: [{ value: "vegetatif", label: "Vegetatif" }, { value: "generatif", label: "Generatif" }, { value: "pemulihan", label: "Pemulihan" }], allowEmpty: true },
               { kind: "textarea", name: "recNote", label: "Catatan rekomendasi (opsional)" },
@@ -73,7 +75,9 @@ export default async function Page() {
               </thead>
               <tbody>
                 {items.map((i) => {
-                  const low = i.reorderLevel !== null && i.stockQty <= i.reorderLevel;
+                  // needs_reorder dari view: null bila reorder level belum diisi —
+                  // "perlu reorder" memang belum bisa dijawab, bukan "tidak perlu".
+                  const low = i.needsReorder === true;
                   return (
                     <tr key={i.id} className="border-b border-slate-50 last:border-0">
                       <td data-label="Kode" className="px-4 py-2 font-mono text-xs text-slate-500">{i.code}</td>

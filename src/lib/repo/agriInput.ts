@@ -9,8 +9,11 @@ export type ChemicalRow = {
   category: string;
   isOrganic: boolean;
   unit: string;
+  /** Turunan buku besar mutasi (Σ in − Σ out ± adjustment), bukan kolom (migrasi 0043). */
   stockQty: number;
   reorderLevel: number | null;
+  /** null = reorder level belum diisi, jadi "perlu reorder" belum bisa dijawab. */
+  needsReorder: boolean | null;
   recPhase: string | null;
   recNote: string | null;
   isActive: boolean;
@@ -18,32 +21,40 @@ export type ChemicalRow = {
 
 export async function listChemicals(ctx: RlsContext): Promise<ChemicalRow[]> {
   const rows = await rlsQuery<{
-    id: string; code: string; name: string; category: string; is_organic: boolean;
+    chemical_id: string; code: string; name: string; category: string; is_organic: boolean;
     unit: string; stock_qty: string; reorder_level: string | null; rec_phase: string | null;
-    rec_note: string | null; is_active: boolean;
+    rec_note: string | null; is_active: boolean; needs_reorder: boolean | null;
   }>(
     ctx,
-    `SELECT id, code, name, category, is_organic, unit, stock_qty, reorder_level, rec_phase, rec_note, is_active
-       FROM app.agri_input_chemicals ORDER BY category, name`,
+    // v_agri_input_stock, BUKAN tabel katalog: sejak 0043 stok adalah turunan buku
+    // besar mutasi dan kolom stock_qty sudah dihapus (dua sumber kebenaran untuk
+    // satu fakta adalah cacat — pelajaran migrasi 0023).
+    `SELECT chemical_id, code, name, category, is_organic, unit, stock_qty,
+            reorder_level, rec_phase, rec_note, is_active, needs_reorder
+       FROM app.v_agri_input_stock ORDER BY category, name`,
   );
   return rows.map((r) => ({
-    id: r.id, code: r.code, name: r.name, category: r.category, isOrganic: r.is_organic,
+    id: r.chemical_id, code: r.code, name: r.name, category: r.category, isOrganic: r.is_organic,
     unit: r.unit, stockQty: Number(r.stock_qty), reorderLevel: r.reorder_level === null ? null : Number(r.reorder_level),
+    needsReorder: r.needs_reorder,
     recPhase: r.rec_phase, recNote: r.rec_note, isActive: r.is_active,
   }));
 }
 
 export async function createChemical(
   ctx: RlsContext,
-  input: { code: string; name: string; category: string; isOrganic: boolean; unit: string; stockQty: number; reorderLevel?: number | null; recPhase?: string | null; recNote?: string | null },
+  // stockQty TIDAK lagi diterima: stok hanya lahir dari mutasi buku besar, dan
+  // mutasi 'in'/'adjustment' adalah wewenang super_admin (§17 Keputusan 1).
+  // Katalog baru dimulai dari stok nol — fakta, bukan asumsi.
+  input: { code: string; name: string; category: string; isOrganic: boolean; unit: string; reorderLevel?: number | null; recPhase?: string | null; recNote?: string | null },
 ): Promise<string> {
   const rows = await rlsQuery<{ id: string }>(
     ctx,
     `INSERT INTO app.agri_input_chemicals
-       (company_id, code, name, category, is_organic, unit, stock_qty, reorder_level, rec_phase, rec_note, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+       (company_id, code, name, category, is_organic, unit, reorder_level, rec_phase, rec_note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
     [ctx.companyId, input.code, input.name, input.category, input.isOrganic, input.unit,
-     input.stockQty, input.reorderLevel ?? null, input.recPhase ?? null, input.recNote ?? null, ctx.userId],
+     input.reorderLevel ?? null, input.recPhase ?? null, input.recNote ?? null, ctx.userId],
   );
   return rows[0].id;
 }

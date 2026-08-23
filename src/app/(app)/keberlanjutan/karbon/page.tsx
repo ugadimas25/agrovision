@@ -1,9 +1,14 @@
 import { redirect } from "next/navigation";
-import { Cloud, Info } from "lucide-react";
+import { Cloud, Info, Ruler } from "lucide-react";
 import { requireContext } from "@/lib/session";
 import {
   carbonByBlock, carbonNeedsValidation, latestCarbonRun, listEmissionFactors,
 } from "@/lib/repo/sustainability";
+import { listCropOptions, listOpRecords } from "@/lib/repo/operational";
+import { searchBlockOptions } from "@/lib/repo/blocks";
+import { createDbhAction } from "@/lib/actions/operational";
+import { OpRecordForm } from "@/components/ui/OpRecordForm";
+import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getLocale } from "@/lib/i18n-server";
 import { getDict } from "@/lib/i18n";
@@ -34,12 +39,17 @@ export default async function KarbonPage() {
   }
   const t = getDict(await getLocale());
 
-  const [run, blocks, factors, needsValidation] = await Promise.all([
+  const [run, blocks, factors, needsValidation, dbhRows, blockOptions, cropOptions] = await Promise.all([
     latestCarbonRun(ctx),
     carbonByBlock(ctx),
     listEmissionFactors(ctx),
     carbonNeedsValidation(ctx),
+    listOpRecords(ctx, "dbh_measurements"),
+    searchBlockOptions(ctx),
+    listCropOptions(ctx),
   ]);
+  const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
+  const dbhReady = canWrite && ctx.companyId && blockOptions.length > 0 && cropOptions.length > 0;
 
   const net = run?.netBalanceTco2e ?? null;
 
@@ -173,6 +183,37 @@ export default async function KarbonPage() {
           </section>
         </>
       )}
+
+      {/* AI-20: jalur input DBH — dasar sisi serapan carbon run (QA B-11). */}
+      <section className="mt-5">
+        <h2 className="text-sm font-semibold text-slate-800">Pengukuran DBH</h2>
+        <p className="mb-3 mt-1 text-xs leading-relaxed text-slate-500">
+          Diameter batang setinggi dada (standar 1,3 m). Form ini hanya merekam hasil
+          ukur lapangan — biomassa dan serapan dihitung carbon run, bukan di sini.
+        </p>
+        {dbhReady && (
+          <div className="mb-4">
+            <OpRecordForm
+              title="Catat pengukuran DBH"
+              action={createDbhAction}
+              fields={[
+                { kind: "select", name: "blockId", label: "Blok", options: blockOptions, required: true },
+                { kind: "select", name: "cropId", label: "Tanaman", options: cropOptions, required: true },
+                { kind: "text", name: "measuredAt", label: "Tanggal ukur", type: "date", required: true },
+                { kind: "text", name: "dbhCm", label: "DBH (cm)", type: "number", step: "0.01", min: "0.01", required: true, hint: "Diukur pada ketinggian 1,3 m dari tanah" },
+                { kind: "text", name: "heightM", label: "Tinggi pohon (m) — opsional", type: "number", step: "0.01", min: "0.01" },
+              ]}
+            />
+          </div>
+        )}
+        <OpRecordTable
+          rows={dbhRows.rows}
+          moduleKey="dbh_measurements"
+          emptyIcon={Ruler}
+          emptyTitle="Belum ada pengukuran DBH"
+          canWrite={canWrite}
+        />
+      </section>
 
       <section className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <h2 className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-800">

@@ -793,13 +793,29 @@ async function seed() {
   ]
   const chemIds = {}
   for (const [code, name, cat, org, unit, , reorder, phase, note] of chemRows) {
+    // stock_qty DIHAPUS oleh migrasi 0043: stok kini turunan buku besar mutasi,
+    // bukan kolom yang bisa ditulis ulang. Seed ini sempat GAGAL total karena
+    // masih mengisi kolom itu ("column stock_qty does not exist") -- dan itu
+    // mematikan jalur pemulihan yang didokumentasikan
+    // (db:purge:demo -> db:seed:demo), termasuk yang disarankan
+    // check_production_readiness().
     const r = await c.query(
       `INSERT INTO app.agri_input_chemicals
-         (company_id, code, name, category, is_organic, unit, stock_qty, reorder_level, rec_phase, rec_note, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         (company_id, code, name, category, is_organic, unit, reorder_level, rec_phase, rec_note, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (company_id, code) DO NOTHING RETURNING id`,
-      [CO, code, name, cat, org, unit, 500, reorder, phase, note, users[0][0]])
-    if (r.rows[0]) chemIds[code] = r.rows[0].id
+      [CO, code, name, cat, org, unit, reorder, phase, note, users[0][0]])
+    if (r.rows[0]) {
+      chemIds[code] = r.rows[0].id
+      // Saldo awal sebagai BARIS MUTASI, meniru cara 0043 memindahkan saldo lama.
+      // Tanpa ini v_agri_input_stock nol untuk semua item dan alert reorder demo
+      // kehilangan artinya.
+      await c.query(
+        `INSERT INTO app.agri_input_stock_movements
+           (company_id, chemical_id, moved_on, direction, quantity, note, created_by)
+         VALUES ($1,$2,CURRENT_DATE,'adjustment',$3,'Saldo awal demo',$4)`,
+        [CO, r.rows[0].id, 500, users[0][0]])
+    }
   }
   const equipRows = [
     ['DRONE-01', 'Drone survei DJI',      'drone',     45000000, '2×/minggu', 'listrik', 0.5],
