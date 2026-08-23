@@ -1,12 +1,15 @@
 import { redirect } from "next/navigation";
-import { Calculator, Info, TrendingUp, Scale } from "lucide-react";
+import { Calculator, Info, TrendingUp, Scale, TriangleAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
-import { getPriceList, reflectedCosts } from "@/lib/repo/pricing";
+import { driverOptions, getPriceList, reflectedCosts } from "@/lib/repo/pricing";
+import { listParentCategoryOptions } from "@/lib/repo/master";
+import { todayInOperationalZone } from "@/lib/date";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
 import { formatIdr, formatIdrShort, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PriceRateEditor } from "./PriceRateEditor";
+import { PriceRowForm } from "./PriceRowForm";
 
 export const metadata = { title: "Refleksi Biaya — AgroVision" };
 
@@ -19,9 +22,19 @@ export default async function Page() {
   // pasti gagal.
   const canEdit = ctx.session.role === "super_admin";
 
-  const [prices, reflection] = await Promise.all([getPriceList(ctx), reflectedCosts(ctx)]);
+  const [prices, reflection, kategoriAkuntansi] = await Promise.all([
+    getPriceList(ctx),
+    reflectedCosts(ctx),
+    // Hanya dibutuhkan form tambah baris; kategori INDUK karena anggaran
+    // dipasang di tingkat induk dan v_budget_vs_actual mencocokkan
+    // cost_category_id secara persis (34 sub-kategori masih menunggu keputusan
+    // granularitas, docs/13 §10c).
+    canEdit ? listParentCategoryOptions(ctx) : Promise.resolve([]),
+  ]);
   const costRates = prices.filter((p) => p.kind === "cost");
   const revenueRates = prices.filter((p) => p.kind === "revenue");
+  const drivers = driverOptions();
+  const driverLabel = new Map(drivers.map((d) => [d.value, d.label]));
 
   // Revenue nyata dari panen disetujui × tarif; null bila belum ada panen.
   const hasRevenue = reflection.revenueLines.length > 0;
@@ -38,11 +51,13 @@ export default async function Page() {
       <div className="mb-5 flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50 p-3">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
         <p className="text-sm leading-relaxed text-sky-900">
-          Tidak ada input biaya manual. Setiap biaya di bawah dihitung otomatis dari <strong>volume
-          operasional nyata</strong> (luas blok, luas persiapan lahan, jumlah bibit, jumlah pupuk)
-          dikalikan <strong>tarif</strong> di price list. Ubah tarif → seluruh angka ikut berubah.
-          Price list adalah <em>single point of failure</em> (docs/11 §10a): hanya approver/super
-          admin yang boleh mengubah, dan idealnya di-versioning per periode.
+          Setiap biaya di bawah dihitung dari <strong>volume operasional nyata</strong> dikalikan{" "}
+          <strong>tarif</strong> di price list; kolom <em>Driver volume</em> menyebut metrik mana yang
+          dipakai tiap baris. Angka di layar ini adalah <strong>pratinjau berjalan</strong> — biaya
+          yang mengikat lahir saat record disetujui dan disimpan sebagai snapshot, sehingga
+          menerbitkan tarif baru tidak mengubah biaya yang sudah terjadi (K-01/K-02). Price list
+          adalah <em>single point of failure</em> (docs/11 §10a): hanya <strong>super admin</strong>
+          yang boleh menambah baris dan menerbitkan tarif (K-06 Keputusan 3).
         </p>
       </div>
 
@@ -109,9 +124,14 @@ export default async function Page() {
                   <tr key={l.code} className="border-b border-slate-50 last:border-0">
                     <td data-label="Komponen" className="px-4 py-2 text-slate-700">{l.category}</td>
                     <td data-label="Sumber volume" className="px-4 py-2 text-xs text-slate-500">{l.driverLabel}</td>
-                    <td data-label="Volume" className="px-4 py-2 text-right tabular-nums text-slate-600">{formatNumber(l.volume)} {l.unit}</td>
+                    {/* Volume null = belum ada catatan sumber sama sekali. Satuan
+                        TIDAK dicetak di sebelah em-dash: "— ha" terbaca seperti
+                        nol hektar, padahal artinya belum ada datanya. */}
+                    <td data-label="Volume" className={cn("px-4 py-2 text-right tabular-nums", l.volume === null ? "text-slate-300" : "text-slate-600")}>
+                      {l.volume === null ? EMPTY : `${formatNumber(l.volume)} ${l.unit}`}
+                    </td>
                     <td data-label="Tarif" className="px-4 py-2 text-right tabular-nums text-slate-500">{formatIdrShort(l.rateIdr)}</td>
-                    <td data-label="Biaya" className="px-4 py-2 text-right tabular-nums font-medium text-slate-800">{formatIdr(l.amountIdr)}</td>
+                    <td data-label="Biaya" className={cn("px-4 py-2 text-right tabular-nums font-medium", l.amountIdr === null ? "text-slate-300" : "text-slate-800")}>{formatIdr(l.amountIdr)}</td>
                   </tr>
                 ))}
                 <tr className="bg-slate-50 font-semibold">
@@ -128,6 +148,32 @@ export default async function Page() {
             {reflection.manualCost.map((m) => `${m.category} (${formatIdrShort(m.rateIdr)}/${m.unit})`).join(", ")}.
           </p>
         )}
+        {/* Baris tarif yang TIDAK bisa direfleksikan wajib kelihatan. Sebelumnya
+            reflectedCosts() melewatinya tanpa suara, sehingga tarif ber-driver
+            yang tidak dikenal DRIVER_SQL hilang dari layar sementara
+            app.decide_record() tetap memateralisasikan biayanya — dua layar
+            menyebut angka berbeda untuk hal yang sama. */}
+        {reflection.unknownDrivers.length > 0 && (
+          <p className="flex items-start gap-1.5 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs leading-relaxed text-amber-900">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              <strong>Tidak ikut dihitung di layar ini:</strong>{" "}
+              {reflection.unknownDrivers.map((u) => `${u.category} (${u.code} · driver ${u.driver})`).join(", ")}.
+              Drivernya belum punya query volume di aplikasi, jadi biayanya hanya muncul setelah
+              record disetujui — bukan berarti nol.
+            </span>
+          </p>
+        )}
+        {reflection.driverConflicts.length > 0 && (
+          <p className="flex items-start gap-1.5 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs leading-relaxed text-amber-900">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              <strong>Driver dipakai lebih dari satu tarif aktif:</strong>{" "}
+              {reflection.driverConflicts.map((c) => `${c.code} bertabrakan dengan ${c.dipakaiOleh} (${c.driver})`).join(", ")}.
+              Volumenya dihitung sekali saja — nonaktifkan salah satu baris.
+            </span>
+          </p>
+        )}
       </section>
 
       {/* Price list — tarif diterbitkan berversi oleh super_admin (K-02 §14) */}
@@ -135,6 +181,11 @@ export default async function Page() {
         <h2 className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-800">
           Price List <span className="font-normal text-slate-500">— {canEdit ? "klik tarif untuk menerbitkan versi baru; nilai historis tidak berubah" : "hanya super admin yang bisa menerbitkan tarif"}</span>
         </h2>
+
+        {canEdit && (
+          <PriceRowForm driverOptions={drivers} categoryOptions={kategoriAkuntansi} hariIni={todayInOperationalZone()} />
+        )}
+
         <ResponsiveTable>
           <table className="w-full text-sm">
             <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs text-slate-500">
@@ -142,6 +193,13 @@ export default async function Page() {
                 <th className="px-4 py-2 font-medium">Kode</th>
                 <th className="px-4 py-2 font-medium">Kategori</th>
                 <th className="px-4 py-2 font-medium">Jenis</th>
+                {/* Tiga kolom di bawah menentukan PERILAKU baris tapi sebelumnya
+                    tidak pernah terlihat (K-09 §19): driver = metrik volume yang
+                    mengalikan tarif ini, satuan = arti angka volumenya, status =
+                    apakah baris ini ikut dihitung. */}
+                <th className="px-4 py-2 font-medium">Driver volume</th>
+                <th className="px-4 py-2 font-medium">Satuan</th>
+                <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 text-right font-medium">Tarif</th>
               </tr>
             </thead>
@@ -153,6 +211,22 @@ export default async function Page() {
                   <td data-label="Jenis" className="px-4 py-2">
                     <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium", p.kind === "revenue" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600")}>
                       {p.kind === "revenue" ? "Revenue" : "Biaya"}
+                    </span>
+                  </td>
+                  <td data-label="Driver volume" className="px-4 py-2 text-xs">
+                    {p.driver ? (
+                      <span className="text-slate-600">{driverLabel.get(p.driver) ?? p.driver}</span>
+                    ) : (
+                      // Ditandai DI BARISNYA, bukan sebagai catatan kaki (K-09
+                      // konsekuensi 2): baris tanpa driver tidak pernah lahir
+                      // sendiri dari aktivitas.
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-500">tarif manual</span>
+                    )}
+                  </td>
+                  <td data-label="Satuan" className="px-4 py-2 text-xs text-slate-600">{p.unit}</td>
+                  <td data-label="Status" className="px-4 py-2">
+                    <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium", p.isActive ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}>
+                      {p.isActive ? "Aktif" : "Nonaktif"}
                     </span>
                   </td>
                   <td data-label="Tarif" className="px-4 py-2 text-right">
