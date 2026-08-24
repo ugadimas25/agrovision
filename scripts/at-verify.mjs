@@ -914,6 +914,110 @@ async function main() {
     ok("filter ngawur diperlakukan sebagai tanpa filter", angka(ngawur.html) === angka(base.html));
   }
 
+  console.log("\n=== AI-28: aksi baris pengguna (nonaktifkan / aktifkan / hapus) ===");
+  {
+    // Blok ini memakai pengguna SEKALI PAKAI, bukan akun seed.
+    //
+    // Versi pertama menonaktifkan viewer@agrovision.local lalu mengaktifkannya
+    // kembali di langkah terakhir. Begitu ada satu kegagalan di tengah, langkah
+    // pemulihan itu tidak pernah jalan -- viewer tertinggal nonaktif, dan run
+    // BERIKUTNYA gagal di prasyarat dengan sebab yang sama sekali berbeda,
+    // menutupi kegagalan aslinya. Itu betul-betul terjadi. Pemulihan tidak boleh
+    // menjadi langkah yang bisa terlewat.
+    const DEV = "(SELECT id FROM app.companies WHERE code='DEV')";
+    const EMAIL = "at28-sekali-pakai@uji.invalid";
+    await psql(`DELETE FROM app.user_company_access WHERE user_id IN (SELECT id FROM app.users WHERE email='${EMAIL}')`);
+    await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
+    await psql(`INSERT INTO app.users (company_id, external_id, email, full_name, role, app_role, is_active)
+                VALUES (${DEV}, 'at28-sekali-pakai', '${EMAIL}', 'Uji AI-28', 'manager', 'viewer', true)`);
+    await psql(`INSERT INTO app.user_company_access (user_id, company_id)
+                SELECT id, ${DEV} FROM app.users WHERE email='${EMAIL}' ON CONFLICT DO NOTHING`);
+    const target = await psql(`SELECT id::text FROM app.users WHERE email='${EMAIL}'`);
+    ok("prasyarat: pengguna sekali pakai dibuat", /^[0-9a-f-]{36}$/.test(target), target);
+    const aktifDi = async () => psql(`SELECT is_active::text FROM app.users WHERE id='${target}'`);
+
+    // Halaman ini boleh DILIHAT approver (A-09) tapi mutasinya hanya super_admin.
+    const sa = await login("admin@agrovision.local");
+    const ap = await login("approver@agrovision.local");
+    const halSa = await sa.get("/pengguna");
+    const halAp = await ap.get("/pengguna");
+    ok("super_admin melihat aksi per baris", /data-testid="nonaktifkan-pengguna"/.test(halSa.html));
+    ok("approver melihat daftar tapi TIDAK melihat aksi",
+      halAp.status === 200 && /Uji AI-28/.test(halAp.html) && !/data-testid="nonaktifkan-pengguna"/.test(halAp.html));
+    // Akun sendiri tidak boleh punya tombol: menonaktifkan diri sendiri mengunci
+    // pelakunya keluar pada request berikutnya.
+    ok("akun sendiri tidak diberi tombol", /akun Anda sendiri/.test(halSa.html));
+
+    // Pengguna aktif memang bisa masuk — supaya "tidak bisa masuk" nanti
+    // membuktikan penonaktifannya, bukan sekadar akun yang tidak ada.
+    let bisaMasukAwal = true;
+    try { await login(EMAIL); } catch { bisaMasukAwal = false; }
+    ok("pengguna sekali pakai bisa masuk selagi aktif", bisaMasukAwal);
+
+    // POST langsung sebagai APPROVER — inilah gerbang yang sebenarnya. Field
+    // $ACTION_* dipanen dari HTML SUPER_ADMIN (approver tidak dikirimi formnya)
+    // lalu dikirim memakai kuki approver: persis yang bisa dilakukan penyerang
+    // yang pernah melihat HTML orang lain sekali saja.
+    //
+    // pickForm mengembalikan { hidden }, BUKAN map-nya. Versi pertama uji ini
+    // meng-iterasi objek pembungkusnya, jadi tidak satu pun field $ACTION_*
+    // terkirim -> Next menjawab 500 sebelum kode aplikasi jalan, dan ujinya
+    // "lulus" karena pengguna memang tetap aktif. Serangan yang tidak sampai ke
+    // sasaran tidak membuktikan sasarannya terlindungi.
+    const aksi = pickForm(halSa.html, "nonaktifkan-pengguna")?.hidden;
+    ok("prasyarat: field aksi bisa dipanen dari HTML super_admin",
+      Boolean(aksi) && Object.keys(aksi).some((k) => k.startsWith("$ACTION")),
+      `${Object.keys(aksi ?? {}).length} field`);
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(aksi ?? {})) fd.append(k, v);
+    fd.set("id", target);
+    fd.set("aktifkan", "0");
+    const tembus = await fetch(`${BASE}/pengguna`, {
+      method: "POST", headers: { cookie: ap.header() }, body: fd, redirect: "manual",
+    });
+    const balasan = await tembus.text();
+    ok("approver POST langsung DITOLAK dengan rapi, pengguna tetap aktif",
+      (await aktifDi()) === "true" && tembus.status === 200 && /Hanya Super Admin/.test(balasan),
+      `is_active=${await aktifDi()} (status ${tembus.status})`);
+
+    // super_admin menonaktifkan lewat form sungguhan.
+    await sa.submit("/pengguna", { id: target, aktifkan: "0" }, { formMarker: "nonaktifkan-pengguna" });
+    ok("super_admin bisa menonaktifkan", (await aktifDi()) === "false", `is_active=${await aktifDi()}`);
+
+    // Nonaktif = akses benar-benar mati, bukan hanya lencana berubah. Sesi
+    // diverifikasi ulang ke DB setiap request, jadi login harus gagal.
+    let bisaMasuk = true;
+    try { await login(EMAIL); } catch { bisaMasuk = false; }
+    ok("pengguna nonaktif tidak bisa masuk lagi", bisaMasuk === false);
+
+    // Tombol Hapus baru muncul SETELAH nonaktif (dua langkah, bukan satu klik).
+    ok("tombol Hapus hanya muncul untuk pengguna nonaktif",
+      /data-testid="hapus-pengguna"/.test((await sa.get("/pengguna")).html));
+
+    // Aktifkan kembali lewat UI, lalu hapus benar-benar lewat UI.
+    await sa.submit("/pengguna", { id: target, aktifkan: "1" }, { formMarker: "aktifkan-pengguna" });
+    ok("bisa diaktifkan kembali", (await aktifDi()) === "true", `is_active=${await aktifDi()}`);
+
+    // Hapus pengguna aktif ditolak: dua langkah wajib.
+    await sa.submit("/pengguna", { id: target, aktifkan: "0" }, { formMarker: "nonaktifkan-pengguna" });
+    await sa.submit("/pengguna", { id: target }, { formMarker: "hapus-pengguna" });
+    const sisa = await psql(`SELECT count(*)::text FROM app.users WHERE id='${target}'`);
+    ok("pengguna nonaktif tanpa riwayat benar-benar terhapus lewat UI", sisa === "0", `${sisa} baris tersisa`);
+
+    // Super_admin aktif terakhir: ditolak, dengan alasan yang bisa dibaca.
+    const diriSendiri = await psql(`SELECT id::text FROM app.users WHERE email='admin@agrovision.local'`);
+    const tolak = await sa.submit("/pengguna", { id: diriSendiri, aktifkan: "0" }, { formMarker: "nonaktifkan-pengguna" });
+    const saAktif = await psql(`SELECT is_active::text FROM app.users WHERE id='${diriSendiri}'`);
+    ok("super_admin tidak bisa menonaktifkan dirinya sendiri", saAktif === "true" && tolak.status !== 500,
+      `is_active=${saAktif} (status ${tolak.status})`);
+
+    // Pembersihan terakhir bersifat SABUK PENGAMAN, bukan penopang: kalau blok di
+    // atas gagal di tengah, baris sekali pakai ini tetap dibuang di run berikutnya
+    // oleh DELETE di awal blok.
+    await psql(`DELETE FROM app.user_company_access WHERE user_id IN (SELECT id FROM app.users WHERE email='${EMAIL}')`);
+    await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
+  }
+
   console.log("\n=== 0051: Jadwal vs Realisasi penyiangan DIHITUNG, bukan diklaim ===");
   {
     // Kolom ini sebelumnya literal "Tepat waktu" untuk setiap baris. Sekarang
