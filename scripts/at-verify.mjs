@@ -210,13 +210,16 @@ async function main() {
   // tenant — dan benar-benar menyapu data demo saat suite ini dijalankan.
   await psql(`DELETE FROM app.budgets WHERE company_id='00000000-0000-4000-8000-000000000001'`);
   await psql(`DELETE FROM app.fiscal_periods WHERE code LIKE 'FASE-UJI%'`);
-  await psql(`DELETE FROM app.master_items WHERE code LIKE 'TEST%'`);
-  // Baris tarif fixture AI-44a. audit_log lebih dulu: trigger price_list_audit
-  // (0041 §8) menulis satu baris per perubahan dan entity_id-nya menunjuk ke
-  // sini. price_list append-only untuk aplikasi, tapi psql ini superuser.
+  // URUTAN PENTING: baris tarif fixture dihapus SEBELUM master_items, karena sejak
+  // AI-44b tarif bisa menunjuk kategori uji (price_list_cost_category_id_fkey) dan
+  // menghapus kategorinya lebih dulu akan gagal FK.
+  // audit_log lebih dulu lagi: trigger price_list_audit (0041 §8) menulis satu baris
+  // per perubahan dengan entity_id yang menunjuk ke sini. price_list append-only
+  // untuk aplikasi, tapi psql ini superuser.
   await psql(`DELETE FROM app.audit_log WHERE entity_type='price_list' AND entity_id IN (
                 SELECT id FROM app.price_list WHERE code LIKE 'UJITARIF%')`);
   await psql(`DELETE FROM app.price_list WHERE code LIKE 'UJITARIF%'`);
+  await psql(`DELETE FROM app.master_items WHERE code LIKE 'TEST%'`);
   // Inbox harus terisolasi: sisa transaksi 'submitted' dari run lama akan
   // membuat hitungan item dan pemilihan baris ikut kacau.
   await psql(`DELETE FROM app.evidence_links WHERE entity_id IN (
@@ -418,6 +421,64 @@ async function main() {
       rpt.html.includes("7.000.000") && rpt.html.includes("70.250"));
     ok("pendapatan & break-even tetap kosong jujur (belum ada panen)",
       /sengaja kosong/.test(rpt.html));
+  }
+
+  console.log("\n=== AI-44b: ubah metadata tarif dari UI (K-09 §19) ===");
+  {
+    // Kategori akuntansi adalah kunci pembanding anggaran. Sebelum AI-44b ia hanya
+    // bisa diisi seed/SQL, jadi setiap tenant baru butuh developer sebelum serapan
+    // anggarannya terisi -- itulah B-20 yang muncul lagi di instalasi baru.
+    const kode = `UJITARIF-META${stamp}`;
+    await admin.submit("/costing/refleksi",
+      { code: kode, kind: "cost", category: `Uji meta ${stamp}`, unit: "ha",
+        rateIdr: "1000", berlakuDari: "2026-09-02", driver: "", costCategoryId: "", note: "" },
+      { formMarker: 'data-testid="tambah-tarif"' });
+    const belum = await psql(`SELECT coalesce(cost_category_id::text,'NULL') FROM app.price_list WHERE code='${kode}'`);
+    ok("tarif baru lahir tanpa kategori akuntansi", belum === "NULL", belum);
+
+    const MARK = `data-testid="ubah-meta-${kode}"`;
+    const page = await admin.get("/costing/refleksi");
+    ok("editor metadata ada di HTML server (jalan tanpa JavaScript)", Boolean(pickForm(page.html, MARK)));
+    ok("baris tanpa kategori ditandai di layar", /belum dipetakan/.test(page.html));
+
+    // Entitas DEV sengaja bermaster-data KOSONG (db:seed:dev), jadi kategori yang
+    // dipakai adalah yang dibuat AT1 di atas -- bukan kategori demo.
+    const catId = optionId(page.html, "costCategoryId", `Kategori Uji ${stamp}`);
+    ok("dropdown kategori akuntansi terisi kategori INDUK", Boolean(catId), catName);
+
+    await admin.submit("/costing/refleksi",
+      { id: await psql(`SELECT id FROM app.price_list WHERE code='${kode}'`),
+        category: `Uji meta diperbaiki ${stamp}`, costCategoryId: catId, note: "dipetakan lewat UI", isActive: "true" },
+      { formMarker: MARK });
+    const sesudah = await psql(`SELECT coalesce(cost_category_id::text,'NULL')||'|'||category FROM app.price_list WHERE code='${kode}'`);
+    ok("kategori akuntansi & label tersimpan dari UI",
+      sesudah.startsWith(catId) && sesudah.includes("diperbaiki"), sesudah.slice(0, 60));
+
+    // Nonaktifkan: harus benar-benar tersimpan false. Ini yang gagal bila form
+    // memakai checkbox -- checkbox tak dicentang tidak terkirim, dan fungsi
+    // database memakai COALESCE, jadi terbaca "jangan ubah".
+    await admin.submit("/costing/refleksi",
+      { id: await psql(`SELECT id FROM app.price_list WHERE code='${kode}'`),
+        category: "", costCategoryId: catId, note: "", isActive: "false" },
+      { formMarker: MARK });
+    // ::text disengaja: psql mencetak kolom boolean apa adanya sebagai `f`/`t`,
+    // dan hanya cast ke text yang memberi `false`/`true`.
+    ok("status nonaktif benar-benar tersimpan (bukan diabaikan COALESCE)",
+      (await psql(`SELECT is_active::text FROM app.price_list WHERE code='${kode}'`)) === "false");
+
+    // Gerbang peran: creator tidak melihat editornya, dan POST langsung ditolak.
+    const refCreator = await creator.get("/costing/refleksi");
+    ok("creator tidak melihat editor metadata", pickForm(refCreator.html, MARK) === null);
+    const f = pickForm(page.html, MARK);
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(f.hidden)) fd.append(k, v);
+    fd.set("id", await psql(`SELECT id FROM app.price_list WHERE code='${kode}'`));
+    fd.set("category", "DISUSUPI"); fd.set("isActive", "true");
+    await fetch(`${BASE}/costing/refleksi`, {
+      method: "POST", headers: { cookie: creator.header() }, body: fd, redirect: "manual",
+    });
+    ok("POST langsung oleh creator tidak mengubah metadata",
+      !(await psql(`SELECT category FROM app.price_list WHERE code='${kode}'`)).includes("DISUSUPI"));
   }
 
   console.log("\n=== AI-05: form anggaran dinamis + pasangan lingkup↔pengenal ===");
