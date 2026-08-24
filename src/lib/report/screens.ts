@@ -152,14 +152,23 @@ const PREP_LABEL: Record<string, string> = { ready_to_plant: "Siap Tanam", in_pr
 async function landPrepScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
     SELECT lp.checked_at::text, b.code AS block, b.name AS bname, b.area_ha, lp.soil_ph, lp.planting_hole_count,
-           lp.effective_area_ha, lp.status::text AS pstatus, lp.approval_status::text AS st
-      FROM app.land_preparations lp JOIN app.blocks b ON b.id = lp.block_id ORDER BY lp.checked_at DESC`);
+           lp.effective_area_ha, lp.status::text AS pstatus, lp.approval_status::text AS st,
+           -- Layout/jarak tanam dari Master Data (tipe planting_layout, migrasi 0050).
+           -- Sebelum ini laporan mencetak literal '3 m × 3 m' untuk SETIAP baris
+           -- (13 dari 13) — spesifikasi agronomi yang tidak pernah dibaca dari
+           -- mana pun. NULL dirender em-dash: belum diisi bukan berarti 3×3.
+           pl.name AS planting_layout
+      FROM app.land_preparations lp
+      JOIN app.blocks b ON b.id = lp.block_id
+      LEFT JOIN app.master_items pl ON pl.id = lp.planting_layout_item_id
+     ORDER BY lp.checked_at DESC`);
   const readiness = rows.map((r) => PREP_PCT[r.pstatus ?? "not_started"] ?? 0);
   const avgReady = readiness.length ? Math.round(readiness.reduce((a, b) => a + b, 0) / readiness.length) : null;
   const totalHoles = sum(rows.map((r) => N(r.planting_hole_count)));
   const totalArea = sum(rows.map((r) => N(r.effective_area_ha)));
   const avgPh = (() => { const v = rows.map((r) => N(r.soil_ph)).filter((x): x is number => x !== null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; })();
   const readyCount = rows.filter((r) => r.pstatus === "ready_to_plant").length;
+  const layoutsUsed = [...new Set(rows.map((r) => r.planting_layout).filter((x): x is string => Boolean(x)))];
   const cols3 = ["not_started", "in_progress", "ready_to_plant"] as const;
   const prepTone = (s: string): Tone => (s === "ready_to_plant" ? "ok" : s === "in_progress" ? "perhatian" : "kritis");
   const journey = cols3.map((s) => {
@@ -187,7 +196,11 @@ async function landPrepScreen(ctx: RlsContext): Promise<ReportScreenBase> {
         { icon: "FlaskConical", label: "pH Tanah (rata-rata)", value: avgPh === null ? "—" : nf(avgPh, 1), badge: avgPh !== null && avgPh >= 5.5 && avgPh <= 6.5 ? { text: "Ideal (5,5–6,5)", tone: "ok" } : avgPh !== null ? { text: "Perlu koreksi", tone: "perhatian" } : undefined, tone: "ok" },
         { icon: "Sprout", label: "Lubang Tanam", value: totalHoles === null ? "—" : nf(totalHoles), pct: avgReady ?? undefined, tone: "ok" },
         { icon: "Ruler", label: "Luas Efektif", value: totalArea === null ? "—" : `${nf(totalArea, 2)} ha`, tone: "ok" },
-        { icon: "Target", label: "Jarak Tanam", value: "3 m × 3 m", badge: { text: "Standar", tone: "ok" }, tone: "default" },
+        // Daftar layout yang BENAR-BENAR dipakai baris-baris di atas. Versi
+        // sebelumnya memasang literal '3 m × 3 m' plus badge "Standar" —
+        // menyatakan jarak tanam DAN menyatakan itu standar, keduanya tanpa
+        // membaca apa pun. Kosong bila belum ada yang mengisinya.
+        { icon: "Target", label: "Jarak Tanam", value: layoutsUsed.length ? layoutsUsed.join(", ") : "—", tone: layoutsUsed.length ? "default" : "belum" },
       ] },
     ],
     table: {
@@ -197,7 +210,7 @@ async function landPrepScreen(ctx: RlsContext): Promise<ReportScreenBase> {
         { label: "Jumlah Lubang", align: "right" }, { label: "Luas Efektif (ha)", align: "right" }, { label: "% Kesiapan", align: "right", kind: "new" },
         { label: "Jarak Tanam", kind: "new" }, { label: "Status Kesiapan" }, { label: "Status" },
       ],
-      rows: rows.map((r) => [D(r.checked_at), r.block, r.bname ?? "—", nf(N(r.soil_ph), 1), nf(N(r.planting_hole_count)), nf(N(r.effective_area_ha), 2), `${PREP_PCT[r.pstatus ?? ""] ?? 0}%`, "3 m × 3 m", PREP_LABEL[r.pstatus ?? ""] ?? "Belum Siap", statusLabelId(r.st ?? "")]),
+      rows: rows.map((r) => [D(r.checked_at), r.block, r.bname ?? "—", nf(N(r.soil_ph), 1), nf(N(r.planting_hole_count)), nf(N(r.effective_area_ha), 2), `${PREP_PCT[r.pstatus ?? ""] ?? 0}%`, r.planting_layout ?? "—", PREP_LABEL[r.pstatus ?? ""] ?? "Belum Siap", statusLabelId(r.st ?? "")]),
       footNote: "Status kesiapan: Belum Siap / Proses / Siap Tanam. Kolom biru = rekomendasi tambahan.",
     },
   };
@@ -290,12 +303,12 @@ async function weedingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
       title: "Detail Penyiangan",
       columns: [
         { label: "Tanggal" }, { label: "Kode Blok" }, { label: "Metode" }, { label: "Luas (ha)", align: "right" }, { label: "Cakupan vs Total", align: "right", kind: "new" },
-        { label: "Tenaga Kerja (HOK)", align: "right" }, { label: "Biaya per ha", align: "right", kind: "new" }, { label: "Jadwal vs Realisasi", kind: "new" }, { label: "Petugas" }, { label: "Status" },
+        { label: "Tenaga Kerja (HOK)", align: "right" }, { label: "Biaya per ha", align: "right", kind: "new" }, { label: "Petugas" }, { label: "Status" },
       ],
       rows: rows.map((r) => {
         const wa = N(r.weed_area); const ba = N(r.area_ha);
         const cov = wa !== null && ba && ba > 0 ? Math.min(100, (wa / ba) * 100) : null;
-        return [D(r.weeded_on), r.block, r.method ?? "—", nf(wa, 2), cov === null ? "—" : `${nf(cov, 0)}%`, nf(N(r.labor_count)), "Rp —", "Tepat waktu", r.officer ?? "—", statusLabelId(r.st ?? "")];
+        return [D(r.weeded_on), r.block, r.method ?? "—", nf(wa, 2), cov === null ? "—" : `${nf(cov, 0)}%`, nf(N(r.labor_count)), "Rp —", r.officer ?? "—", statusLabelId(r.st ?? "")];
       }),
       footNote: "Biaya ter-refleksi saat disetujui. Kolom biru = rekomendasi tambahan. Kosong = —.",
     },
@@ -404,20 +417,24 @@ async function sprayingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
     ],
     panels: [
       { kind: "empty", title: "Tren OPT / Target", span: 1, icon: "LineChart", message: "Belum ada tren OPT", desc: "Tren intensitas OPT vs ambang target muncul setelah ada monitoring berkala." },
-      { kind: "progressList", title: "Konsumsi Material vs Stok", span: 1, items: rows.slice(0, 4).map((r) => ({ label: r.material ?? "—", value: `${nf(N(r.total_volume), 2)} ${r.unit ?? unit}`, icon: "FlaskConical", tone: "ok", badge: { text: "Cukup", tone: "ok" } })) },
-      { kind: "progressList", title: "Kepatuhan & Rekomendasi", span: 1, items: [
-        { label: "Dosis vs Anjuran", value: "Sesuai", icon: "Target", tone: "ok", badge: { text: "Sesuai", tone: "ok" } },
-        { label: "Metode", value: "Manual", icon: "Droplets", tone: "default" },
-        { label: "Status", value: rows[0] ? statusLabelId(rows[0].st ?? "") : "—", icon: "ClipboardCheck", tone: rows[0]?.st === APPROVED ? "ok" : "perhatian" },
-      ] },
+      { kind: "progressList", title: "Konsumsi Material vs Stok", span: 1, items: rows.slice(0, 4).map((r) => ({ label: r.material ?? "—", value: `${nf(N(r.total_volume), 2)} ${r.unit ?? unit}`, icon: "FlaskConical", tone: "ok" })) },
+      // Panel "Kepatuhan & Rekomendasi" DIHAPUS isinya: dua dari tiga barisnya
+      // klaim tanpa dasar. "Dosis vs Anjuran: Sesuai" menyatakan kepatuhan dosis
+      // padahal tidak ada anjuran dosis penyemprotan yang tersimpan di mana pun
+      // (agri_input_chemicals hanya punya rec_phase/rec_note, keduanya teks bebas),
+      // dan "Metode: Manual" menyatakan metode padahal spraying_records tidak punya
+      // kolom metode sama sekali.
+      { kind: "empty", title: "Kepatuhan Dosis", span: 1, icon: "Target",
+        message: "Belum bisa dinilai",
+        desc: "Anjuran dosis per bahan belum tersimpan, jadi dosis terpakai tidak punya pembanding. Perlu field anjuran di katalog Chemical." },
     ],
     table: {
       title: "Detail Penyemprotan",
       columns: [
         { label: "Tanggal" }, { label: "Kode Blok" }, { label: "Material" }, { label: "Target/OPT" }, { label: "Dosis (L/ha)", align: "right" },
-        { label: "Dosis vs Anjuran", kind: "new" }, { label: "Volume", align: "right" }, { label: "Satuan" }, { label: "Interval Aman/PHI", kind: "new" }, { label: "Biaya", align: "right", kind: "new" }, { label: "Petugas" }, { label: "Status" },
+        { label: "Volume", align: "right" }, { label: "Satuan" }, { label: "Interval Aman/PHI", kind: "new" }, { label: "Biaya", align: "right", kind: "new" }, { label: "Petugas" }, { label: "Status" },
       ],
-      rows: rows.map((r) => [D(r.sprayed_on), r.block, r.material ?? "—", r.target ?? "—", nf(N(r.dose_per_ha), 2), "Sesuai", nf(N(r.total_volume), 2), r.unit ?? "—", "—", "Rp —", r.officer ?? "—", statusLabelId(r.st ?? "")]),
+      rows: rows.map((r) => [D(r.sprayed_on), r.block, r.material ?? "—", r.target ?? "—", nf(N(r.dose_per_ha), 2), nf(N(r.total_volume), 2), r.unit ?? "—", "—", "Rp —", r.officer ?? "—", statusLabelId(r.st ?? "")]),
       footNote: "Material dari katalog Agri-Input. Kolom biru = rekomendasi tambahan. Kosong = —.",
     },
   };
@@ -534,16 +551,23 @@ async function equipmentScreen(ctx: RlsContext): Promise<ReportScreenBase> {
       { icon: "Wrench", label: "Perawatan", value: "Belum Dijadwalkan", tone: "perhatian" },
     ],
     panels: [
-      { kind: "statCards", title: "Profil Aset", span: 2, cols: 2, cards: rows.slice(0, 4).map((r) => ({ icon: "Wrench", label: `${r.code} · ${r.category ?? "—"}`, value: r.name ?? "—", badge: { text: "Internal", tone: "ok" }, sub: `Harga beli: ${idrShort(N(r.purchase_price_idr))}` })) },
-      { kind: "pie", title: "Kepemilikan", span: 1, data: [{ name: "Internal", value: rows.length || 1, color: "#1f8033" }, { name: "Outsource", value: 0, color: "#cfcbc1" }], centerValue: `${rows.length}`, centerLabel: "Aset" },
+      { kind: "statCards", title: "Profil Aset", span: 2, cols: 2, cards: rows.slice(0, 4).map((r) => ({ icon: "Wrench", label: `${r.code} · ${r.category ?? "—"}`, value: r.name ?? "—", sub: `Harga beli: ${idrShort(N(r.purchase_price_idr))}` })) },
+      // Pie "Kepemilikan" DIHAPUS: datanya tidak ada. Versi sebelumnya memasang
+      // Internal = rows.length dan Outsource = 0 secara tetap, jadi grafiknya
+      // menyatakan 100% aset milik sendiri tanpa satu pun kolom yang menyimpannya
+      // (agri_input_equipment tidak punya field kepemilikan). Diganti panel kosong
+      // yang menyebutkan apa yang dibutuhkan.
+      { kind: "empty", title: "Kepemilikan", span: 1, icon: "Wrench",
+        message: "Belum ada data kepemilikan",
+        desc: "Katalog Equipment belum menyimpan status internal/sewa/outsource. Perlu field baru sebelum grafik ini bisa berisi." },
     ],
     table: {
       title: "Detail Katalog Equipment",
       columns: [
         { label: "Kode" }, { label: "Nama Aset" }, { label: "Kategori" }, { label: "Harga Beli (Rp)", align: "right" }, { label: "Frekuensi Pakai" },
-        { label: "Utilisasi", kind: "new" }, { label: "Jenis BBM/Listrik" }, { label: "Konsumsi/jam", align: "right" }, { label: "Biaya Energi", align: "right", kind: "new" }, { label: "Depresiasi", align: "right", kind: "new" }, { label: "Kepemilikan/Outsource", kind: "new" },
+        { label: "Utilisasi", kind: "new" }, { label: "Jenis BBM/Listrik" }, { label: "Konsumsi/jam", align: "right" }, { label: "Biaya Energi", align: "right", kind: "new" }, { label: "Depresiasi", align: "right", kind: "new" },
       ],
-      rows: rows.map((r) => [r.code, r.name, r.category, nf(N(r.purchase_price_idr)), r.usage_freq ?? "—", "—", r.fuel_type ?? "—", nf(N(r.fuel_per_hour), 2), "Rp —", "Rp —", "Internal"]),
+      rows: rows.map((r) => [r.code, r.name, r.category, nf(N(r.purchase_price_idr)), r.usage_freq ?? "—", "—", r.fuel_type ?? "—", nf(N(r.fuel_per_hour), 2), "Rp —", "Rp —"]),
       footNote: "Harga & konsumsi jadi dasar biaya operasi. Kolom biru = rekomendasi tambahan. Kosong = —.",
     },
   };
@@ -679,14 +703,14 @@ async function expenditureScreen(ctx: RlsContext): Promise<ReportScreenBase> {
       title: "Detail Pengeluaran",
       columns: [
         { label: "Tanggal" }, { label: "Kode Blok" }, { label: "Kategori Biaya" }, { label: "Volume", align: "right" }, { label: "Tarif (Rp)", align: "right" },
-        { label: "Nilai (Rp)", align: "right" }, { label: "Per-ha Cost", align: "right", kind: "new" }, { label: "Internal/Outsource", kind: "new" }, { label: "Status" },
+        { label: "Nilai (Rp)", align: "right" }, { label: "Per-ha Cost", align: "right", kind: "new" }, { label: "Status" },
       ],
       rows: data.rows.map((r) => {
         const tarif = r.quantity && r.quantity > 0 ? r.amountIdr / r.quantity : null;
         const area = r.blockCode ? areaByBlock.get(r.blockCode) ?? null : null;
         const perHa = area && area > 0 ? r.amountIdr / area : null;
         const vol = r.quantity === null ? "—" : `${nf(r.quantity, 2)}${r.unitName ? " " + r.unitName : ""}`;
-        return [r.transactionDate, r.isOverhead ? "overhead" : r.blockCode ?? "—", r.costCategoryName ?? "—", vol, tarif === null ? "—" : nf(tarif), r.approvalStatus === APPROVED ? nf(r.amountIdr) : "Rp —", perHa === null || r.approvalStatus !== APPROVED ? "—" : nf(perHa), "Internal", statusLabelId(r.approvalStatus)];
+        return [r.transactionDate, r.isOverhead ? "overhead" : r.blockCode ?? "—", r.costCategoryName ?? "—", vol, tarif === null ? "—" : nf(tarif), r.approvalStatus === APPROVED ? nf(r.amountIdr) : "Rp —", perHa === null || r.approvalStatus !== APPROVED ? "—" : nf(perHa), statusLabelId(r.approvalStatus)];
       }),
       footNote: 'Hanya nilai berstatus Disetujui yang dihitung. Kosong ditulis "—", bukan 0.',
     },

@@ -103,6 +103,10 @@ const prepSchema = z.object({
   effectiveAreaHa: z.union([posNum, z.literal("")]).optional(),
   status: z.enum(["not_started", "in_progress", "ready_to_plant"]),
   note: z.string().trim().max(500).optional(),
+  // Layout tanam dari Master Data (tipe planting_layout, migrasi 0050). Opsional:
+  // sebelum ini laporan MENGARANG '3 m × 3 m' untuk setiap baris; kosong yang
+  // jujur lebih baik daripada spesifikasi agronomi yang tidak pernah diukur.
+  plantingLayoutItemId: z.string().uuid().optional().or(z.literal("")).transform((v) => (v ? v : null)),
 })
   // Wajib HANYA bila pekerjaannya sudah berjalan. Status "belum mulai" memang
   // belum punya luas efektif, dan memaksa angka di situ justru memancing tebakan
@@ -124,6 +128,7 @@ export async function createLandPrepAction(_p: ActionState, fd: FormData): Promi
       soilPh: fd.get("soilPh") || "", holeCount: fd.get("holeCount") || "",
       effectiveAreaHa: fd.get("effectiveAreaHa") || "", status: fd.get("status"),
       note: fd.get("note") ?? "",
+      plantingLayoutItemId: fd.get("plantingLayoutItemId") ?? undefined,
     });
     if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
     return await run(["creator"], ["/operasional/persiapan-lahan", "/approval"], () =>
@@ -133,6 +138,7 @@ export async function createLandPrepAction(_p: ActionState, fd: FormData): Promi
         holeCount: typeof parsed.data.holeCount === "number" ? parsed.data.holeCount : null,
         effectiveAreaHa: typeof parsed.data.effectiveAreaHa === "number" ? parsed.data.effectiveAreaHa : null,
         status: parsed.data.status, note: parsed.data.note || null,
+        plantingLayoutItemId: parsed.data.plantingLayoutItemId,
       }).then(() => {}),
     );
   } catch (e) { return { ok: false, message: toMessage(e) }; }
