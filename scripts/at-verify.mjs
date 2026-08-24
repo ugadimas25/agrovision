@@ -914,6 +914,101 @@ async function main() {
     ok("filter ngawur diperlakukan sebagai tanpa filter", angka(ngawur.html) === angka(base.html));
   }
 
+  console.log("\n=== AI-21: bukti K1-K7 punya DOKUMEN, bukan cuma status ===");
+  {
+    const s = await login("admin@demo.invalid", { company: "00000000-0000-4000-8000-0000000000d0" });
+    const hal = await s.get("/keberlanjutan/sertifikasi");
+    ok("halaman sertifikasi terbuka", hal.status === 200, `status ${hal.status}`);
+
+    // Dokumen yang dilampirkan seed benar-benar bisa DIBUKA, bukan tautan mati.
+    const idBukti = /data-testid="tautan-bukti"[^>]*href="\/api\/evidence\/([0-9a-f-]{36})"|href="\/api\/evidence\/([0-9a-f-]{36})"[^>]*data-testid="tautan-bukti"/.exec(hal.html);
+    const bid = idBukti ? (idBukti[1] ?? idBukti[2]) : null;
+    ok("bukti terlampir muncul sebagai tautan unduh", Boolean(bid), `${bid ?? "tidak ada tautan"}`);
+    if (bid) {
+      const unduh = await s.get(`/api/evidence/${bid}`);
+      ok("tautan bukti benar-benar mengunduh berkas (bukan 404 tautan mati)",
+        unduh.status === 200 && unduh.html.startsWith("%PDF"),
+        `status ${unduh.status}, ${unduh.html.slice(0, 4)}`);
+    } else {
+      ok("tautan bukti benar-benar mengunduh berkas (bukan 404 tautan mati)", false, "tautan tidak ditemukan");
+    }
+
+    // "n/7 lengkap" wajib menuntut dokumen. Di dataset demo K1 & K2 punya
+    // dokumen; K6 & K7 sengaja 'tersertifikasi' TANPA dokumen. Kalau hitungannya
+    // memakai status saja, angkanya 4 — dan angka itu yang dipakai mengklaim
+    // pengakuan retroaktif masa konversi 36 bulan.
+    const berdokumen = await psql(`SELECT count(*)::text FROM app.organic_tracking t
+      JOIN app.organic_items i ON i.code=t.item_code AND i.kind='evidence'
+      WHERE t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')
+        AND t.status='tersertifikasi'
+        AND EXISTS (SELECT 1 FROM app.evidence_links el WHERE el.entity_type='organic_tracking' AND el.entity_id=t.id)`);
+    const statusSaja = await psql(`SELECT count(*)::text FROM app.organic_tracking t
+      JOIN app.organic_items i ON i.code=t.item_code AND i.kind='evidence'
+      WHERE t.company_id=(SELECT id FROM app.companies WHERE code='DEMO') AND t.status='tersertifikasi'`);
+    const lengkap = /([0-9]+)\s*\/\s*([0-9]+)\s*lengkap/.exec(hal.html.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]*>/g, " "));
+    ok("hitungan lengkap memakai jumlah berdokumen, bukan jumlah berstatus",
+      lengkap?.[1] === berdokumen && berdokumen !== statusSaja,
+      `layar ${lengkap?.[1]} · berdokumen ${berdokumen} · berstatus ${statusSaja}`);
+
+    // Klaim tanpa dokumen ditandai di barisnya, bukan hanya dihitung ulang diam-diam.
+    ok("bukti 'tersertifikasi' tanpa dokumen ditandai di layar",
+      /ditandai lengkap tanpa dokumen/.test(hal.html));
+
+    // Unggah SUNGGUHAN lewat action, lalu jumlah lampirannya harus naik.
+    const sebelum = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    await s.submit("/keberlanjutan/sertifikasi", { itemCode: "K5" },
+      { formMarker: "unggah-bukti-organik", files: { berkas: fakeJpeg() } });
+    const sesudah = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    ok("unggah bukti lewat UI menambah lampiran", Number(sesudah) === Number(sebelum) + 1,
+      `${sebelum} -> ${sesudah}`);
+
+    // Viewer TIDAK boleh melampirkan bukti kepatuhan.
+    const viewer = await login("viewer@agrovision.local");
+    const aksiUp = pickForm(hal.html, "unggah-bukti-organik")?.hidden;
+    ok("prasyarat: field aksi unggah bisa dipanen",
+      Boolean(aksiUp) && Object.keys(aksiUp).some((k) => k.startsWith("$ACTION")),
+      `${Object.keys(aksiUp ?? {}).length} field`);
+    const fdUp = new FormData();
+    for (const [k, v] of Object.entries(aksiUp ?? {})) fdUp.append(k, v);
+    fdUp.set("itemCode", "K5");
+    const j = fakeJpeg();
+    fdUp.set("berkas", j.blob, j.name);
+    const tembusUp = await fetch(`${BASE}/keberlanjutan/sertifikasi`, {
+      method: "POST", headers: { cookie: viewer.header() }, body: fdUp, redirect: "manual",
+    });
+    const balasanUp = await tembusUp.text();
+    const setelahViewer = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    ok("viewer POST langsung DITOLAK melampirkan bukti",
+      setelahViewer === sesudah && tembusUp.status === 200 && /tidak berhak/.test(balasanUp),
+      `${sesudah} -> ${setelahViewer} (status ${tembusUp.status})`);
+
+    // Bersihkan bukti yang DIUNGGAH OLEH UJI INI. Tanpa ini, setiap run menambah
+    // satu baris evidence_files ke dataset demo (storage_path-nya sama karena
+    // content-addressed, tapi barisnya baru), dan "berapa bukti K5" ikut naik
+    // tiap kali suite dijalankan. Uji tidak boleh menumbuhkan data yang
+    // diukurnya sendiri.
+    await psql(`DELETE FROM app.evidence_files WHERE company_id=(SELECT id FROM app.companies WHERE code='DEMO')
+      AND file_name='struk.jpg' AND id IN (
+        SELECT el.evidence_id FROM app.evidence_links el
+         JOIN app.organic_tracking t ON t.id=el.entity_id
+        WHERE el.entity_type='organic_tracking' AND t.item_code='K5')`);
+    const bersih = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    ok("uji ini tidak meninggalkan bukti tambahan di dataset demo", bersih === sebelum,
+      `awal ${sebelum}, akhir ${bersih}`);
+  }
+
   console.log("\n=== AI-22: hasil survei bisa DILIHAT, bukan cuma dihitung ===");
   {
     // Sebelum ini daftar /survei hanya memberi Form/Blok/Tanggal/Petugas/Status;

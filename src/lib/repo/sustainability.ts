@@ -1,4 +1,4 @@
-import { rlsQuery, type RlsContext } from "@/lib/db";
+import { rlsQuery, withRls, type RlsContext } from "@/lib/db";
 import { toDateString } from "@/lib/date";
 
 /**
@@ -430,6 +430,8 @@ export type OrganicItem = {
   note: string | null;
   obtainedOn: string | null;
   expiresOn: string | null;
+  /** AI-21: dokumen bukti yang benar-benar terlampir. [] = belum ada. */
+  files: OrganicEvidenceFile[];
 };
 
 export type OrganicRegistry = {
@@ -439,6 +441,8 @@ export type OrganicRegistry = {
   evidenceTotal: number;
   certifiedCount: number;
 };
+
+export type OrganicEvidenceFile = { id: string; fileName: string; uploadedAt: string | null };
 
 /** Seluruh item organik + status entitas aktif, dipisah standar & bukti. */
 export async function organicRegistry(ctx: RlsContext): Promise<OrganicRegistry> {
@@ -457,6 +461,24 @@ export async function organicRegistry(ctx: RlsContext): Promise<OrganicRegistry>
          ON t.item_code = i.code AND app.company_in_scope(t.company_id)
       ORDER BY i.sort_order`,
   );
+  // Lampiran dimuat sekali lalu dikelompokkan per item_code. Query per baris
+  // akan menjadi 20+ round-trip untuk satu halaman.
+  const lampiran = await rlsQuery<{ item_code: string; id: string; file_name: string; uploaded_at: string | null }>(
+    ctx,
+    `SELECT t.item_code, ef.id, ef.file_name,
+            (ef.uploaded_at AT TIME ZONE 'Asia/Jakarta')::date::text AS uploaded_at
+       FROM app.organic_tracking t
+       JOIN app.evidence_links el ON el.entity_type = 'organic_tracking' AND el.entity_id = t.id
+       JOIN app.evidence_files ef ON ef.id = el.evidence_id
+      ORDER BY ef.uploaded_at DESC NULLS LAST, ef.file_name`,
+  );
+  const perItem = new Map<string, OrganicEvidenceFile[]>();
+  for (const l of lampiran) {
+    const arr = perItem.get(l.item_code) ?? [];
+    arr.push({ id: l.id, fileName: l.file_name, uploadedAt: l.uploaded_at });
+    perItem.set(l.item_code, arr);
+  }
+
   const map = (r: (typeof rows)[number]): OrganicItem => ({
     kind: r.kind,
     code: r.code,
@@ -475,16 +497,71 @@ export async function organicRegistry(ctx: RlsContext): Promise<OrganicRegistry>
     // sini merusak DATA, bukan hanya tampilan.
     obtainedOn: toDateString(r.obtained_on),
     expiresOn: toDateString(r.expires_on),
+    files: perItem.get(r.code) ?? [],
   });
   const standards = rows.filter((r) => r.kind === "standard").map(map);
   const evidence = rows.filter((r) => r.kind === "evidence").map(map);
   return {
     standards,
     evidence,
-    evidenceDone: evidence.filter((e) => e.status === "tersertifikasi").length,
+    // AI-21: "lengkap" menuntut DOKUMEN, bukan hanya status yang dipilih dari
+    // dropdown. Sebelum ada jalur unggah, satu klik pada dropdown sudah membuat
+    // sebuah bukti riwayat lahan terhitung "lengkap" tanpa satu berkas pun --
+    // dan angka itulah yang dipakai mengklaim pengakuan retroaktif 36 bulan.
+    evidenceDone: evidence.filter((e) => e.status === "tersertifikasi" && e.files.length > 0).length,
     evidenceTotal: evidence.length,
     certifiedCount: standards.filter((s) => s.status === "tersertifikasi").length,
   };
+}
+
+/**
+ * AI-21 / D-06 · lampirkan dokumen bukti ke satu item K1–K7.
+ *
+ * Menjawab pertanyaan terbuka D-06 ("apakah bukti sertifikasi memakai komponen
+ * upload evidence yang sama"): YA. Jalurnya app.evidence_files +
+ * app.evidence_links, persis seperti bukti pembelian di Pengeluaran, dan
+ * pengunduhannya lewat route /api/evidence/[id] yang sudah ada. Membuat jalur
+ * kedua berarti dua tempat yang bisa berbeda soal RLS, hash, dan storage.
+ *
+ * Baris organic_tracking di-upsert lebih dulu supaya lampiran punya induk: tanpa
+ * itu, bukti tidak bisa diunggah sebelum statusnya pernah disentuh sekali.
+ */
+export async function attachOrganicEvidence(
+  ctx: RlsContext,
+  input: {
+    itemCode: string;
+    evidence: { fileName: string; storagePath: string; mimeType: string; sizeBytes: number; sha256: string };
+  },
+): Promise<string> {
+  return withRls(ctx, async (client) => {
+    const t = await client.query<{ id: string }>(
+      `INSERT INTO app.organic_tracking (company_id, item_code, status, updated_by)
+       VALUES ($1,$2,'dalam_proses'::app.organic_status,$3)
+       ON CONFLICT (company_id, item_code) DO UPDATE SET updated_at = now(), updated_by = EXCLUDED.updated_by
+       RETURNING id`,
+      [ctx.companyId, input.itemCode, ctx.userId],
+    );
+    const trackingId = t.rows[0].id;
+
+    const ev = await client.query<{ id: string }>(
+      `INSERT INTO app.evidence_files
+         (company_id, evidence_type, file_name, storage_path, mime_type, size_bytes, sha256, uploaded_by)
+       VALUES ($1,'document',$2,$3,$4,$5,$6,$7)
+       RETURNING id`,
+      [ctx.companyId, input.evidence.fileName, input.evidence.storagePath,
+       input.evidence.mimeType, input.evidence.sizeBytes, input.evidence.sha256, ctx.userId],
+    );
+
+    // ON CONFLICT DO NOTHING: berkas dengan isi identik menghasilkan storage_path
+    // identik (putEvidence memakai sha256), jadi mengunggah ulang dokumen yang
+    // sama tidak boleh menjadi galat primary key di mata pengguna.
+    await client.query(
+      `INSERT INTO app.evidence_links (evidence_id, entity_type, entity_id)
+       VALUES ($1,'organic_tracking',$2) ON CONFLICT DO NOTHING`,
+      [ev.rows[0].id, trackingId],
+    );
+    return ev.rows[0].id;
+  });
 }
 
 /** Set/perbarui status organik satu item. Idempoten (upsert). */
