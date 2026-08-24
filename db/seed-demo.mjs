@@ -45,7 +45,34 @@ const COST_TREE = [
   ['SERVICE', 'Servis Kendaraan', ['Servis Berkala', 'Perbaikan', 'Penggantian Ban']],
   ['LABOR', 'Tenaga Kerja', ['Upah Harian', 'Upah Borongan', 'Mandor & Supervisi', 'BPJS & Tunjangan']],
   ['LOGISTIC', 'Logistik', ['Angkutan Material', 'Angkutan Antar Blok', 'Gudang & Penyimpanan']],
+  // Dua kategori di bawah ditambahkan atas keputusan pemilik produk (23 Agu 2026):
+  // tarif SPRAY-L dan MAP-HA tidak punya rumah yang jujur di delapan kategori di
+  // atas, jadi biayanya tidak match anggaran mana pun. Penyemprotan TIDAK dipecah
+  // menjadi bahan + tenaga: satu tarif per liter larutan tidak memisahkan keduanya,
+  // jadi memecahnya menuntut driver volume kedua yang belum ada.
+  ['PESTICIDE', 'Pengadaan Pestisida', ['Herbisida', 'Fungisida', 'Insektisida', 'Pestisida Nabati']],
+  ['SURVEY', 'Jasa Survei & Pemetaan', ['Pemetaan Drone', 'Survei Tanah', 'Pengukuran Batas']],
 ]
+
+// Tarif → kategori akuntansi INDUK. Anggaran dipasang di tingkat induk (keputusan
+// pemilik produk 23 Agu 2026), dan realisasi WAJIB memakai sumbu yang sama; kalau
+// tidak, perbandingan anggaran membandingkan dua taksonomi yang tidak berpotongan.
+const PRICE_CATEGORY = {
+  'MAP-HA': 'SURVEY', 'PREP-HA': 'LANDPREP', 'SEED-UNIT': 'SEEDLING',
+  'FERT-KG': 'FERTILIZER', 'LABOR-DAY': 'LABOR', 'WEED-HA': 'LABOR',
+  'SPRAY-L': 'PESTICIDE', 'PRUNE-TREE': 'LABOR',
+}
+
+// Driver volume per kode tarif. DISETEL DI SEED, bukan diserahkan ke migrasi:
+// migrasi 0041 memang mengisi ketiga driver ini, tetapi pada instalasi BARU
+// migrasi jalan SEBELUM seed, sehingga UPDATE-nya tidak menemukan baris apa pun
+// dan no-op tanpa suara -- AI-02 batal seluruhnya dan penyiangan/penyemprotan/
+// pruning tidak menghasilkan biaya sama sekali. Seed harus menghasilkan keadaan
+// akhir yang dimaksud, bukan menunggu ditambal migrasi.
+const PRICE_DRIVER = {
+  'WEED-HA': 'weeding_area_ha', 'SPRAY-L': 'spraying_volume',
+  'PRUNE-TREE': 'pruning_tree_count',
+}
 
 const UOM = [
   ['KG', 'Kilogram'], ['TON', 'Ton'], ['LITER', 'Liter'], ['UNIT', 'Unit'],
@@ -770,17 +797,25 @@ async function seed() {
     ['REV-DUR-A','revenue', 'Durian Musang King grade A',null,               'ton',   10000000,  '10 ton = Rp100 juta (docs/11 §4)'],
     ['REV-COCO', 'revenue', 'Kelapa (butir/kopra)',      null,               'ton',   3000000,   'Ilustratif'],
   ]
-  for (const [code, kind, category, driver, unit, rate, note] of priceRows) {
+  // Peta kode kategori INDUK -> id, untuk menautkan tarif ke sumbu anggaran.
+  const parentCatIds = Object.fromEntries((await c.query(
+    `SELECT mi.code, mi.id FROM app.master_items mi
+       JOIN app.master_types mt ON mt.id = mi.master_type_id AND mt.code = 'cost_category'
+      WHERE mi.company_id = $1 AND mi.parent_id IS NULL`, [CO])).rows.map((r) => [r.code, r.id]))
+
+  for (const [code, kind, category, driverSeed, unit, rate, note] of priceRows) {
+    const driver = PRICE_DRIVER[code] ?? driverSeed
+    const catId = parentCatIds[PRICE_CATEGORY[code]] ?? null
     await c.query(
-      `INSERT INTO app.price_list (company_id, code, kind, category, driver, unit, rate_idr, note, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO app.price_list (company_id, code, kind, category, driver, unit, rate_idr, note, updated_by, cost_category_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        -- Indeks unik (company_id, code) diganti indeks PARSIAL price_list_one_open
        -- (… WHERE valid_to IS NULL) oleh migrasi 0041, karena satu kode kini punya
        -- banyak versi. ON CONFLICT tidak bisa menyimpulkan indeks parsial tanpa
        -- predikat yang sama, jadi tanpa WHERE di bawah seed ini GAGAL dengan
        -- "no unique or exclusion constraint matching the ON CONFLICT specification".
        ON CONFLICT (company_id, code) WHERE valid_to IS NULL DO NOTHING`,
-      [CO, code, kind, category, driver, unit, rate, note, users[0][0]])
+      [CO, code, kind, category, driver, unit, rate, note, users[0][0], catId])
   }
 
   // Agri-Input: katalog chemical (stok + rekomendasi) & equipment.
