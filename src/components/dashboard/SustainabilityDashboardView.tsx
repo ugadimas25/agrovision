@@ -7,7 +7,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieCha
 import { KpiCard, Panel, EmptyPanel } from "@/components/dashboard/shared";
 import { EstateMap } from "@/components/dashboard/EstateMap";
 import type { SustDashboard, SustKpi } from "@/lib/report/sustDashboard";
-import { FilterBar } from "@/components/dashboard/FilterBar";
+import { FilterBar, CATATAN_KOMODITAS_DASHBOARD } from "@/components/dashboard/FilterBar";
 import { ringkasBatasan, type DashboardFilter } from "@/lib/report/filters";
 
 type Opt = { value: string; label: string };
@@ -47,7 +47,8 @@ export function SustainabilityDashboardView({
           <div> mati. Metrik yang tidak bisa mengikuti filter dinyatakan di bawahnya,
           bukan dibiarkan tampak seolah sudah dipersempit. */}
       <FilterBar basePath={basePath} filter={filter}
-                 estates={estates} blocks={blocks} periods={periods} crops={crops} />
+                 estates={estates} blocks={blocks} periods={periods} crops={crops}
+        catatanKomoditas={CATATAN_KOMODITAS_DASHBOARD} />
       {ringkasBatasan(data.terbatas) && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
           <strong>Tidak mengikuti filter:</strong> {ringkasBatasan(data.terbatas)}. Nilainya

@@ -79,6 +79,13 @@ export async function listExpenditures(
     status?: string;
     blockId?: string;
     search?: string;
+    /**
+     * K-08 · filter bersama dashboard (blok banyak + rentang tanggal periode).
+     * Diterapkan di WHERE, bukan di TypeScript setelah paging — menyaring
+     * setelah LIMIT akan memberi halaman yang isinya lebih sedikit dari
+     * pageSize dan `total` yang tidak cocok dengan barisnya.
+     */
+    filter?: { blockIds: string[] | null; dateFrom: string | null; dateTo: string | null };
   } = {},
 ): Promise<Page<ExpenditureRow>> {
   const page = Math.max(1, opts.page ?? 1);
@@ -91,8 +98,13 @@ export async function listExpenditures(
         AND ($2::uuid IS NULL OR ct.block_id = $2)
         AND ($3::text IS NULL OR b.code ILIKE '%' || $3 || '%'
                               OR cat.name ILIKE '%' || $3 || '%'
-                              OR s.name ILIKE '%' || $3 || '%')`;
-    const params = [opts.status ?? null, opts.blockId ?? null, opts.search?.trim() || null];
+                              OR s.name ILIKE '%' || $3 || '%')
+        AND ($4::uuid[] IS NULL OR ct.block_id = ANY($4))
+        AND ($5::date IS NULL OR ct.transaction_date BETWEEN $5::date AND $6::date)`;
+    const params = [
+      opts.status ?? null, opts.blockId ?? null, opts.search?.trim() || null,
+      opts.filter?.blockIds ?? null, opts.filter?.dateFrom ?? null, opts.filter?.dateTo ?? null,
+    ];
 
     const total = await client.query<{ n: string }>(
       `SELECT count(*) AS n
@@ -105,7 +117,7 @@ export async function listExpenditures(
     );
 
     const rows = await client.query(
-      `${EXP_SELECT} ${where} ORDER BY ct.transaction_date DESC, ct.id DESC LIMIT $4 OFFSET $5`,
+      `${EXP_SELECT} ${where} ORDER BY ct.transaction_date DESC, ct.id DESC LIMIT $7 OFFSET $8`,
       [...params, pageSize, offset],
     );
 
@@ -328,7 +340,8 @@ export type BlockCostRow = {
 
 export async function blockCostSummary(
   ctx: RlsContext,
-  opts: { limit?: number } = {},
+  // K-08: blockIds opsional supaya pemanggil lain tidak ikut berubah.
+  opts: { limit?: number; blockIds?: string[] | null } = {},
 ): Promise<BlockCostRow[]> {
   const rows = await rlsQuery<{
     block_id: string; block_code: string; area_ha: string | null;
@@ -338,11 +351,12 @@ export async function blockCostSummary(
     `SELECT block_id, block_code, area_ha, transaction_count, total_cost_idr, cost_per_ha_idr
        FROM app.v_block_cost_summary
       WHERE transaction_count > 0
+        AND ($2::uuid[] IS NULL OR block_id = ANY($2))
       -- NULLS LAST wajib: pada DESC, Postgres menaruh NULL di ATAS, jadi blok
       -- "belum ada biaya" akan memimpin daftar "biaya tertinggi".
       ORDER BY total_cost_idr DESC NULLS LAST
       LIMIT $1`,
-    [opts.limit ?? 50],
+    [opts.limit ?? 50, opts.blockIds ?? null],
   );
   return rows.map((r) => ({
     blockId: r.block_id,

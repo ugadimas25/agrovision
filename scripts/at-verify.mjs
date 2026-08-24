@@ -867,6 +867,46 @@ async function main() {
     ok("standar tanpa program tidak dirender 0%", nolPersen === 0 && /belum ada program/.test(sust.html),
       `${nolPersen} kemunculan "0%"`);
 
+    // K-08 · modul Akuntansi memakai KOMPONEN dan bentuk searchParams yang sama.
+    // Yang diuji bukan "ada bilahnya", tapi bahwa daftarnya benar-benar
+    // menyempit DAN parameter halaman tidak hilang saat filter diterapkan.
+    const peng0 = await demoAdmin.get("/costing/pengeluaran");
+    ok("K-08: Pengeluaran memakai bilah filter yang sama",
+      /data-testid="filter-dashboard"/.test(peng0.html));
+    const jumlahBaris = (html) => {
+      const m = /Menampilkan[\s\S]{0,200}?dari[\s\S]{0,80}?<\/span>/.exec(html.replace(/<!--[\s\S]*?-->/g, ""));
+      if (!m) return null;
+      const angkaSemua = [...m[0].matchAll(/>([\d.]+)</g)].map((x) => x[1]);
+      return angkaSemua.length ? angkaSemua[angkaSemua.length - 1] : null;
+    };
+    const t0 = jumlahBaris(peng0.html);
+    const bPeng = /name="blok" value="([^"]+)"/.exec(peng0.html)?.[1];
+    const peng1 = await demoAdmin.get(`/costing/pengeluaran?blok=${bPeng}`);
+    const t1 = jumlahBaris(peng1.html);
+    ok("K-08: daftar pengeluaran menyempit saat satu blok dipilih",
+      t0 !== null && t1 !== null && Number(t0.replace(/\./g, "")) > Number(t1.replace(/\./g, "")),
+      `${t0} -> ${t1} transaksi`);
+    // Filter GET tidak boleh MENGHAPUS parameter halaman: tanpa hidden input,
+    // menekan Terapkan membuang status & kata kunci tanpa memberi tahu.
+    const pengKeep = await demoAdmin.get("/costing/pengeluaran?status=approved&q=BLK");
+    const form = /<form[^>]*data-testid="filter-dashboard"[\s\S]*?<\/form>/.exec(pengKeep.html)?.[0] ?? "";
+    ok("K-08: status & kata kunci dibawa sebagai hidden input, tidak hilang",
+      /name="status"[^>]*value="approved"/.test(form) && /name="q"[^>]*value="BLK"/.test(form));
+    // Dan paginasi membawa filter: tanpa itu halaman 2 memuat daftar TANPA filter
+    // sementara bilahnya tetap tampak tercentang.
+    //
+    // Filter ESTATE, bukan blok: satu blok hanya menyisakan 8 transaksi -> tidak
+    // ada halaman kedua, dan ujinya lolos tanpa menguji apa pun. Estate
+    // menyisakan 46 dari 74, jadi tombol "Berikutnya" memang ada. Ketiadaan
+    // tombol itu kini DIANGGAP GAGAL, bukan dimaafkan.
+    const ePeng = /name="estate" value="([^"]+)"/.exec(peng0.html)?.[1];
+    const pengEst = await demoAdmin.get(`/costing/pengeluaran?estate=${ePeng}`);
+    const nextHref = /<a[^>]*aria-label="Berikutnya"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*aria-label="Berikutnya"/.exec(pengEst.html);
+    const href = nextHref ? (nextHref[1] ?? nextHref[2]) : null;
+    ok("K-08: tautan paginasi tetap membawa filter estate",
+      Boolean(href) && href.includes(`estate=${ePeng}`) && href.includes("page=2"),
+      `${href ?? "tautan Berikutnya tidak ada"}`);
+
     // Parameter palsu dari URL tidak boleh menjadi galat maupun celah — disaring
     // jadi "tanpa filter".
     const ngawur = await demoAdmin.get("/dashboard?blok=bukan-uuid&komoditas=%27%3B--");

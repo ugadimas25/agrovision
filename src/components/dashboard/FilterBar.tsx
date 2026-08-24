@@ -23,6 +23,20 @@ import { filterAktif } from "@/lib/report/filters";
 
 type Opt = { value: string; label: string };
 
+/**
+ * Catatan komoditas untuk KETIGA dashboard. Sengaja diekspor sebagai konstanta,
+ * bukan dijadikan nilai default prop: halaman baru yang lupa mengisinya akan
+ * mewarisi pernyataan yang belum tentu benar untuk datanya sendiri. Dengan
+ * begini setiap pemanggil harus menyatakan batasannya sendiri (atau null).
+ */
+export const CATATAN_KOMODITAS_DASHBOARD = (
+  <>
+    Penyiangan, penyemprotan, dan persiapan lahan tidak menyimpan komoditas, jadi
+    angkanya ditandai <strong>—</strong> selama filter komoditas aktif. Menampilkan
+    angka tak terfilter di situ akan terbaca seolah ia mengikuti filter.
+  </>
+);
+
 function Grup({
   icon: Icon, label, name, options, selected,
 }: {
@@ -61,7 +75,7 @@ function Grup({
 }
 
 export function FilterBar({
-  basePath, filter, estates, blocks, periods, crops,
+  basePath, filter, estates, blocks, periods, crops, catatanKomoditas, keep,
 }: {
   basePath: string;
   filter: DashboardFilter;
@@ -69,10 +83,28 @@ export function FilterBar({
   blocks: Opt[];
   periods: Opt[];
   crops: Opt[];
+  /** Batasan yang berlaku di HALAMAN INI saat komoditas dipilih. null = tidak ada. */
+  catatanKomoditas: React.ReactNode | null;
+  /**
+   * K-08 · parameter halaman yang BUKAN milik filter (mis. `status`, `q` di
+   * Pengeluaran) ikut dibawa sebagai hidden input.
+   *
+   * Tanpa ini, menekan "Terapkan" pada form GET mengirim HANYA field di dalam
+   * form, jadi filter status dan kata kunci pencarian terhapus diam-diam --
+   * pengguna memfilter blok dan kehilangan pilihan statusnya. `page` SENGAJA
+   * tidak dibawa: halaman 3 dari daftar tanpa filter tidak berarti apa-apa
+   * setelah difilter, jadi hasilnya harus mulai dari halaman 1.
+   */
+  keep?: Record<string, string | undefined>;
 }) {
   const aktif = filterAktif(filter);
+  const bawa = Object.entries(keep ?? {}).filter(([, v]) => v !== undefined && v !== "");
+  const bersihkanHref = bawa.length
+    ? `${basePath}?${new URLSearchParams(bawa as [string, string][]).toString()}`
+    : basePath;
   return (
     <form method="GET" action={basePath} data-testid="filter-dashboard" className="flex flex-wrap items-center gap-2">
+      {bawa.map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
       <Grup icon={Building2} label="Estate" name="estate" options={estates} selected={filter.estateIds} />
       <Grup icon={CalendarDays} label="Periode" name="periode" options={periods} selected={filter.periodIds} />
       <Grup icon={Tag} label="Blok" name="blok" options={blocks} selected={filter.blockIds} />
@@ -84,21 +116,16 @@ export function FilterBar({
       </button>
       {aktif && (
         // Tautan biasa, bukan tombol reset ber-JS: menghapus seluruh parameter.
-        <a href={basePath} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">
+        <a href={bersihkanHref} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">
           <X className="h-3.5 w-3.5" />
           Bersihkan
         </a>
       )}
-      {filter.cropCodes.length > 0 && (
-        // Kejujuran filter: tiga tabel aktivitas TIDAK punya dimensi komoditas
-        // (weeding_records, spraying_records, land_preparations). Metrik dari
-        // ketiganya karena itu dirender em-dash saat komoditas dipilih — bukan
-        // angka tak terfilter yang seolah menghormati filternya.
-        <p className="w-full text-xs leading-relaxed text-amber-700">
-          Penyiangan, penyemprotan, dan persiapan lahan tidak menyimpan komoditas, jadi
-          angkanya ditandai <strong>—</strong> selama filter komoditas aktif. Menampilkan
-          angka tak terfilter di situ akan terbaca seolah ia mengikuti filter.
-        </p>
+      {filter.cropCodes.length > 0 && catatanKomoditas && (
+        // Kejujuran filter: metrik yang tidak punya dimensi komoditas harus
+        // mengatakannya, bukan menampilkan angka tak terfilter yang terbaca
+        // seolah menghormati filter.
+        <p className="w-full text-xs leading-relaxed text-amber-700">{catatanKomoditas}</p>
       )}
     </form>
   );

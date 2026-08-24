@@ -8,7 +8,7 @@ import { EstateMap } from "@/components/dashboard/EstateMap";
 import { STATUS_COLOR, STATUS_LABEL } from "@/lib/report/types";
 import type { OpDashboardView, Kpi, JourneyStage, TimelineRow, OpInsight, StageStatus } from "@/lib/report/opDashboard";
 import { cn } from "@/lib/utils";
-import { FilterBar } from "@/components/dashboard/FilterBar";
+import { FilterBar, CATATAN_KOMODITAS_DASHBOARD } from "@/components/dashboard/FilterBar";
 import type { DashboardFilter } from "@/lib/report/filters";
 
 type Opt = { value: string; label: string };
@@ -42,7 +42,8 @@ export function OperationalDashboardView({
           adalah salinan lokal berisi <div> ber-ikon ChevronDown — terlihat seperti
           dropdown tapi diklik tidak melakukan apa pun. */}
       <FilterBar basePath="/dashboard" filter={filter}
-                 estates={estates} blocks={blocks} periods={periods} crops={crops} />
+                 estates={estates} blocks={blocks} periods={periods} crops={crops}
+        catatanKomoditas={CATATAN_KOMODITAS_DASHBOARD} />
 
       <div>
         <h1 className="text-2xl font-bold text-slate-800">Dashboard Operasional</h1>
