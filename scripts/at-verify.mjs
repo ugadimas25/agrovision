@@ -685,6 +685,60 @@ async function main() {
       && /tidak memakai driver/.test(salah.html));
   }
 
+  console.log("\n=== AT6b: sel tabel laporan tidak boleh literal (klaim tanpa data) ===");
+  {
+    // AT6 hanya memindai 4 layar dan SENGAJA melewati src/lib/report/screens.ts —
+    // komentarnya sendiri menyebut itu masuk cakupan AI-42. Justru di situ 5 klaim
+    // palsu bertahan sampai 24 Agu 2026: '3 m × 3 m' (jarak tanam, 13 dari 13
+    // baris), 'Sesuai' (kepatuhan dosis), 'Tepat waktu' (kepatuhan jadwal),
+    // 'Internal' (kepemilikan aset, dua laporan), plus badge 'Standar' dan 'Cukup'.
+    // Semuanya terlihat seperti fakta terukur dan tidak pernah membaca database.
+    //
+    // Aturannya: SETIAP sel tabel laporan harus berupa EKSPRESI (turunan data),
+    // bukan string konstan. Penanda kosong yang jujur tetap boleh.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("src/lib/report/screens.ts", "utf8");
+    const BOLEH = new Set(['"—"', '"Rp —"', '""', '"-"']);
+
+    const selDariArray = (body) => {
+      const out = []; let depth = 0, cur = "";
+      for (const ch of body) {
+        if ("([{".includes(ch)) depth++;
+        if (")]}".includes(ch)) depth--;
+        if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += ch;
+      }
+      if (cur.trim()) out.push(cur.trim());
+      return out;
+    };
+
+    const temuan = [];
+    for (const re of [/rows: rows\.map\(\(\w+\) => \[([\s\S]*?)\]\)/g, /return \[([\s\S]*?)\];/g]) {
+      for (const m of src.matchAll(re)) {
+        if (m[1].length > 3000) continue;
+        for (const sel of selDariArray(m[1])) {
+          if (/^"[^"]*"$/.test(sel) && !BOLEH.has(sel)) temuan.push(sel);
+        }
+      }
+    }
+    ok("nol sel tabel laporan berisi klaim konstan", temuan.length === 0,
+      temuan.length ? [...new Set(temuan)].join(" ") : "bersih");
+
+    // Badge tanpa syarat = klaim juga ("Standar", "Cukup", "Sesuai").
+    //
+    // Pengecualian yang DISENGAJA dan harus tetap sedikit: teks yang menyebut NAMA
+    // METODOLOGI, bukan menyatakan hasil pengukuran. "Tier 1" ada di panel yang
+    // judulnya "Metodologi & Asumsi" dan memang menamai metode IPCC yang dipakai —
+    // ia tidak mengklaim angka apa pun. Menambah entri di sini menuntut alasan
+    // sejenis; kalau ragu, jangan ditambahkan.
+    const BADGE_BUKAN_KLAIM = new Set(["Tier 1"]);
+    const badgeTetap = [...src.matchAll(/badge: \{ text: "([^"]+)"/g)]
+      .filter((m) => !src.slice(Math.max(0, m.index - 220), m.index).includes("?"))
+      .map((m) => m[1])
+      .filter((t) => !BADGE_BUKAN_KLAIM.has(t));
+    ok("nol badge laporan dengan teks tanpa syarat", badgeTetap.length === 0,
+      badgeTetap.join(", ") || "bersih (kecuali nama metodologi yang di-allowlist)");
+  }
+
   console.log("\n=== AI-47: layar, PDF, dan Excel satu sumber ===");
   {
     // Sebelum AI-47 layar memakai screens.ts sementara PDF/Excel memakai

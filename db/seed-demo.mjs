@@ -312,6 +312,18 @@ async function seed() {
 
   // Master data: komponen biaya berjenjang (concept:158)
   const catType = (await c.query(`SELECT id FROM app.master_types WHERE code='cost_category'`)).rows[0].id
+  // Layout tanam (tipe master dari migrasi 0050). Hanya untuk tenant DEMO —
+  // tenant sungguhan membuatnya sendiri lewat UI Master Data, sama seperti tipe
+  // master lain. Tanpa item ini dropdown "Layout tanam" kosong dan laporan
+  // Persiapan Lahan merender em-dash (jujur, tapi demo jadi tidak bercerita).
+  for (const [i, name] of ['3 m × 3 m', '4 m × 4 m', '6 m × 6 m', '8 m × 8 m', '9 m × 9 m'].entries()) {
+    await c.query(
+      `INSERT INTO app.master_items (master_type_id, company_id, code, name, sort_order)
+       SELECT mt.id, $1, $2, $3, $4 FROM app.master_types mt WHERE mt.code = 'planting_layout'
+       ON CONFLICT (master_type_id, company_id, code) DO NOTHING`,
+      [CO, `LAY-${i + 1}`, name, i + 1])
+  }
+
   const leafIds = []   // sub-kategori; transaksi dicatat pada level ini
   for (const [i, [code, name, subs]] of COST_TREE.entries()) {
     const p = await c.query(

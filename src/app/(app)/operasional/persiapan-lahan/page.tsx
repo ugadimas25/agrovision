@@ -7,6 +7,7 @@ import { getDict } from "@/lib/i18n";
 import { OpRecordForm } from "@/components/ui/OpRecordForm";
 import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
+import { listOptions } from "@/lib/repo/master";
 import { listOpRecords } from "@/lib/repo/operational";
 import { createLandPrepAction } from "@/lib/actions/operational";
 import { PREP_STATUS } from "@/lib/labels";
@@ -22,9 +23,13 @@ export default async function Page() {
   let ctx;
   try { ctx = await requireContext(); } catch { redirect("/login"); }
   const t = getDict(await getLocale());
-  const [rows, blocks] = await Promise.all([
+  const [rows, blocks, layouts] = await Promise.all([
     listOpRecords(ctx, "land_preparations"),
     searchBlockOptions(ctx),
+    // Layout tanam dari Master Data (tipe planting_layout, migrasi 0050). Kosong
+    // bila super_admin belum membuat itemnya — form tetap bisa disubmit tanpa
+    // memilih, dan laporan merender em-dash alih-alih mengarang jaraknya.
+    listOptions(ctx, "planting_layout"),
   ]);
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   const ready = canWrite && ctx.companyId && blocks.length > 0;
@@ -43,6 +48,7 @@ export default async function Page() {
               { kind: "text", name: "soilPh", label: "pH tanah", type: "number", step: "0.1", min: "0", max: "14" },
               { kind: "text", name: "holeCount", label: "Jumlah lubang tanam", type: "number", min: "0" },
               { kind: "text", name: "effectiveAreaHa", label: "Area efektif (ha)", type: "number", step: "0.01", min: "0" },
+              { kind: "select", name: "plantingLayoutItemId", label: "Layout tanam", options: layouts },
               { kind: "select", name: "status", label: "Status", options: STATUS, required: true },
               { kind: "textarea", name: "note", label: "Catatan (opsional)" },
             ]}

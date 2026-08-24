@@ -245,16 +245,19 @@ export async function createLandPreparation(
   input: {
     blockId: string; checkedAt: string; soilPh?: number | null; holeCount?: number | null;
     effectiveAreaHa?: number | null; status: string; note?: string | null;
+    /** Layout/jarak tanam dari Master Data (tipe planting_layout, migrasi 0050). */
+    plantingLayoutItemId?: string | null;
   },
 ): Promise<string> {
   const rows = await rlsQuery<{ id: string }>(
     ctx,
     `INSERT INTO app.land_preparations
        (block_id, checked_at, soil_ph, planting_hole_count, effective_area_ha, status,
-        note, approval_status, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6::app.prep_status,$7,'draft',$8) RETURNING id`,
+        note, planting_layout_item_id, approval_status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6::app.prep_status,$7,$8,'draft',$9) RETURNING id`,
     [input.blockId, input.checkedAt, input.soilPh ?? null, input.holeCount ?? null,
-     input.effectiveAreaHa ?? null, input.status, input.note ?? null, ctx.userId],
+     input.effectiveAreaHa ?? null, input.status, input.note ?? null,
+     input.plantingLayoutItemId ?? null, ctx.userId],
   );
   return rows[0].id;
 }
