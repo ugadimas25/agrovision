@@ -1,4 +1,6 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
+import { EMPTY_FILTER, filterAktif, type DashboardFilter, type Terbatas } from "./filters";
+import { resolveFilter } from "./filterResolve";
 import { budgetVsActual, totalApprovedSpend } from "@/lib/repo/costing";
 import { reflectedCosts } from "@/lib/repo/pricing";
 import { formatIdrShort, formatIdr } from "@/lib/format";
@@ -23,8 +25,25 @@ export type FinKpi = { key: "revenue" | "expense" | "profit" | "budget"; label: 
 export type RevenueCommodity = { commodity: string; total: number; grades: { grade: string; value: number; pct: number }[] };
 /** realisasi null = fase itu belum punya realisasi (migrasi 0039), bukan nol. */
 export type BudgetFase = { fase: string; anggaran: number; realisasi: number | null };
+/**
+ * Komposisi biaya per kategori INDUK (keputusan pemilik produk: anggaran dikelola
+ * di tingkat induk, jadi strukturnya dibaca di tingkat yang sama).
+ *
+ * Panel "Struktur Biaya" dulu dipatok `hasCostStructure: false` -- selamanya
+ * menampilkan "Data biaya belum tersedia" dengan penjelasan komposisi
+ * internal/outsource/kontrak. Dua-duanya salah: datanya ADA (38 transaksi
+ * disetujui berkategori di dataset demo), dan internal/outsource/kontrak bukan
+ * kolom yang dimiliki skema mana pun -- itu sumbu yang tidak bisa dihitung.
+ * Yang bisa dihitung, dan yang ditampilkan sekarang, adalah kategori biaya.
+ */
+export type CostSlice = { name: string; total: number; pct: number };
 
 export type FinDashboard = {
+  /**
+   * AI-24: metrik yang tidak bisa mengikuti filter, beserta alasannya. Dirender
+   * di bawah bilah filter supaya angka em-dash tidak terbaca sebagai "nol".
+   */
+  terbatas: Terbatas[];
   kpis: FinKpi[];
   dataIncomplete: boolean;
   budgetFases: BudgetFase[];
@@ -32,20 +51,63 @@ export type FinDashboard = {
   revenue: RevenueCommodity[];
   totalRevenue: number | null;
   totalVolume: number | null;
-  hasCostStructure: boolean;
+  costStructure: CostSlice[];
   insights: InsightRow[];
 };
 
-export async function financialDashboardView(ctx: RlsContext): Promise<FinDashboard> {
-  const [budgets, spend, reflection, harvest, rates] = await Promise.all([
+/**
+ * AI-24 · filter diterapkan di mana skemanya memungkinkan, dan DIAKUI di mana
+ * tidak. Panen & pengeluaran punya block_id + tanggal (+ crop_code untuk panen),
+ * jadi keduanya ikut. `reflectedCosts()` menjumlahkan SE-PERUSAHAAN tanpa GROUP BY
+ * blok/periode (AKAR-2, docs/13 §3) — ia tidak bisa dipersempit tanpa pekerjaan
+ * yang memang sudah disebut teks asli AI-02, jadi nilainya dirender em-dash saat
+ * filter aktif alih-alih tampil seolah mengikuti.
+ */
+export async function financialDashboardView(
+  ctx: RlsContext,
+  filter: DashboardFilter = EMPTY_FILTER,
+): Promise<FinDashboard> {
+  const f = await resolveFilter(ctx, filter);
+  const aktif = filterAktif(filter);
+  const [budgets, spend, reflection, harvest, rates, struktur] = await Promise.all([
     budgetVsActual(ctx),
-    totalApprovedSpend(ctx),
+    totalApprovedSpend(ctx, f),
     reflectedCosts(ctx),
     rlsQuery<{ crop_code: string; grade: string | null; ton: string }>(ctx,
       `SELECT crop_code, grade, COALESCE(SUM(quantity_ton),0)::text AS ton
-         FROM app.harvest_records WHERE approval_status='approved' GROUP BY crop_code, grade`),
+         FROM app.harvest_records
+        WHERE approval_status='approved'
+          AND ($1::uuid[] IS NULL OR block_id = ANY($1))
+          AND ($2::date IS NULL OR harvested_on BETWEEN $2::date AND $3::date)
+          AND ($4::text[] IS NULL OR crop_code = ANY($4))
+        GROUP BY crop_code, grade`,
+      [f.blockIds, f.dateFrom, f.dateTo, f.cropCodes]),
     rlsQuery<{ code: string; rate: string }>(ctx, `SELECT code, rate_idr AS rate FROM app.price_list WHERE kind='revenue'`),
+    // Struktur biaya: kategori INDUK dari transaksi disetujui. Transaksi tanpa
+    // kategori tidak dibuang diam-diam -- ia masuk sebagai "Tanpa kategori",
+    // karena menyembunyikannya membuat total panel tidak sama dengan KPI
+    // Pengeluaran tanpa penjelasan apa pun.
+    rlsQuery<{ induk: string | null; total: string }>(ctx,
+      `SELECT COALESCE(pi.name, mi.name) AS induk, SUM(t.amount_idr)::text AS total
+         FROM app.cost_transactions t
+         LEFT JOIN app.master_items mi ON mi.id = t.cost_category_id
+         LEFT JOIN app.master_items pi ON pi.id = mi.parent_id
+        WHERE t.approval_status='approved'
+          AND ($1::uuid[] IS NULL OR t.block_id = ANY($1))
+          AND ($2::date IS NULL OR t.transaction_date BETWEEN $2::date AND $3::date)
+        GROUP BY COALESCE(pi.name, mi.name)
+        ORDER BY SUM(t.amount_idr) DESC`,
+      [f.blockIds, f.dateFrom, f.dateTo]),
   ]);
+
+  const terbatas: Terbatas[] = aktif
+    ? [{ metrik: "Biaya ter-refleksi", alasan: "dihitung se-perusahaan, belum punya dimensi blok/periode (AKAR-2)" }]
+    : [];
+  // cost_transactions tidak menyimpan komoditas, jadi struktur biaya tidak bisa
+  // mengikuti filter komoditas -- dinyatakan, bukan didiamkan.
+  if (filter.cropCodes.length > 0) {
+    terbatas.push({ metrik: "Struktur biaya", alasan: "cost_transactions tidak menyimpan komoditas" });
+  }
 
   const rateFor = (crop: string) => {
     const code = crop === "DURIAN" ? "REV-DUR-A" : "REV-COCO";
@@ -78,8 +140,11 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
   const hasBudget = budgets.length > 0;
   const serapan =
     hasBudget && sumBudget > 0 && sumActual !== null ? (sumActual / sumBudget) * 100 : null;
-  const laba = reflection.balanceIdr;
-  const labaSemu = hasRevenue && reflection.totalCostIdr < (totalRevenue ?? 0) * 0.05;
+  // Laba = revenue - biaya ter-refleksi. Karena biayanya se-perusahaan, labanya
+  // ikut tidak bisa dipersempit: menampilkannya saat filter aktif berarti
+  // membandingkan revenue satu blok dengan biaya seluruh perusahaan.
+  const laba = aktif ? null : reflection.balanceIdr;
+  const labaSemu = !aktif && hasRevenue && reflection.totalCostIdr < (totalRevenue ?? 0) * 0.05;
 
   // anggaran vs realisasi per fase (pakai periodName sebagai fase)
   // realisasi per fase dijumlahkan dari yang DIKETAHUI saja; fase yang belum
@@ -94,6 +159,14 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
     fase, anggaran: v.anggaran, realisasi: sumKnown(v.realisasi),
   }));
 
+  const totalBiaya = struktur.reduce((a, r) => a + Number(r.total), 0);
+  const costStructure: CostSlice[] = struktur.map((r) => ({
+    name: r.induk ?? "Tanpa kategori",
+    total: Number(r.total),
+    pct: totalBiaya > 0 ? (Number(r.total) / totalBiaya) * 100 : 0,
+  }));
+  const terbesar = costStructure[0] ?? null;
+
   const kpis: FinKpi[] = [
     { key: "revenue", label: "Revenue", value: totalRevenue === null ? EMPTY : formatIdrShort(totalRevenue), note: hasRevenue ? "dari panen disetujui" : "menunggu panen disetujui", tone: "pos" },
     { key: "expense", label: "Pengeluaran", value: spend === null ? EMPTY : formatIdrShort(spend), note: spend === null ? "belum ada realisasi" : "disetujui" },
@@ -102,6 +175,19 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
   ];
 
   const insights: InsightRow[] = [
+    // Insight pertama DIHITUNG dari struktur biaya, bukan prosa tetap: kategori
+    // terbesar dan porsinya berubah mengikuti filter.
+    ...(terbesar
+      ? [{
+        area: "Konsentrasi Biaya",
+        temuan: `${terbesar.name} menyerap ${nf(terbesar.pct, 1)}% dari ${formatIdr(totalBiaya)} biaya disetujui (${costStructure.length} kategori).`,
+        rekomendasi: terbesar.pct >= 30
+          ? `Tinjau ulang harga & volume pada ${terbesar.name} — porsinya di atas 30%.`
+          : "Biaya tersebar cukup merata; pertahankan pemantauan per kategori.",
+        dampak: "Prioritas efisiensi biaya",
+        status: "Belum Ditindaklanjuti" as const,
+      }]
+      : []),
     { area: "Pengendalian Biaya", temuan: labaSemu ? "Refleksi biaya ter-approved belum aktif sehingga data biaya belum lengkap." : "Pantau akurasi refleksi biaya.", rekomendasi: "Aktifkan refleksi biaya ter-approved ke buku besar.", dampak: "Akurasi laba/rugi, pelaporan finansial", status: "Belum Ditindaklanjuti" },
     { area: "Perencanaan Anggaran", temuan: hasBudget ? "Beberapa pos anggaran perlu ditinjau." : "Anggaran per fase belum disusun.", rekomendasi: "Buat anggaran per fase (Persiapan, Tanam, Pemeliharaan, Panen).", dampak: "Kontrol biaya, serapan anggaran", status: "Belum Ditindaklanjuti" },
     { area: "Harga & Pendapatan", temuan: "Daftar harga (price list) belum divalidasi/dikunci.", rekomendasi: "Validasi & kunci daftar harga komoditas & grade.", dampak: "Akurasi revenue", status: "Belum Ditindaklanjuti" },
@@ -109,10 +195,11 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
   ];
 
   return {
+    terbatas,
     kpis, dataIncomplete: labaSemu || spend === null,
     budgetFases, hasBudget,
     revenue, totalRevenue, totalVolume: totalVolume > 0 ? totalVolume : null,
-    hasCostStructure: false,
+    costStructure,
     insights,
   };
 }

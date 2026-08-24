@@ -10,7 +10,11 @@ import {
   listSupplierOptions,
 } from "@/lib/repo/costing";
 import { listCategoryOptions, listOptions } from "@/lib/repo/master";
-import { searchBlockOptions } from "@/lib/repo/blocks";
+import { searchBlockOptions, listEstateOptions } from "@/lib/repo/blocks";
+import { listCropCodeOptions } from "@/lib/repo/operational";
+import { FilterBar } from "@/components/dashboard/FilterBar";
+import { parseDashboardFilter, ringkasBatasan, type Terbatas } from "@/lib/report/filters";
+import { resolveFilter } from "@/lib/report/filterResolve";
 import { autoMaterializedCategories } from "@/lib/repo/pricing";
 import { ExpenditureForm } from "./ExpenditureForm";
 import { ExpenditureEditor } from "./ExpenditureEditor";
@@ -57,7 +61,9 @@ const STATUSES = [
 export default async function PengeluaranPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string; status?: string; q?: string }>;
+  // K-08: bentuk searchParams SAMA dengan ketiga dashboard (estate/periode/
+  // blok/komoditas berulang), ditambah parameter milik halaman ini sendiri.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   let ctx;
   try {
@@ -68,13 +74,31 @@ export default async function PengeluaranPage({
   const t = getDict(await getLocale());
 
   const sp = await searchParams;
-  const page = Number(sp.page ?? "1") || 1;
+  const satu = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+  const page = Number(satu(sp.page) ?? "1") || 1;
+  const status = satu(sp.status) || undefined;
+  const q = satu(sp.q);
 
-  const [data, perBlock, total] = await Promise.all([
-    listExpenditures(ctx, { page, status: sp.status || undefined, search: sp.q }),
-    blockCostSummary(ctx, { limit: 5 }),
-    totalApprovedSpend(ctx),
+  const filter = parseDashboardFilter(sp);
+  const f = await resolveFilter(ctx, filter);
+
+  const [data, perBlock, total, estateOpts, cropOpts, periodOpts] = await Promise.all([
+    listExpenditures(ctx, { page, status, search: q, filter: f }),
+    blockCostSummary(ctx, { limit: 5, blockIds: f.blockIds }),
+    totalApprovedSpend(ctx, f),
+    listEstateOptions(ctx),
+    listCropCodeOptions(ctx),
+    listFiscalPeriodOptions(ctx),
   ]);
+  // Blok dipakai DUA kali di halaman ini: opsi filter dan opsi form. Dimuat
+  // sekali di sini karena opsi form hanya dimuat bila boleh menulis.
+  const filterBlocks = await searchBlockOptions(ctx);
+
+  // Kejujuran filter: cost_transactions tidak menyimpan komoditas, jadi filter
+  // komoditas tidak bisa dihormati di halaman ini. Dinyatakan, bukan didiamkan.
+  const terbatas: Terbatas[] = filter.cropCodes.length > 0
+    ? [{ metrik: "Transaksi biaya", alasan: "cost_transactions tidak menyimpan komoditas" }]
+    : [];
 
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   // Opsi form dimuat hanya bila pengguna memang boleh menulis DAN entitas sudah
@@ -96,6 +120,20 @@ export default async function PengeluaranPage({
   return (
     <div>
       <PageHeader title={t("nav.expenditure")} subtitle={t("sub.expenditure")} />
+
+      {/* K-08 · komponen filter yang SAMA dengan dashboard. `keep` membawa
+          status & kata kunci supaya menekan Terapkan tidak menghapus keduanya. */}
+      <div className="mb-4 space-y-2">
+        <FilterBar basePath="/costing/pengeluaran" filter={filter}
+                   estates={estateOpts} blocks={filterBlocks} periods={periodOpts} crops={cropOpts}
+                   catatanKomoditas={null} keep={{ status, q }} />
+        {ringkasBatasan(terbatas) && (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+            <strong>Tidak mengikuti filter:</strong> {ringkasBatasan(terbatas)}. Daftar di bawah
+            karena itu TIDAK dipersempit oleh pilihan komoditas.
+          </p>
+        )}
+      </div>
 
       {/* AI-52: form manual KHUSUS overhead & upah (§13 aturan 5). */}
       {formReady && (
@@ -289,7 +327,13 @@ export default async function PengeluaranPage({
               pageSize={data.pageSize}
               total={data.total}
               basePath="/costing/pengeluaran"
-              params={{ q: sp.q, status: sp.status }}
+              // Filter ikut dibawa: tanpa ini halaman 2 memuat daftar TANPA
+              // filter, sementara bilah filternya tetap tampak tercentang.
+              params={{
+                q, status,
+                estate: filter.estateIds, blok: filter.blockIds,
+                periode: filter.periodIds, komoditas: filter.cropCodes,
+              }}
             />
           </>
         )}

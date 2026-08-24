@@ -1,37 +1,23 @@
+// Building2/CalendarDays/Tag/ChevronDown/Bell dulu milik DashboardFilterBar —
+// bilah "filter" yang isinya <div> tanpa <select>/<form>/tautan, jadi diklik tidak
+// melakukan apa pun. Digantikan FilterBar bersama (AI-24) dan dihapus di sini.
 import type { LucideIcon } from "lucide-react";
-import { Building2, CalendarDays, Tag, Leaf, ChevronDown, Bell } from "lucide-react";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
 import { cn } from "@/lib/utils";
 
-/** Filter bar atas (presentational) sesuai mockup — dipakai semua dashboard. */
-export function DashboardFilterBar({ company }: { company: string }) {
-  const chip = (Icon: LucideIcon, label: string, value: string) => (
-    <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm">
-      <Icon className="h-4 w-4 text-slate-500" />
-      <div className="leading-tight">
-        <span className="block text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
-        <span className="font-medium text-slate-700">{value}</span>
-      </div>
-      <ChevronDown className="h-3.5 w-3.5 text-slate-300" />
-    </div>
-  );
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {chip(Building2, "Estate", company)}
-      {chip(CalendarDays, "Periode", "Semua periode")}
-      {chip(Tag, "Blok", "Semua blok")}
-      {chip(Leaf, "Komoditas", "Kelapa & Durian")}
-      <span className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500" title="Notifikasi">
-        <Bell className="h-4 w-4" />
-      </span>
-    </div>
-  );
-}
-
 /** KPI card: ikon bulat + angka besar + catatan. */
-export function KpiCard({ icon: Icon, label, value, unit, note, tone = "default", badge, iconTone = "emerald" }: {
+export function KpiCard({ icon: Icon, label, value, unit, note, tone = "default", badge, iconTone = "emerald", testId }: {
   icon: LucideIcon; label: string; value: string; unit?: string; note?: string;
   tone?: "default" | "pos" | "neg"; badge?: { text: string; tone: "warn" | "ok" }; iconTone?: "emerald" | "red" | "amber" | "sky";
+  /**
+   * Pegangan uji untuk NILAI kartu ini. Ada karena scripts/at-verify.mjs perlu
+   * membaca satu angka tertentu, dan mencocokkan prosa di sekitarnya rapuh.
+   * Sebelum penanda ini, uji "angka berubah saat difilter" membandingkan seluruh
+   * pola `>angka<` di halaman -- pola itu TIDAK menangkap nilai KPI (dirender
+   * sebagai "Rp 1,2 jt" dalam satu node), jadi ujinya melaporkan "tidak berubah"
+   * padahal berubah. Uji yang salah baca sama buruknya dengan fitur yang rusak.
+   */
+  testId?: string;
 }) {
   const empty = value === "—";
   const iconCls = {
@@ -45,7 +31,7 @@ export function KpiCard({ icon: Icon, label, value, unit, note, tone = "default"
         <span className={cn("rounded-full p-2.5", iconCls)}><Icon className="h-5 w-5" /></span>
         <div className="min-w-0 flex-1">
           <p className="text-sm text-slate-500">{label}</p>
-          <p className={cn("mt-0.5 text-2xl font-bold tabular-nums", valueCls)}>
+          <p data-testid={testId} className={cn("mt-0.5 text-2xl font-bold tabular-nums", valueCls)}>
             {value}{!empty && unit ? <span className="ml-1 text-sm font-semibold text-slate-500">{unit}</span> : null}
           </p>
         </div>

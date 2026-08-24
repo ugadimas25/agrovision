@@ -21,7 +21,15 @@ export function Pagination({
   pageSize: number;
   total: number;
   basePath: string;
-  params?: Record<string, string | undefined>;
+  /**
+   * Parameter yang ikut dibawa ke halaman berikutnya.
+   *
+   * Nilai ARRAY diizinkan karena filter bersama (AI-24/K-08) memakai parameter
+   * BERULANG: `?blok=a&blok=b`. Dengan `set()` saja, hanya nilai terakhir yang
+   * terbawa -- pengguna memilih tiga blok, pindah ke halaman 2, dan diam-diam
+   * tinggal satu blok. Karena itu array di-`append`, bukan di-`set`.
+   */
+  params?: Record<string, string | string[] | undefined>;
 }) {
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -29,7 +37,10 @@ export function Pagination({
 
   const href = (p: number) => {
     const sp = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) if (v) sp.set(k, v);
+    for (const [k, v] of Object.entries(params)) {
+      if (Array.isArray(v)) { for (const x of v) if (x) sp.append(k, x); }
+      else if (v) sp.set(k, v);
+    }
     if (p > 1) sp.set("page", String(p));
     const q = sp.toString();
     return q ? `${basePath}?${q}` : basePath;

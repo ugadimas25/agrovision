@@ -793,6 +793,120 @@ async function main() {
     ok("filter komoditas menjelaskan metrik yang tidak bisa mengikutinya",
       /tidak menyimpan komoditas/.test(kom.html));
 
+    // Bagian 2: dua dashboard lain memakai KOMPONEN dan kontrak yang sama.
+    //
+    // Di sini nilai KPI dibaca lewat data-testid, BUKAN lewat pola `>angka<`
+    // seperti dashboard Operasional di atas. Alasannya konkret: KPI kedua
+    // dashboard ini dirender "Rp 1,2 jt" / "12,3" + unit dalam SATU node, jadi
+    // pola `>angka<` tidak menangkapnya dan uji melaporkan "tidak berubah"
+    // padahal berubah. Yang diperiksa adalah metrik yang memang HARUS berubah:
+    // laba menjadi em-dash saat filter aktif (biaya perusahaan-lebar tidak bisa
+    // dipersempit -- AKAR-2), demikian pula neraca karbon saat blok dipilih.
+    const kpi = (html, key) => {
+      const m = new RegExp(`data-testid="kpi-${key}"[^>]*>([\\s\\S]*?)</p>`).exec(html);
+      return m ? m[1].replace(/<[^>]*>/g, "").trim() : null;
+    };
+    for (const [path, nama, key] of [
+      ["/dashboard/financial", "Finansial", "profit"],
+      ["/dashboard/sustainability", "Keberlanjutan", "carbon"],
+    ]) {
+      const p0 = await demoAdmin.get(path);
+      ok(`${nama}: bilah filter bersama terpasang`, /data-testid="filter-dashboard"/.test(p0.html));
+      const b = /name="blok" value="([^"]+)"/.exec(p0.html)?.[1];
+      const p1 = await demoAdmin.get(`${path}?blok=${b}`);
+      const v0 = kpi(p0.html, key), v1 = kpi(p1.html, key);
+      // v0 harus ANGKA, bukan em-dash: kalau tanpa filter pun sudah em-dash,
+      // "berubah menjadi em-dash" tidak membuktikan apa pun.
+      ok(`${nama}: KPI ${key} punya angka tanpa filter`, Boolean(v0) && v0 !== "—", `${v0}`);
+      ok(`${nama}: KPI ${key} jujur em-dash saat filter aktif`, v1 === "—", `${v0} -> ${v1}`);
+      // Metrik yang TIDAK bisa mengikuti filter wajib dinyatakan, bukan didiamkan.
+      ok(`${nama}: metrik yang tak bisa difilter dinyatakan alasannya`,
+        /Tidak mengikuti filter/.test(p1.html));
+    }
+
+    // AI-24 bagian 3: panel "Struktur Biaya" dulu dipatok kosong selamanya
+    // (hasCostStructure: false, dan view-nya bahkan tidak pernah membacanya),
+    // sambil menjanjikan komposisi internal/outsource/kontrak -- sumbu yang tidak
+    // ada kolomnya. Sekarang dihitung per kategori induk dari transaksi disetujui.
+    const fin0 = await demoAdmin.get("/dashboard/financial");
+    const strukturDari = (html) => {
+      // React menyisipkan komentar penanda antar-teks: "31,9<!-- -->%". Tanpa
+      // dibuang, pola `>angka%<` tidak cocok dan uji melaporkan panel kosong
+      // padahal terisi -- persis salah-baca yang sudah menipu sekali di berkas ini.
+      const bersih = html.replace(/<!--[\s\S]*?-->/g, "");
+      const m = /data-testid="struktur-biaya"[\s\S]*?<\/ul>/.exec(bersih);
+      if (!m) return null;
+      return [...m[0].matchAll(/>([\d.,]+)%</g)].map((x) => x[1]);
+    };
+    const s0 = strukturDari(fin0.html);
+    ok("Struktur Biaya terisi dari transaksi disetujui, bukan panel kosong abadi",
+      Array.isArray(s0) && s0.length >= 3, `${s0 ? s0.length : 0} kategori terlihat`);
+    ok("porsi kategori bukan 100% satu irisan (bukti benar-benar dikelompokkan)",
+      Array.isArray(s0) && s0.length >= 3 && s0.every((v) => Number(v.replace(",", ".")) < 100),
+      `${(s0 ?? []).join("% · ")}%`);
+    // Insight pertama dihitung: menyebut nama kategori terbesar + porsinya.
+    ok("insight konsentrasi biaya menyebut angka, bukan prosa tetap",
+      /menyerap [\d.,]+% dari Rp/.test(fin0.html));
+    // Dan komposisinya IKUT filter blok.
+    const bFin = /name="blok" value="([^"]+)"/.exec(fin0.html)?.[1];
+    const fin1 = await demoAdmin.get(`/dashboard/financial?blok=${bFin}`);
+    const s1 = strukturDari(fin1.html);
+    ok("komposisi biaya berubah saat satu blok dipilih",
+      JSON.stringify(s0) !== JSON.stringify(s1),
+      `${(s0 ?? []).join("/")}% -> ${(s1 ?? []).join("/")}%`);
+
+    // Kartu KPI tidak boleh MENGAKU kemampuan yang tidak ada. "Traceability:
+    // Aktif / Semua rantai terpetakan" dulu literal tanpa satu pun query,
+    // padahal /traceability masih placeholder dan tak ada tabel rantai.
+    const sust = await demoAdmin.get("/dashboard/sustainability");
+    ok("KPI Traceability tidak mengaku aktif tanpa data", kpi(sust.html, "trace") === "—",
+      `${kpi(sust.html, "trace")}`);
+    // Standar tanpa program = em-dash, bukan 0%. Di dataset demo hanya 1 dari 9
+    // standar punya program, jadi bila semuanya tampil berangka, `?? 0` kembali.
+    const nolPersen = (sust.html.match(/>0%</g) ?? []).length;
+    ok("standar tanpa program tidak dirender 0%", nolPersen === 0 && /belum ada program/.test(sust.html),
+      `${nolPersen} kemunculan "0%"`);
+
+    // K-08 · modul Akuntansi memakai KOMPONEN dan bentuk searchParams yang sama.
+    // Yang diuji bukan "ada bilahnya", tapi bahwa daftarnya benar-benar
+    // menyempit DAN parameter halaman tidak hilang saat filter diterapkan.
+    const peng0 = await demoAdmin.get("/costing/pengeluaran");
+    ok("K-08: Pengeluaran memakai bilah filter yang sama",
+      /data-testid="filter-dashboard"/.test(peng0.html));
+    const jumlahBaris = (html) => {
+      const m = /Menampilkan[\s\S]{0,200}?dari[\s\S]{0,80}?<\/span>/.exec(html.replace(/<!--[\s\S]*?-->/g, ""));
+      if (!m) return null;
+      const angkaSemua = [...m[0].matchAll(/>([\d.]+)</g)].map((x) => x[1]);
+      return angkaSemua.length ? angkaSemua[angkaSemua.length - 1] : null;
+    };
+    const t0 = jumlahBaris(peng0.html);
+    const bPeng = /name="blok" value="([^"]+)"/.exec(peng0.html)?.[1];
+    const peng1 = await demoAdmin.get(`/costing/pengeluaran?blok=${bPeng}`);
+    const t1 = jumlahBaris(peng1.html);
+    ok("K-08: daftar pengeluaran menyempit saat satu blok dipilih",
+      t0 !== null && t1 !== null && Number(t0.replace(/\./g, "")) > Number(t1.replace(/\./g, "")),
+      `${t0} -> ${t1} transaksi`);
+    // Filter GET tidak boleh MENGHAPUS parameter halaman: tanpa hidden input,
+    // menekan Terapkan membuang status & kata kunci tanpa memberi tahu.
+    const pengKeep = await demoAdmin.get("/costing/pengeluaran?status=approved&q=BLK");
+    const form = /<form[^>]*data-testid="filter-dashboard"[\s\S]*?<\/form>/.exec(pengKeep.html)?.[0] ?? "";
+    ok("K-08: status & kata kunci dibawa sebagai hidden input, tidak hilang",
+      /name="status"[^>]*value="approved"/.test(form) && /name="q"[^>]*value="BLK"/.test(form));
+    // Dan paginasi membawa filter: tanpa itu halaman 2 memuat daftar TANPA filter
+    // sementara bilahnya tetap tampak tercentang.
+    //
+    // Filter ESTATE, bukan blok: satu blok hanya menyisakan 8 transaksi -> tidak
+    // ada halaman kedua, dan ujinya lolos tanpa menguji apa pun. Estate
+    // menyisakan 46 dari 74, jadi tombol "Berikutnya" memang ada. Ketiadaan
+    // tombol itu kini DIANGGAP GAGAL, bukan dimaafkan.
+    const ePeng = /name="estate" value="([^"]+)"/.exec(peng0.html)?.[1];
+    const pengEst = await demoAdmin.get(`/costing/pengeluaran?estate=${ePeng}`);
+    const nextHref = /<a[^>]*aria-label="Berikutnya"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*aria-label="Berikutnya"/.exec(pengEst.html);
+    const href = nextHref ? (nextHref[1] ?? nextHref[2]) : null;
+    ok("K-08: tautan paginasi tetap membawa filter estate",
+      Boolean(href) && href.includes(`estate=${ePeng}`) && href.includes("page=2"),
+      `${href ?? "tautan Berikutnya tidak ada"}`);
+
     // Parameter palsu dari URL tidak boleh menjadi galat maupun celah — disaring
     // jadi "tanpa filter".
     const ngawur = await demoAdmin.get("/dashboard?blok=bukan-uuid&komoditas=%27%3B--");
