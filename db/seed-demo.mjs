@@ -367,6 +367,26 @@ async function seed() {
     'Pengadaan Pupuk': 350_000_000, 'Alat & Mekanisasi': 250_000_000,
     'Kendaraan & Bahan Bakar': 300_000_000, 'Servis Kendaraan': 80_000_000,
     'Tenaga Kerja': 1_100_000_000, 'Logistik': 220_000_000,
+    // Dua kategori dari keputusan 24 Agu 2026; tanpa entri di sini keduanya jatuh
+    // ke default 100jt dan serapannya jadi ekstrem.
+    'Pengadaan Pestisida': 180_000_000, 'Jasa Survei & Pemetaan': 120_000_000,
+  }
+
+  // Serapan yang DITUJU per kategori induk.
+  //
+  // Sebelum ini nilai pengeluaran (15jt-112,5jt) tidak punya hubungan apa pun
+  // dengan anggaran induknya, jadi kategori beranggaran kecil PASTI terlampaui
+  // jauh: Servis Kendaraan 346%, Pengadaan Pestisida 305%, Jasa Survei 247%.
+  // Bagi orang yang melihat demo itu terbaca seperti aplikasinya salah hitung.
+  //
+  // Dua kategori SENGAJA dibiarkan di atas 100% supaya jalur peringatan "anggaran
+  // terlampaui" tetap teruji — kalau semuanya wajar, jalur itu tidak pernah jalan.
+  // Persiapan Lahan dipatok 68% mengikuti angka yang sudah dikutip di docs/13.
+  const serapanTarget = {
+    'Persiapan Lahan': 0.68, 'Pengadaan Bibit': 0.44, 'Pengadaan Pupuk': 0.61,
+    'Tenaga Kerja': 0.39, 'Alat & Mekanisasi': 0.82, 'Kendaraan & Bahan Bakar': 0.73,
+    'Pengadaan Pestisida': 0.55, 'Jasa Survei & Pemetaan': 0.91,
+    'Logistik': 1.18, 'Servis Kendaraan': 1.27,   // <- terlampaui, disengaja
   }
   for (const p of parents) {
     await c.query(
@@ -381,6 +401,27 @@ async function seed() {
      ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name RETURNING id`)).rows[0].id
 
   const STATUSES = ['approved', 'approved', 'approved', 'submitted', 'draft', 'rejected']
+
+  // Nilai per transaksi diturunkan DARI anggaran induknya, bukan dari deret bebas.
+  // Hanya transaksi 'approved' yang dihitung v_budget_vs_actual, jadi pembaginya
+  // adalah jumlah transaksi approved yang akan mendarat di induk itu — dihitung
+  // lebih dulu dari deret status yang deterministik.
+  const approvedPerParent = {}
+  for (const [i, leaf] of leafIds.entries()) {
+    for (let k = 0; k < 2; k++) {
+      if (STATUSES[(i * 2 + k) % STATUSES.length] === 'approved') {
+        approvedPerParent[leaf.parent] = (approvedPerParent[leaf.parent] ?? 0) + 1
+      }
+    }
+  }
+  const nilaiPerTx = (parent) => {
+    const anggaran = budgetPlan[parent] ?? 100_000_000
+    const n = approvedPerParent[parent] ?? 0
+    const target = serapanTarget[parent] ?? 0.6
+    // Tanpa transaksi approved, serapan memang kosong — pakai nilai wajar saja.
+    return n === 0 ? 20_000_000 : Math.round((anggaran * target) / n / 500_000) * 500_000
+  }
+
   let txCount = 0
   for (const [i, leaf] of leafIds.entries()) {
     // dua transaksi per sub-komponen, tersebar ke blok & supplier
@@ -388,7 +429,7 @@ async function seed() {
       const idx = i * 2 + k
       const status = STATUSES[idx % STATUSES.length]
       const blockId = blockIds[idx % 10]                       // hanya blok berpolygon
-      const amount = 15_000_000 + ((idx * 37) % 40) * 2_500_000 // 15jt - 112,5jt, deterministik
+      const amount = nilaiPerTx(leaf.parent)
       const day = String((idx % 27) + 1).padStart(2, '0')
       const uom = Object.values(uomIds)[idx % UOM.length]
 
