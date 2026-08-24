@@ -52,6 +52,7 @@ Akibatnya nyata: kalau kamu bilang *"B-13 sudah selesai"* di meeting, separuh ru
 | B-25 field wajib | **AI-03** (wajibkan field volume driver biaya) | **Kamu** — AI-03 adalah bagian dari B-25 |
 | B-20 materialisasi biaya | AI-01 | ✅ Sudah selesai |
 | — | AI-42 (perluas `at-verify.mjs` ke semua modul approval) | **Dimas**, tapi kamu wajib menambah cek untuk tiketmu sendiri |
+| B-27 stub login | — | **Dimas**. Jangan sentuh `src/lib/session.ts` tanpa bicara |
 
 ---
 
@@ -82,7 +83,7 @@ Ini bukan formalitas. Jalankan **setiap kali selesai satu tiket**, bukan hanya d
 | `app.check_rls_coverage()` | 0 baris |
 | `app.check_privilege_revocations()` | 0 baris |
 
-> Angka `at:verify` dan `adversarial` bisa **naik** sementara PR #29 & #30 belum di-merge (149 dan 66 sudah termasuk keduanya). Kalau punyamu lebih rendah, `git pull origin main` dulu, jangan dianggap regresi.
+> Angka di atas diverifikasi di `main` pada 24 Agustus 2026, **setelah** PR #29 & #30 di-merge. Kalau angkamu lebih rendah, `git pull origin main` dulu — jangan dianggap regresi sebelum memastikan branch-mu sudah mutakhir.
 
 **Tiap tiket yang menyentuh RLS, policy, atau privilege wajib menambah kasus baru di `db/verify-adversarial.mjs`** — kasus yang *harus gagal*. Tanpa itu tidak ada bukti gerbangnya bekerja.
 
@@ -465,6 +466,8 @@ Backup yang belum pernah diuji restore belum bisa disebut backup.
 
 # Tiket baru dari temuan 22–24 Agustus
 
+Satu untukmu (B-26), satu untuk Dimas (B-27) — yang kedua ditulis di sini supaya kamu tahu apa yang menahan produksi, bukan untuk dikerjakan.
+
 <a id="b-26"></a>
 ## B-26 · `notFound()` menjawab HTTP 200, bukan 404
 `fix/notfound-status-code` · **0,5 hari** · 🟡 Medium
@@ -492,31 +495,24 @@ Ada **13 berkas `loading.tsx`**: `dashboard`, `costing`, `laporan`, `survei`, `p
 
 ---
 
-## B-27 · Stub login masih aktif — **satu-satunya penghalang produksi yang belum ada pemiliknya**
-`feat/identity-platform-verify` · **2–3 hari** · 🔴 **Critical** · *butuh keputusan & kredensial Dimas*
+## B-27 · Stub login masih aktif — **milik Dimas, jangan dikerjakan**
+~~`feat/identity-platform-verify`~~ · **0 hari untukmu** · 🔴 Critical
 
-**Ini tidak ada di daftar tiket siapa pun** — tidak di dokumen ini, tidak di `docs/13`. Saya munculkan di sini karena ini backend security dan ini yang menahan produksi. **Putuskan dengan Dimas apakah masuk lingkupmu**; kalau tidak, tiket ini tetap harus punya pemilik.
+**Pemiliknya sudah diputuskan: Dimas.** Dicatat di sini bukan untuk kamu kerjakan, tapi supaya kamu tahu apa yang sedang menahan produksi — dan supaya kamu tidak menyentuh `resolveLogin()` tanpa bicara.
 
-`resolveLogin()` di `src/lib/session.ts` **mencocokkan email ke user aktif tanpa verifikasi kredensial apa pun**. Siapa pun yang tahu sebuah email terdaftar bisa masuk sebagai orang itu. `app.check_production_readiness()` menandainya sebagai **blocking**:
+`resolveLogin()` di `src/lib/session.ts` **mencocokkan email ke user aktif tanpa verifikasi kredensial apa pun**. Siapa pun yang tahu sebuah email terdaftar bisa masuk sebagai orang itu. `app.check_production_readiness()` menandainya **blocking**:
 
 ```
 login stub masih aktif | blocking | app.lookup_login_email masih ada;
                                     verifikasi ID token Identity Platform belum terpasang
 ```
 
-Yang **sudah** nyata dan tidak perlu dibangun ulang: mekanisme sesinya sendiri sudah benar — cookie httpOnly bertanda HMAC, 12 jam, **diverifikasi ulang ke database setiap request** (jadi menonaktifkan pengguna langsung berlaku), dan menyimpan `externalId`, bukan uuid internal. Yang hilang **hanya** verifikasi ID token.
+**Dua konsekuensi praktis untukmu:**
 
-**Kerjakan**
-1. Verifikasi ID token Identity Platform di `resolveLogin()` — validasi signature, issuer, audience, expiry
-2. Hapus `app.lookup_login_email` setelah jalur baru terbukti jalan
-3. Pastikan `check_production_readiness()` berhenti melaporkan baris ini
-4. Jalur pengembangan lokal tetap harus bisa jalan tanpa Identity Platform — **tapi jangan** lewat flag yang bisa ikut ke produksi tanpa sengaja
+1. **Jangan pakai stub ini sebagai alasan menunda tiketmu.** B-23 (lingkup creator) dan B-22 (riwayat approval) tetap harus benar walau login-nya belum aman — keduanya tentang *apa yang boleh dilihat* setelah masuk, bukan *bagaimana masuknya*.
+2. **Jangan menyentuh `src/lib/session.ts` tanpa bicara dengan Dimas.** Kalau tiketmu butuh sesuatu dari sesi (mis. `ctx.session.userId` untuk policy per-pembuat di B-23), itu sudah tersedia dan tidak perlu diubah.
 
-**Selesai bila**
-- [ ] Login dengan email terdaftar **tanpa** token yang sah → gagal
-- [ ] `app.check_production_readiness()` tidak lagi melaporkan stub login sebagai blocking
-- [ ] Sesi 12 jam, verifikasi ulang per request, dan pengguna nonaktif langsung tertolak — semuanya masih berlaku
-- [ ] Kasus baru di `db/verify-adversarial.mjs` dan `scripts/at-verify.mjs`
+Yang **sudah** benar dan tidak akan berubah oleh tiket ini: mekanisme sesinya sendiri — cookie httpOnly bertanda HMAC, 12 jam, **diverifikasi ulang ke database setiap request** (jadi menonaktifkan pengguna langsung berlaku), dan menyimpan `externalId`, bukan uuid internal. Yang hilang **hanya** verifikasi ID token.
 
 ---
 
@@ -533,7 +529,7 @@ Yang **sudah** nyata dan tidak perlu dibangun ulang: mekanisme sesinya sendiri s
 | 4 · Kesiapan produksi | B-15 (sisa), B-16, B-17 (sisa), B-18 | ± 4 hari |
 | Baru | B-26 | ± 0,5 hari |
 | | **Total tersisa** | **± 12,5 hari kerja** |
-| Belum ada pemilik | **B-27** stub login | ± 2–3 hari |
+| Milik Dimas — **jangan dikerjakan** | B-9 (AI-51) · **B-27** stub login | — |
 
 ## Lima hal yang menentukan urutan
 
@@ -552,7 +548,7 @@ Yang **sudah** nyata dan tidak perlu dibangun ulang: mekanisme sesinya sendiri s
 Reviewer-nya satu orang dan waktunya terbatas. Yang membuat review cepat:
 
 - **Angka, bukan klaim.** "Realisasi 15/17 baris, total Rp 3,03 M" bisa diperiksa; "sudah jalan" tidak.
-- **Tulis apa yang kamu putuskan dan mengapa**, terutama di tiket yang punya dua arah (B-11) atau butuh keputusan Dimas (B-25, B-26, B-27).
+- **Tulis apa yang kamu putuskan dan mengapa**, terutama di tiket yang punya dua arah (B-11) atau butuh keputusan Dimas (B-22, B-25, B-26).
 - **Sebutkan apa yang belum kamu verifikasi.** Kalau kamu tidak bisa menguji di Cloud SQL, tulis itu. Lebih baik daripada reviewer menemukannya setelah merge.
 - **Kalau menemukan hal yang lebih berbahaya dari tiketmu, laporkan dulu** sebelum melanjutkan. Sudah beberapa kali terjadi di proyek ini, dan setiap kali lebih murah dilaporkan lebih awal.
 - **Satu pertanyaan untuk setiap uji yang kamu tulis: apa yang membuat uji ini MERAH?** Kalau tidak ada jawabannya, ujinya belum menguji apa pun. Ini bukan nasihat abstrak — di proyek ini sudah ada beberapa uji yang hijau sambil tidak membuktikan apa pun (serangan yang tidak sampai ke sasaran, `.every()` pada daftar kosong, filter yang menyisakan terlalu sedikit baris sehingga tombol yang diuji tidak pernah muncul).
@@ -561,5 +557,5 @@ Reviewer-nya satu orang dan waktunya terbatas. Yang membuat review cepat:
 
 - **`docs/13-action-item-perbaikan-20260822.md`** adalah daftar tiket Dimas (50+ item `AI-*`). Baca §10b/§10c untuk melihat apa yang sudah selesai, dan **bicara dulu** sebelum mengambil apa pun dari sana.
 - **`docs/15-serah-terima-20260823.md`** §3 memuat sembilan jebakan yang sudah ditemukan — baca supaya tidak menemukannya lagi.
-- **PR #29 dan #30** sedang menunggu review saat dokumen ini ditulis. Keduanya menyentuh `src/lib/report/*`, `src/components/dashboard/*`, `src/app/(app)/pengguna/`, `src/app/(app)/survei/`, `src/app/(app)/keberlanjutan/sertifikasi/`, dan menambah migrasi **`0052`**. Kalau kamu mulai sebelum keduanya di-merge, hindari berkas-berkas itu atau `git pull` dulu.
-- Tiga baris `blocking` di `app.check_production_readiness()` yang **memang diketahui**: stub login (B-27) dan dua tenant demo `DEMO`/`DEMO2` (hilang setelah `db:purge:demo`). Kalau muncul baris blocking keempat, itu temuan baru — laporkan.
+- **PR #29 dan #30 sudah di-merge** (24 Agustus). Keduanya menyentuh `src/lib/report/*`, `src/components/dashboard/*`, `src/app/(app)/pengguna/`, `src/app/(app)/survei/`, `src/app/(app)/keberlanjutan/sertifikasi/`, dan menambah migrasi **`0052`**. Jadi `main` sudah memuat semuanya — cukup `git pull origin main` sebelum mulai.
+- Tiga baris `blocking` di `app.check_production_readiness()` yang **memang diketahui**: stub login (B-27, milik Dimas) dan dua tenant demo `DEMO`/`DEMO2` (hilang setelah `db:purge:demo`). Kalau muncul baris blocking keempat, itu temuan baru — laporkan.
