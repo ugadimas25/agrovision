@@ -183,6 +183,17 @@ body {
     color: var(--color-slate-400, #a8a49a);
     padding-top: 0.05rem;
   }
+  /* AI-48 (K-07): batas 8 kolom di MOBILE. Kolom sekunder tidak ikut di kartu
+     utama — nilainya tetap terjangkau lewat pengungkap "Detail" pada kartu yang
+     sama, jadi tidak ada informasi yang hilang, hanya dipindahkan satu ketukan.
+     Desktop, PDF, dan Excel tidak terpengaruh: batasnya soal layar sempit. */
+  .rt-cards td[data-detail] {
+    display: none;
+  }
+  .rt-cards td[data-more] {
+    display: block;
+  }
+
   /* Sel kosong disembunyikan agar kartu tidak penuh baris "—" tak berguna. */
   .rt-cards td[data-empty="true"] {
     display: none;
@@ -197,4 +208,13 @@ body {
   .rt-cards td[colspan] {
     padding: 0.5rem 0.75rem !important;
   }
+}
+
+/* AI-48: sel pengungkap "Detail" HANYA untuk kartu mobile. Di desktop kolom
+   sekunder tampil sebagai kolom biasa, jadi pengungkapnya tidak punya guna —
+   dan menyembunyikannya di sini membuat jumlah kolom tabel desktop tidak
+   berubah sama sekali dari sebelum AI-48. */
+td[data-more],
+th[data-more] {
+  display: none;
 }

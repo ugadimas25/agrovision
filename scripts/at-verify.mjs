@@ -685,6 +685,44 @@ async function main() {
       && /tidak memakai driver/.test(salah.html));
   }
 
+  console.log("\n=== AI-48: batas 8 kolom utama di mobile (K-07) ===");
+  {
+    const SLUGS = ["kesesuaian-lahan", "persiapan-lahan", "bibit", "penyiangan", "pemupukan",
+      "pruning", "penyemprotan", "panen", "chemical", "equipment", "karbon", "blok",
+      "pengeluaran", "anggaran", "approval"];
+    const theads = (html) => [...html.matchAll(/<thead[\s\S]*?<\/thead>/g)].map((m) => m[0]);
+    const lebar = (html, skipDetail) => {
+      let max = 0;
+      for (const t of theads(html)) {
+        const n = [...t.matchAll(/<th\b[^>]*>/g)]
+          .filter((x) => !x[0].includes("data-more"))
+          .filter((x) => !(skipDetail && x[0].includes("data-detail"))).length;
+        if (n > max) max = n;
+      }
+      return max;
+    };
+
+    const lebih = [], tanpaDetail = [];
+    for (const slug of SLUGS) {
+      const p = await admin.get(`/laporan/${slug}`);
+      const total = lebar(p.html, false);
+      const utama = lebar(p.html, true);
+      if (utama > 8) lebih.push(`${slug}: ${utama}`);
+      // Laporan yang total kolomnya >8 WAJIB punya kolom detail; kalau tidak,
+      // pemilahannya belum dikonfigurasi dan kartu mobile tetap panjang.
+      if (total > 8 && total === utama) tanpaDetail.push(`${slug}: ${total}`);
+    }
+    ok("nol laporan modul dengan lebih dari 8 kolom utama", lebih.length === 0,
+      lebih.join(" · ") || "seluruh 15 laporan ≤ 8 kolom utama");
+    ok("setiap laporan >8 kolom punya pemilahan kolom detail", tanpaDetail.length === 0,
+      tanpaDetail.join(" · ") || "lengkap");
+
+    // Tidak ada informasi yang hilang: kolom detail tetap dirender di ekspor.
+    const xl = await admin.get("/laporan/kesesuaian-lahan/excel");
+    ok("kolom detail tetap ada di Excel (batas 8 hanya untuk mobile)",
+      /Penilai/.test(xl.html) && /Rekomendasi/.test(xl.html));
+  }
+
   console.log("\n=== AT6b: sel tabel laporan tidak boleh literal (klaim tanpa data) ===");
   {
     // AT6 hanya memindai 4 layar dan SENGAJA melewati src/lib/report/screens.ts —
@@ -751,12 +789,17 @@ async function main() {
       "pengeluaran", "anggaran", "approval"];
 
     // Tabel detail adalah <thead> TERLEBAR di halaman; panel lain punya tabel kecil.
-    const widestThead = (html) => {
+    // `data-more` DIKECUALIKAN: itu sel pengungkap khusus kartu mobile (AI-48),
+    // disembunyikan di desktop dan tidak pernah ikut ke ekspor — menghitungnya akan
+    // membuat layar selalu tampak satu kolom lebih banyak daripada Excel.
+    const theads = (html) => [...html.matchAll(/<thead[\s\S]*?<\/thead>/g)].map((m) => m[0]);
+    const countTh = (thead, { skipDetail = false } = {}) =>
+      [...thead.matchAll(/<th\b[^>]*>/g)]
+        .filter((t) => !t[0].includes("data-more"))
+        .filter((t) => !(skipDetail && t[0].includes("data-detail"))).length;
+    const widestThead = (html, opt) => {
       let max = 0;
-      for (const m of html.matchAll(/<thead[\s\S]*?<\/thead>/g)) {
-        const n = [...m[0].matchAll(/<th\b/g)].length;
-        if (n > max) max = n;
-      }
+      for (const t of theads(html)) { const n = countTh(t, opt); if (n > max) max = n; }
       return max;
     };
 

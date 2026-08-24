@@ -360,6 +360,11 @@ function EmptyBox({ icon, message, desc }: { icon: string; message: string; desc
 // ── Tabel detail ─────────────────────────────────────────────────────────────
 function DetailTable({ screen, base }: { screen: ReportScreen; base: string }) {
   const { columns, rows, title, footNote } = screen.table;
+  // AI-48: kolom sekunder dikumpulkan sekali, bukan per baris.
+  const kolomDetail = columns
+    .map((c, i) => ({ i, label: c.label, detail: c.detail }))
+    .filter((c) => c.detail);
+  const adaDetail = kolomDetail.length > 0;
   return (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
@@ -378,8 +383,12 @@ function DetailTable({ screen, base }: { screen: ReportScreen; base: string }) {
           <thead>
             <tr className="bg-slate-50">
               {columns.map((c, i) => (
-                <th key={i} className={"whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-slate-500 " + (c.align === "right" ? "text-right" : "text-left")}>{c.label}</th>
+                <th key={i} data-detail={c.detail || undefined} className={"whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-slate-500 " + (c.align === "right" ? "text-right" : "text-left")}>{c.label}</th>
               ))}
+              {/* AI-48: sel pengungkap khusus kartu mobile. Hanya tampil di bawah
+                  768px (lihat .rt-cards td[data-more] di globals.css), jadi tabel
+                  desktop persis seperti sebelumnya — termasuk jumlah kolomnya. */}
+              {adaDetail && <th data-more aria-hidden />}
             </tr>
           </thead>
           <tbody>
@@ -387,7 +396,28 @@ function DetailTable({ screen, base }: { screen: ReportScreen; base: string }) {
               <tr><td colSpan={columns.length} className="px-4 py-8 text-center text-sm text-slate-500">Belum ada data.</td></tr>
             ) : rows.map((row, ri) => (
               <tr key={ri} className="border-t border-slate-50 hover:bg-slate-50/40">
-                {row.map((cell, ci) => <Td key={ci} cell={cell} label={columns[ci]?.label} align={columns[ci]?.align} isNew={columns[ci]?.kind === "new"} />)}
+                {row.map((cell, ci) => (
+                  <Td key={ci} cell={cell} label={columns[ci]?.label} align={columns[ci]?.align}
+                      isNew={columns[ci]?.kind === "new"} isDetail={columns[ci]?.detail} />
+                ))}
+                {adaDetail && (
+                  <td data-more className="px-3 py-2">
+                    {/* <details> native: tanpa JavaScript pun bisa dibuka. */}
+                    <details className="text-xs">
+                      <summary className="cursor-pointer list-none font-medium text-emerald-700 [&::-webkit-details-marker]:hidden">
+                        Detail ({kolomDetail.length}) ▾
+                      </summary>
+                      <dl className="mt-1.5 space-y-1">
+                        {kolomDetail.map(({ i, label }) => (
+                          <div key={i} className="flex justify-between gap-3">
+                            <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
+                            <dd className="text-right text-slate-700">{row[i] === null || row[i] === "" ? "—" : String(row[i])}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -398,11 +428,11 @@ function DetailTable({ screen, base }: { screen: ReportScreen; base: string }) {
   );
 }
 
-function Td({ cell, label, align, isNew }: { cell: string | number | null; label?: string; align?: "left" | "right"; isNew?: boolean }) {
+function Td({ cell, label, align, isNew, isDetail }: { cell: string | number | null; label?: string; align?: "left" | "right"; isNew?: boolean; isDetail?: boolean }) {
   const txt = cell === null || cell === "" ? "—" : String(cell);
   const tone = typeof cell === "string" ? textTone(cell) : null;
   return (
-    <td data-label={label} data-empty={txt === "—"} className={"whitespace-nowrap px-3 py-2 " + (align === "right" ? "text-right tabular-nums " : "") + (isNew ? "bg-blue-50/30 text-slate-600" : "text-slate-700")}>
+    <td data-label={label} data-empty={txt === "—"} data-detail={isDetail || undefined} className={"whitespace-nowrap px-3 py-2 " + (align === "right" ? "text-right tabular-nums " : "") + (isNew ? "bg-blue-50/30 text-slate-600" : "text-slate-700")}>
       {tone ? <span className={"inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium " + PILL[tone]}>{txt}</span> : txt}
     </td>
   );

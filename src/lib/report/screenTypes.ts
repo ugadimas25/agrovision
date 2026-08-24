@@ -68,7 +68,16 @@ export type RecoRail = {
 /** Kolom & baris tabel detail (reuse dari ModuleReport, plus deteksi status/persen). */
 export type ScreenTable = {
   title: string;
-  columns: { label: string; align?: "left" | "right"; kind?: "new" }[];
+  /**
+   * `detail: true` = kolom sekunder (AI-48, K-07). Di layar MOBILE kolom ini tidak
+   * ikut di kartu utama, melainkan di balik pengungkap "Detail" pada kartu yang
+   * sama; di desktop, PDF, dan Excel ia tampil seperti kolom lain.
+   *
+   * Batas 8 kolom itu batas MOBILE, bukan batas dokumen — jadi ekspor tidak
+   * memangkas apa pun. Ditandai TERPUSAT di buildReportScreen(), bukan di 15
+   * builder, supaya pemilahannya bisa dikoreksi di satu tempat.
+   */
+  columns: { label: string; align?: "left" | "right"; kind?: "new"; detail?: boolean }[];
   rows: (string | number | null)[][];
   footNote?: string;
 };

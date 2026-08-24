@@ -432,9 +432,12 @@ async function sprayingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
       title: "Detail Penyemprotan",
       columns: [
         { label: "Tanggal" }, { label: "Kode Blok" }, { label: "Material" }, { label: "Target/OPT" }, { label: "Dosis (L/ha)", align: "right" },
-        { label: "Volume", align: "right" }, { label: "Satuan" }, { label: "Interval Aman/PHI", kind: "new" }, { label: "Biaya", align: "right", kind: "new" }, { label: "Petugas" }, { label: "Status" },
+        // Volume DAN satuannya satu kolom (AI-48): memisahkannya berarti salah satu
+        // bisa jatuh ke baris detail dan angkanya kehilangan artinya — "40" tanpa
+        // "liter" bukan data yang bisa dibaca.
+        { label: "Volume", align: "right" }, { label: "Interval Aman/PHI", kind: "new" }, { label: "Biaya", align: "right", kind: "new" }, { label: "Petugas" }, { label: "Status" },
       ],
-      rows: rows.map((r) => [D(r.sprayed_on), r.block, r.material ?? "—", r.target ?? "—", nf(N(r.dose_per_ha), 2), nf(N(r.total_volume), 2), r.unit ?? "—", "—", "Rp —", r.officer ?? "—", statusLabelId(r.st ?? "")]),
+      rows: rows.map((r) => [D(r.sprayed_on), r.block, r.material ?? "—", r.target ?? "—", nf(N(r.dose_per_ha), 2), `${nf(N(r.total_volume), 2)} ${r.unit ?? ""}`.trim(), "—", "Rp —", r.officer ?? "—", statusLabelId(r.st ?? "")]),
       footNote: "Material dari katalog Agri-Input. Kolom biru = rekomendasi tambahan. Kosong = —.",
     },
   };
@@ -851,6 +854,42 @@ const SCREEN_META: Record<string, { source: string; note: string }> = {
 };
 
 /**
+ * AI-48 · kolom SEKUNDER per laporan (K-07: batas 8 kolom di mobile).
+ *
+ * Dipilih dengan satu aturan: kolom utama = identitas (apa/di mana), kuantitas
+ * pokok, uang, dan status. Sisanya — metrik turunan/pembanding, atribut sekunder,
+ * dan nama orang — masuk baris detail.
+ *
+ * Dua penyimpangan dari aturan itu, atas keputusan pemilik produk 24 Agu 2026:
+ *   * Penyemprotan MEMPERTAHANKAN "Interval Aman/PHI" di kolom utama. Secara "apa
+ *     yang dibaca manajemen" ia sekunder, tapi akibat kalau terlewat paling besar
+ *     (masa tunggu sebelum panen). Yang turun: Dosis (L/ha) dan Petugas.
+ *   * Approval MEMPERTAHANKAN "Umur Antrean (SLA)" — justru itu alasan orang
+ *     membuka inbox. Yang turun: Approver.
+ *
+ * Dicocokkan lewat LABEL, bukan indeks: menambah kolom di tengah tabel tidak akan
+ * menggeser pemilahan ini secara diam-diam. Label yang tidak ditemukan diabaikan,
+ * dan uji at:verify menangkap laporan yang kolom utamanya masih lebih dari 8.
+ *
+ * karbon & pengeluaran tidak ada di sini: keduanya sudah 8 kolom.
+ */
+const SCREEN_DETAIL_COLUMNS: Record<string, string[]> = {
+  "kesesuaian-lahan": ["No", "Nilai vs Ambang", "Rekomendasi", "Reinspeksi", "Penilai"],
+  "pemupukan": ["Fase", "Dosis Rekom.", "Selisih Dosis", "Petugas"],
+  "penyemprotan": ["Dosis (L/ha)", "Petugas"],
+  "blok": ["Polygon", "pH Tanah", "C-organik (%)"],
+  "persiapan-lahan": ["Nama Blok", "Jumlah Lubang"],
+  "bibit": ["Rusak", "Mortalitas %"],
+  "panen": ["Tarif (Rp/ton)", "Lot Traceability"],
+  "chemical": ["Bahan Aktif", "Rekomendasi Fase"],
+  "equipment": ["Utilisasi", "Konsumsi/jam"],
+  "anggaran": ["Burn Rate (%)", "Forecast Sisa (Rp)"],
+  "penyiangan": ["Cakupan vs Total"],
+  "pruning": ["Detail"],
+  "approval": ["Approver"],
+};
+
+/**
  * Satu-satunya pintu membangun layar laporan — dan sejak AI-47 juga satu-satunya
  * pintu untuk PDF & Excel. Header dirakit DI SINI, sekali, sehingga ketiga format
  * secara struktural mustahil menampilkan kolom atau header yang berbeda.
@@ -860,8 +899,14 @@ export async function buildReportScreen(ctx: RlsContext, slug: string): Promise<
   if (!b) return null;
   const screen = await b(ctx);
   const m = SCREEN_META[slug] ?? { source: `modul ${slug}.`, note: "" };
+  // AI-48: tandai kolom sekunder. Terpusat, jadi isi 15 builder tidak disentuh.
+  const detailLabels = new Set(SCREEN_DETAIL_COLUMNS[slug] ?? []);
+  const table = detailLabels.size
+    ? { ...screen.table, columns: screen.table.columns.map((c) => (detailLabels.has(c.label) ? { ...c, detail: true } : c)) }
+    : screen.table;
   return {
     ...screen,
+    table,
     meta: await buildReportMeta(ctx, {
       title: screen.title,
       subtitle: screen.subtitle ?? "",
