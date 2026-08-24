@@ -138,6 +138,30 @@ async function run() {
   ok('cakupan RLS bersih (tabel, policy, view security_invoker)', r.rows.length === 0,
     r.rows.map(x => `${x.table_name}: ${x.issue}`).join(' | ') || 'bersih')
 
+  console.log('\n=== B-8: trigger audit terpasang di seluruh tabel approval_status ===')
+  r = await c.query(`SELECT * FROM app.check_audit_coverage()`)
+  ok('cakupan audit bersih (tiap tabel approval_status punya trigger write_audit)', r.rows.length === 0,
+    r.rows.map(x => `${x.table_name}: ${x.issue}`).join(' | ') || 'bersih')
+
+  await as(U_CREATOR, 'creator', CA)
+  const wr = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, created_by) VALUES ($1, now(), 'manual', $2) RETURNING id`,
+    [A_BLK1, U_CREATOR])
+  const W_AUDIT_ID = wr.rows[0].id
+  await c.query(`UPDATE app.weeding_records SET approval_status = 'submitted' WHERE id = $1`, [W_AUDIT_ID])
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(`SELECT app.decide_record('weeding_record', $1, 'approved', NULL)`, [W_AUDIT_ID])
+  // occurred_at pakai now() = waktu MULAI transaksi, sama untuk semua baris di
+  // sesi ini -- urutkan pakai id (bigserial), bukan occurred_at, untuk dapat
+  // baris UPDATE approve-nya, bukan baris INSERT draft-nya.
+  r = await c.query(
+    `SELECT actor_id, action FROM app.audit_log
+      WHERE entity_type = 'weeding_records' AND entity_id = $1 AND action = 'update'
+      ORDER BY id DESC LIMIT 1`, [W_AUDIT_ID])
+  ok('approve penyiangan tercatat di audit_log dengan aktor yang benar',
+    r.rows.length === 1 && r.rows[0].actor_id === U_APPROVER,
+    r.rows[0] ? `action=${r.rows[0].action}, actor=${r.rows[0].actor_id}` : 'tidak ada baris UPDATE di audit_log')
+
   console.log('\n=== Isolasi tenant: tenant A tidak melihat apa pun milik B ===')
   await as(U_APPROVER, 'approver', CA)
   r = await c.query(`SELECT count(*)::int n FROM app.blocks WHERE company_id=$1`, [CB])
