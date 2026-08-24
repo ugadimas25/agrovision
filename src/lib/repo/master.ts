@@ -302,3 +302,39 @@ export async function listUsers(ctx: RlsContext): Promise<AppUser[]> {
     estateCount: Number(r.estate_count),
   }));
 }
+
+/**
+ * AI-28 · satu baris pengguna, untuk pemeriksaan sebelum mengubah statusnya.
+ * Dipakai action supaya pesannya bisa spesifik (diri sendiri / super_admin
+ * terakhir) alih-alih memantulkan galat trigger mentah.
+ */
+export async function getUserRow(
+  ctx: RlsContext,
+  id: string,
+): Promise<{ id: string; fullName: string; appRole: string; isActive: boolean } | null> {
+  const rows = await rlsQuery<{ id: string; full_name: string; app_role: string; is_active: boolean }>(
+    ctx,
+    `SELECT id, full_name, app_role, is_active FROM app.users WHERE id = $1`,
+    [id],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, fullName: r.full_name, appRole: r.app_role, isActive: r.is_active } : null;
+}
+
+/** AI-28 · nonaktifkan / aktifkan kembali. Trigger 0052 yang menjaga invariannya. */
+export async function setUserActive(ctx: RlsContext, id: string, active: boolean): Promise<void> {
+  await rlsQuery(ctx, `UPDATE app.users SET is_active = $2 WHERE id = $1`, [id, active]);
+}
+
+/**
+ * AI-28 · hapus keras.
+ *
+ * Hanya berhasil untuk pengguna yang belum pernah membuat apa pun: 59 dari 61
+ * foreign key ke app.users memakai NO ACTION, jadi database menolak menghapus
+ * siapa pun yang meninggalkan jejak. Itu memang yang diinginkan -- menghapusnya
+ * akan menghilangkan "siapa yang melakukan ini" dari riwayat. Galat 23503
+ * diterjemahkan di lapisan action menjadi saran "nonaktifkan saja".
+ */
+export async function deleteUser(ctx: RlsContext, id: string): Promise<void> {
+  await rlsQuery(ctx, `DELETE FROM app.users WHERE id = $1`, [id]);
+}

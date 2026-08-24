@@ -203,6 +203,56 @@ async function run() {
   r = await c.query(`SELECT count(*)::int n FROM app.weeding_schedules`)
   ok('jadwal penyiangan entitas lain tidak terlihat', r.rows[0].n === 0, `${r.rows[0].n} baris terlihat`)
 
+  // =========================================================================
+  // AI-28 / migrasi 0052 — penonaktifan pengguna. Yang diserang di sini bukan
+  // tombolnya (itu urusan at:verify), tapi invariannya: entitas TIDAK BOLEH
+  // kehilangan super_admin aktif terakhirnya. Kalau bisa, pemulihannya butuh
+  // akses SQL langsung ke produksi.
+  // =========================================================================
+  console.log('\n=== 0052: entitas tidak boleh kehilangan super_admin aktif terakhir ===')
+  await as(U_ADMIN, 'super_admin', CA)
+  r = await c.query(`SELECT count(*)::int n FROM app.users WHERE company_id=$1 AND app_role='super_admin' AND is_active`, [CA])
+  const jml = r.rows[0].n
+  ok('prasyarat: entitas uji punya tepat satu super_admin aktif', jml === 1, `${jml} super_admin aktif`)
+  await mustFail(c, 'menonaktifkan super_admin aktif terakhir DITOLAK trigger',
+    `UPDATE app.users SET is_active=false WHERE id=$1`, [U_ADMIN], /super_admin aktif terakhir/)
+  await mustFail(c, 'menghapus super_admin aktif terakhir DITOLAK trigger',
+    `DELETE FROM app.users WHERE id=$1`, [U_ADMIN], /super_admin aktif terakhir/)
+  // Menurunkan perannya adalah jalan memutar yang sama akibatnya: nol super_admin.
+  await mustFail(c, 'menurunkan peran super_admin terakhir DITOLAK juga',
+    `UPDATE app.users SET app_role='viewer' WHERE id=$1`, [U_ADMIN], /super_admin aktif terakhir/)
+  // Penjaganya bukan "super_admin tidak bisa disentuh": dengan dua super_admin
+  // aktif, satu boleh dinonaktifkan. Tanpa cek ini, trigger yang menolak SEMUA
+  // perubahan akan lolos uji di atas tanpa memberi tahu bahwa fiturnya mati.
+  await c.query(`INSERT INTO app.users (company_id, external_id, email, full_name, role, app_role, is_active)
+                 VALUES ($1,'adv-sa2','adv-sa2@uji.invalid','Adv SA2','admin','super_admin',true)`, [CA])
+  await c.query(`UPDATE app.users SET is_active=false WHERE company_id=$1 AND external_id='adv-sa2'`, [CA])
+  ok('dengan dua super_admin aktif, satu boleh dinonaktifkan', true)
+  // Riwayat melindungi dirinya sendiri: pengguna yang pernah mencatat tidak bisa
+  // dihapus, jadi jejak "siapa yang melakukan ini" tidak bisa dihilangkan.
+  //
+  // Riwayatnya DIBUAT lebih dulu di sini. Versi pertama uji ini langsung menghapus
+  // U_CREATOR dan LOLOS -- fixture-nya masih bersih, jadi tidak ada FK yang
+  // dilanggar. Ia membuktikan hal sebaliknya dari yang dimaksud: bahwa pengguna
+  // tanpa jejak MEMANG bisa dihapus. Keduanya kini diuji terpisah.
+  await as(U_ADMIN, 'super_admin', CA)
+  await c.query(`INSERT INTO app.cost_transactions
+                   (company_id, cost_center_id, block_id, cost_category_id, fiscal_period_id,
+                    transaction_date, amount_idr, created_by)
+                 VALUES ($1,'77777777-0000-0000-0000-00000000000a',
+                         '44444444-0000-0000-0000-00000000000a',
+                         '66666666-0000-0000-0000-00000000000a',
+                         '55555555-0000-0000-0000-00000000000a',
+                         '2026-03-01', 1000000, $2)`, [CA, U_CREATOR])
+  await mustFail(c, 'menghapus pengguna yang punya riwayat DITOLAK foreign key',
+    `DELETE FROM app.users WHERE id=$1`, [U_CREATOR], /foreign key/)
+  // Dan pengguna yang belum meninggalkan jejak apa pun MEMANG boleh dihapus --
+  // kalau tidak, tombol "Hapus" di /pengguna tidak akan pernah berguna.
+  await c.query(`INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
+                 VALUES ('4d4d4d4d-0000-0000-0000-00000000000e',$1,'adv-baru','baru@uji.invalid','Belum Berjejak','manager','viewer')`, [CA])
+  await c.query(`DELETE FROM app.users WHERE id='4d4d4d4d-0000-0000-0000-00000000000e'`)
+  ok('pengguna tanpa riwayat memang bisa dihapus', true)
+
   console.log('\n=== AI-44a: tarif hanya boleh disentuh super_admin ===')
   await as(U_ADMIN, 'super_admin', CA)
   await c.query(`SELECT app.publish_price(

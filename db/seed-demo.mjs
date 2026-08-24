@@ -23,6 +23,9 @@
  */
 
 import pg from 'pg'
+import { createHash } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join, dirname } from 'node:path'
 
 const url = process.env.MIGRATION_DATABASE_URL
 if (!url) { console.error('MIGRATION_DATABASE_URL wajib.'); process.exit(1) }
@@ -814,6 +817,50 @@ async function seed() {
        VALUES ($1,$2,$3::app.organic_status,$4,$5,$6,$7,$8)
        ON CONFLICT (company_id, item_code) DO NOTHING`,
       [CO, code, status, ref, obt, exp, note, users[0][0]])
+  }
+
+  // AI-21 · dokumen bukti K1-K7 yang BENAR-BENAR ADA di disk.
+  //
+  // Dua hal yang disengaja di sini:
+  //
+  //   1. Berkasnya sungguhan (PDF minimal valid) dan path-nya mengikuti format
+  //      putEvidence() persis, jadi tautan unduh di UI benar-benar bekerja. Baris
+  //      evidence_files lain di seed ini memakai path palsu 'file://demo/...'
+  //      yang tidak ada di disk -- untuk struk itu cukup karena yang dipakai
+  //      hanya hitungannya, tapi bukti K1-K7 memang untuk DIBUKA.
+  //   2. Hanya K1 dan K2 yang dilampiri. K6 dan K7 dibiarkan 'tersertifikasi'
+  //      TANPA dokumen dengan sengaja: itu keadaan yang nyata terjadi di
+  //      lapangan (status diklik, dokumen belum diunggah), dan layar sekarang
+  //      MENANDAINYA. Kalau seed hanya berisi keadaan rapi, penanda itu tidak
+  //      pernah terlihat sampai ada yang mengalaminya di produksi.
+  const evidenceRoot = process.env.LOCAL_EVIDENCE_DIR ?? join(process.cwd(), '.evidence')
+  const pdfMinimal = (judul) => Buffer.from(
+    `%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n` +
+    `2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n` +
+    `3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 100]>>endobj\n` +
+    `% ${judul}\ntrailer<</Root 1 0 R>>\n%%EOF\n`, 'utf8')
+  for (const [code, nama, judul] of [
+    ['K1', 'citra-satelit-2011-2025.pdf', 'Rekap citra Sentinel/Landsat 2011-2025'],
+    ['K2', 'peta-tutupan-lahan-klhk.pdf', 'Peta tutupan lahan historis KLHK'],
+  ]) {
+    const bytes = pdfMinimal(judul)
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const key = `organic-evidence/${CO}/${sha256.slice(0, 2)}/${sha256}-${nama}`
+    const full = join(evidenceRoot, key)
+    await mkdir(dirname(full), { recursive: true })
+    await writeFile(full, bytes)
+
+    const ev = await c.query(
+      `INSERT INTO app.evidence_files
+         (company_id, evidence_type, file_name, storage_path, mime_type, size_bytes, sha256, uploaded_by)
+       VALUES ($1,'document',$2,$3,'application/pdf',$4,$5,$6) RETURNING id`,
+      [CO, nama, `file://${full}`, bytes.byteLength, sha256, users[0][0]])
+    await c.query(
+      `INSERT INTO app.evidence_links (evidence_id, entity_type, entity_id, link_note)
+       SELECT $1, 'organic_tracking', id, 'Bukti riwayat lahan'
+         FROM app.organic_tracking WHERE company_id=$2 AND item_code=$3
+       ON CONFLICT DO NOTHING`,
+      [ev.rows[0].id, CO, code])
   }
 
   // Contoh penilaian kesesuaian lahan (docs/07) untuk mengisi Riwayat Penilaian.

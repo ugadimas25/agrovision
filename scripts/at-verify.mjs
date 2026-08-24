@@ -914,6 +914,266 @@ async function main() {
     ok("filter ngawur diperlakukan sebagai tanpa filter", angka(ngawur.html) === angka(base.html));
   }
 
+  console.log("\n=== AI-21: bukti K1-K7 punya DOKUMEN, bukan cuma status ===");
+  {
+    const s = await login("admin@demo.invalid", { company: "00000000-0000-4000-8000-0000000000d0" });
+    const hal = await s.get("/keberlanjutan/sertifikasi");
+    ok("halaman sertifikasi terbuka", hal.status === 200, `status ${hal.status}`);
+
+    // Dokumen yang dilampirkan seed benar-benar bisa DIBUKA, bukan tautan mati.
+    const idBukti = /data-testid="tautan-bukti"[^>]*href="\/api\/evidence\/([0-9a-f-]{36})"|href="\/api\/evidence\/([0-9a-f-]{36})"[^>]*data-testid="tautan-bukti"/.exec(hal.html);
+    const bid = idBukti ? (idBukti[1] ?? idBukti[2]) : null;
+    ok("bukti terlampir muncul sebagai tautan unduh", Boolean(bid), `${bid ?? "tidak ada tautan"}`);
+    if (bid) {
+      const unduh = await s.get(`/api/evidence/${bid}`);
+      ok("tautan bukti benar-benar mengunduh berkas (bukan 404 tautan mati)",
+        unduh.status === 200 && unduh.html.startsWith("%PDF"),
+        `status ${unduh.status}, ${unduh.html.slice(0, 4)}`);
+    } else {
+      ok("tautan bukti benar-benar mengunduh berkas (bukan 404 tautan mati)", false, "tautan tidak ditemukan");
+    }
+
+    // "n/7 lengkap" wajib menuntut dokumen. Di dataset demo K1 & K2 punya
+    // dokumen; K6 & K7 sengaja 'tersertifikasi' TANPA dokumen. Kalau hitungannya
+    // memakai status saja, angkanya 4 — dan angka itu yang dipakai mengklaim
+    // pengakuan retroaktif masa konversi 36 bulan.
+    const berdokumen = await psql(`SELECT count(*)::text FROM app.organic_tracking t
+      JOIN app.organic_items i ON i.code=t.item_code AND i.kind='evidence'
+      WHERE t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')
+        AND t.status='tersertifikasi'
+        AND EXISTS (SELECT 1 FROM app.evidence_links el WHERE el.entity_type='organic_tracking' AND el.entity_id=t.id)`);
+    const statusSaja = await psql(`SELECT count(*)::text FROM app.organic_tracking t
+      JOIN app.organic_items i ON i.code=t.item_code AND i.kind='evidence'
+      WHERE t.company_id=(SELECT id FROM app.companies WHERE code='DEMO') AND t.status='tersertifikasi'`);
+    const lengkap = /([0-9]+)\s*\/\s*([0-9]+)\s*lengkap/.exec(hal.html.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]*>/g, " "));
+    ok("hitungan lengkap memakai jumlah berdokumen, bukan jumlah berstatus",
+      lengkap?.[1] === berdokumen && berdokumen !== statusSaja,
+      `layar ${lengkap?.[1]} · berdokumen ${berdokumen} · berstatus ${statusSaja}`);
+
+    // Klaim tanpa dokumen ditandai di barisnya, bukan hanya dihitung ulang diam-diam.
+    ok("bukti 'tersertifikasi' tanpa dokumen ditandai di layar",
+      /ditandai lengkap tanpa dokumen/.test(hal.html));
+
+    // Unggah SUNGGUHAN lewat action, lalu jumlah lampirannya harus naik.
+    const sebelum = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    await s.submit("/keberlanjutan/sertifikasi", { itemCode: "K5" },
+      { formMarker: "unggah-bukti-organik", files: { berkas: fakeJpeg() } });
+    const sesudah = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    ok("unggah bukti lewat UI menambah lampiran", Number(sesudah) === Number(sebelum) + 1,
+      `${sebelum} -> ${sesudah}`);
+
+    // Viewer TIDAK boleh melampirkan bukti kepatuhan.
+    const viewer = await login("viewer@agrovision.local");
+    const aksiUp = pickForm(hal.html, "unggah-bukti-organik")?.hidden;
+    ok("prasyarat: field aksi unggah bisa dipanen",
+      Boolean(aksiUp) && Object.keys(aksiUp).some((k) => k.startsWith("$ACTION")),
+      `${Object.keys(aksiUp ?? {}).length} field`);
+    const fdUp = new FormData();
+    for (const [k, v] of Object.entries(aksiUp ?? {})) fdUp.append(k, v);
+    fdUp.set("itemCode", "K5");
+    const j = fakeJpeg();
+    fdUp.set("berkas", j.blob, j.name);
+    const tembusUp = await fetch(`${BASE}/keberlanjutan/sertifikasi`, {
+      method: "POST", headers: { cookie: viewer.header() }, body: fdUp, redirect: "manual",
+    });
+    const balasanUp = await tembusUp.text();
+    const setelahViewer = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    ok("viewer POST langsung DITOLAK melampirkan bukti",
+      setelahViewer === sesudah && tembusUp.status === 200 && /tidak berhak/.test(balasanUp),
+      `${sesudah} -> ${setelahViewer} (status ${tembusUp.status})`);
+
+    // Bersihkan bukti yang DIUNGGAH OLEH UJI INI. Tanpa ini, setiap run menambah
+    // satu baris evidence_files ke dataset demo (storage_path-nya sama karena
+    // content-addressed, tapi barisnya baru), dan "berapa bukti K5" ikut naik
+    // tiap kali suite dijalankan. Uji tidak boleh menumbuhkan data yang
+    // diukurnya sendiri.
+    await psql(`DELETE FROM app.evidence_files WHERE company_id=(SELECT id FROM app.companies WHERE code='DEMO')
+      AND file_name='struk.jpg' AND id IN (
+        SELECT el.evidence_id FROM app.evidence_links el
+         JOIN app.organic_tracking t ON t.id=el.entity_id
+        WHERE el.entity_type='organic_tracking' AND t.item_code='K5')`);
+    const bersih = await psql(`SELECT count(*)::text FROM app.evidence_links el
+      JOIN app.organic_tracking t ON t.id=el.entity_id
+      WHERE el.entity_type='organic_tracking' AND t.item_code='K5'
+        AND t.company_id=(SELECT id FROM app.companies WHERE code='DEMO')`);
+    ok("uji ini tidak meninggalkan bukti tambahan di dataset demo", bersih === sebelum,
+      `awal ${sebelum}, akhir ${bersih}`);
+  }
+
+  console.log("\n=== AI-22: hasil survei bisa DILIHAT, bukan cuma dihitung ===");
+  {
+    // Sebelum ini daftar /survei hanya memberi Form/Blok/Tanggal/Petugas/Status;
+    // 66 baris submission_values di dataset demo tidak bisa dicapai dari UI.
+    const s = await login("admin@demo.invalid", { company: "00000000-0000-4000-8000-0000000000d0" });
+    const daftar = await s.get("/survei");
+    const tautan = /data-testid="lihat-hasil-survei"[^>]*/.test(daftar.html)
+      || /href="\/survei\/hasil\/([0-9a-f-]{36})"/.test(daftar.html);
+    ok("daftar survei punya aksi Lihat per baris", tautan);
+    const sid = /href="\/survei\/hasil\/([0-9a-f-]{36})"/.exec(daftar.html)?.[1];
+    ok("prasyarat: ada hasil survei di dataset demo", Boolean(sid), `${sid ?? "tidak ada"}`);
+
+    const detail = await s.get(`/survei/hasil/${sid}`);
+    ok("halaman detail terbuka", detail.status === 200 && /data-testid="detail-hasil-survei"/.test(detail.html),
+      `status ${detail.status}`);
+
+    // Jawabannya benar-benar tampil. Dibandingkan langsung ke DB supaya bukan
+    // sekadar "ada tulisan" — jumlah pertanyaan pada versi form itu harus sama.
+    const nField = await psql(`SELECT count(*)::text FROM app.form_fields
+      WHERE form_version_id = (SELECT form_version_id FROM app.survey_submissions WHERE id='${sid}')`);
+    const nJawab = await psql(`SELECT count(*)::text FROM app.submission_values WHERE submission_id='${sid}'`);
+    const teks = detail.html.replace(/<!--[\s\S]*?-->/g, "");
+    const kelengkapan = /data-testid="kelengkapan-jawaban"[^>]*>([\s\S]*?)<\/dd>/.exec(teks)?.[1]
+      ?.replace(/<[^>]*>/g, "").trim();
+    ok("kelengkapan dihitung dari DB, bukan diklaim",
+      kelengkapan === `${nJawab} / ${nField} pertanyaan`,
+      `layar "${kelengkapan}" vs DB ${nJawab}/${nField}`);
+
+    // Pertanyaan yang TIDAK dijawab wajib tetap muncul sebagai em-dash: kalau
+    // hanya yang terisi dirender, hasil survei setengah lengkap terlihat lengkap.
+    const kosong = Number(nField) - Number(nJawab);
+    ok("pertanyaan tak terjawab tetap dirender em-dash",
+      kosong === 0 || (teks.match(/data-empty="true"/g) ?? []).length >= kosong,
+      `${kosong} pertanyaan kosong, ${(teks.match(/data-empty="true"/g) ?? []).length} penanda kosong`);
+
+    // Isolasi tenant, dari arah sebaliknya: seluruh submission ada di entitas
+    // DEMO, jadi yang diuji adalah sesi DEV membuka id milik DEMO. Versi pertama
+    // uji ini mencari submission "entitas lain" yang memang tidak ada, lalu
+    // melaporkan PASS dengan catatan "tidak ada yang bisa diuji" — hijau tanpa
+    // menguji apa pun.
+    const dev = await login("admin@agrovision.local");
+    const bocor = await dev.get(`/survei/hasil/${sid}`);
+    ok("hasil survei entitas lain TIDAK terbuka",
+      !/data-testid="detail-hasil-survei"/.test(bocor.html) && bocor.status !== 500,
+      `status ${bocor.status}`);
+
+    // id ngawur tidak boleh menjadi 500 dari galat uuid Postgres (22P02).
+    //
+    // Yang diperiksa halaman 404-nya, BUKAN status 404. Di aplikasi ini
+    // notFound() di bawah batas loading.tsx menjawab HTTP 200: shell-nya sudah
+    // ter-flush sebelum notFound() dipanggil, jadi statusnya tidak bisa diubah
+    // lagi. Itu perilaku yang sudah ada (13 berkas loading.tsx, termasuk
+    // /survei/[formId] yang lebih tua) dan bukan bawaan AI-22 — memaksa uji ini
+    // menuntut 404 hanya akan menggagalkan hal yang tidak diubah PR ini.
+    const ngawurId = await s.get("/survei/hasil/bukan-uuid");
+    ok("id survei ngawur menjadi halaman 404, bukan 500 maupun kebocoran",
+      ngawurId.status !== 500 && !/data-testid="detail-hasil-survei"/.test(ngawurId.html)
+        && /could not be found|Halaman tidak ditemukan|404/.test(ngawurId.html),
+      `status ${ngawurId.status}`);
+  }
+
+  console.log("\n=== AI-28: aksi baris pengguna (nonaktifkan / aktifkan / hapus) ===");
+  {
+    // Blok ini memakai pengguna SEKALI PAKAI, bukan akun seed.
+    //
+    // Versi pertama menonaktifkan viewer@agrovision.local lalu mengaktifkannya
+    // kembali di langkah terakhir. Begitu ada satu kegagalan di tengah, langkah
+    // pemulihan itu tidak pernah jalan -- viewer tertinggal nonaktif, dan run
+    // BERIKUTNYA gagal di prasyarat dengan sebab yang sama sekali berbeda,
+    // menutupi kegagalan aslinya. Itu betul-betul terjadi. Pemulihan tidak boleh
+    // menjadi langkah yang bisa terlewat.
+    const DEV = "(SELECT id FROM app.companies WHERE code='DEV')";
+    const EMAIL = "at28-sekali-pakai@uji.invalid";
+    await psql(`DELETE FROM app.user_company_access WHERE user_id IN (SELECT id FROM app.users WHERE email='${EMAIL}')`);
+    await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
+    await psql(`INSERT INTO app.users (company_id, external_id, email, full_name, role, app_role, is_active)
+                VALUES (${DEV}, 'at28-sekali-pakai', '${EMAIL}', 'Uji AI-28', 'manager', 'viewer', true)`);
+    await psql(`INSERT INTO app.user_company_access (user_id, company_id)
+                SELECT id, ${DEV} FROM app.users WHERE email='${EMAIL}' ON CONFLICT DO NOTHING`);
+    const target = await psql(`SELECT id::text FROM app.users WHERE email='${EMAIL}'`);
+    ok("prasyarat: pengguna sekali pakai dibuat", /^[0-9a-f-]{36}$/.test(target), target);
+    const aktifDi = async () => psql(`SELECT is_active::text FROM app.users WHERE id='${target}'`);
+
+    // Halaman ini boleh DILIHAT approver (A-09) tapi mutasinya hanya super_admin.
+    const sa = await login("admin@agrovision.local");
+    const ap = await login("approver@agrovision.local");
+    const halSa = await sa.get("/pengguna");
+    const halAp = await ap.get("/pengguna");
+    ok("super_admin melihat aksi per baris", /data-testid="nonaktifkan-pengguna"/.test(halSa.html));
+    ok("approver melihat daftar tapi TIDAK melihat aksi",
+      halAp.status === 200 && /Uji AI-28/.test(halAp.html) && !/data-testid="nonaktifkan-pengguna"/.test(halAp.html));
+    // Akun sendiri tidak boleh punya tombol: menonaktifkan diri sendiri mengunci
+    // pelakunya keluar pada request berikutnya.
+    ok("akun sendiri tidak diberi tombol", /akun Anda sendiri/.test(halSa.html));
+
+    // Pengguna aktif memang bisa masuk — supaya "tidak bisa masuk" nanti
+    // membuktikan penonaktifannya, bukan sekadar akun yang tidak ada.
+    let bisaMasukAwal = true;
+    try { await login(EMAIL); } catch { bisaMasukAwal = false; }
+    ok("pengguna sekali pakai bisa masuk selagi aktif", bisaMasukAwal);
+
+    // POST langsung sebagai APPROVER — inilah gerbang yang sebenarnya. Field
+    // $ACTION_* dipanen dari HTML SUPER_ADMIN (approver tidak dikirimi formnya)
+    // lalu dikirim memakai kuki approver: persis yang bisa dilakukan penyerang
+    // yang pernah melihat HTML orang lain sekali saja.
+    //
+    // pickForm mengembalikan { hidden }, BUKAN map-nya. Versi pertama uji ini
+    // meng-iterasi objek pembungkusnya, jadi tidak satu pun field $ACTION_*
+    // terkirim -> Next menjawab 500 sebelum kode aplikasi jalan, dan ujinya
+    // "lulus" karena pengguna memang tetap aktif. Serangan yang tidak sampai ke
+    // sasaran tidak membuktikan sasarannya terlindungi.
+    const aksi = pickForm(halSa.html, "nonaktifkan-pengguna")?.hidden;
+    ok("prasyarat: field aksi bisa dipanen dari HTML super_admin",
+      Boolean(aksi) && Object.keys(aksi).some((k) => k.startsWith("$ACTION")),
+      `${Object.keys(aksi ?? {}).length} field`);
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(aksi ?? {})) fd.append(k, v);
+    fd.set("id", target);
+    fd.set("aktifkan", "0");
+    const tembus = await fetch(`${BASE}/pengguna`, {
+      method: "POST", headers: { cookie: ap.header() }, body: fd, redirect: "manual",
+    });
+    const balasan = await tembus.text();
+    ok("approver POST langsung DITOLAK dengan rapi, pengguna tetap aktif",
+      (await aktifDi()) === "true" && tembus.status === 200 && /Hanya Super Admin/.test(balasan),
+      `is_active=${await aktifDi()} (status ${tembus.status})`);
+
+    // super_admin menonaktifkan lewat form sungguhan.
+    await sa.submit("/pengguna", { id: target, aktifkan: "0" }, { formMarker: "nonaktifkan-pengguna" });
+    ok("super_admin bisa menonaktifkan", (await aktifDi()) === "false", `is_active=${await aktifDi()}`);
+
+    // Nonaktif = akses benar-benar mati, bukan hanya lencana berubah. Sesi
+    // diverifikasi ulang ke DB setiap request, jadi login harus gagal.
+    let bisaMasuk = true;
+    try { await login(EMAIL); } catch { bisaMasuk = false; }
+    ok("pengguna nonaktif tidak bisa masuk lagi", bisaMasuk === false);
+
+    // Tombol Hapus baru muncul SETELAH nonaktif (dua langkah, bukan satu klik).
+    ok("tombol Hapus hanya muncul untuk pengguna nonaktif",
+      /data-testid="hapus-pengguna"/.test((await sa.get("/pengguna")).html));
+
+    // Aktifkan kembali lewat UI, lalu hapus benar-benar lewat UI.
+    await sa.submit("/pengguna", { id: target, aktifkan: "1" }, { formMarker: "aktifkan-pengguna" });
+    ok("bisa diaktifkan kembali", (await aktifDi()) === "true", `is_active=${await aktifDi()}`);
+
+    // Hapus pengguna aktif ditolak: dua langkah wajib.
+    await sa.submit("/pengguna", { id: target, aktifkan: "0" }, { formMarker: "nonaktifkan-pengguna" });
+    await sa.submit("/pengguna", { id: target }, { formMarker: "hapus-pengguna" });
+    const sisa = await psql(`SELECT count(*)::text FROM app.users WHERE id='${target}'`);
+    ok("pengguna nonaktif tanpa riwayat benar-benar terhapus lewat UI", sisa === "0", `${sisa} baris tersisa`);
+
+    // Super_admin aktif terakhir: ditolak, dengan alasan yang bisa dibaca.
+    const diriSendiri = await psql(`SELECT id::text FROM app.users WHERE email='admin@agrovision.local'`);
+    const tolak = await sa.submit("/pengguna", { id: diriSendiri, aktifkan: "0" }, { formMarker: "nonaktifkan-pengguna" });
+    const saAktif = await psql(`SELECT is_active::text FROM app.users WHERE id='${diriSendiri}'`);
+    ok("super_admin tidak bisa menonaktifkan dirinya sendiri", saAktif === "true" && tolak.status !== 500,
+      `is_active=${saAktif} (status ${tolak.status})`);
+
+    // Pembersihan terakhir bersifat SABUK PENGAMAN, bukan penopang: kalau blok di
+    // atas gagal di tengah, baris sekali pakai ini tetap dibuang di run berikutnya
+    // oleh DELETE di awal blok.
+    await psql(`DELETE FROM app.user_company_access WHERE user_id IN (SELECT id FROM app.users WHERE email='${EMAIL}')`);
+    await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
+  }
+
   console.log("\n=== 0051: Jadwal vs Realisasi penyiangan DIHITUNG, bukan diklaim ===");
   {
     // Kolom ini sebelumnya literal "Tepat waktu" untuk setiap baris. Sekarang
