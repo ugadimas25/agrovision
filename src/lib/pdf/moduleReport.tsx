@@ -37,7 +37,11 @@ function fmt(d: Date): string {
   try { return new Intl.DateTimeFormat("id-ID", { dateStyle: "long" }).format(d); } catch { return d.toISOString().slice(0, 10); }
 }
 
-export function ModuleReportPdf({ report }: { report: ModuleReport }) {
+/**
+ * AI-47: `kpis` opsional — angka ringkas yang tampil di atas tabel LAYAR, supaya
+ * unduhan tidak kehilangan angka yang paling dibaca manajemen.
+ */
+export function ModuleReportPdf({ report, kpis }: { report: ModuleReport; kpis?: { label: string; value: string }[] }) {
   const { meta, columns, rows, visual } = report;
   const metaRows: [string, string][] = [
     ["Entitas / Estate", meta.entity], ["Status data", meta.dataStatus],
@@ -61,6 +65,19 @@ export function ModuleReportPdf({ report }: { report: ModuleReport }) {
           ))}
         </View>
         <Text style={st.source}>Sumber: {s(meta.source)}</Text>
+
+        {/* AI-47: KPI layar ikut dicetak, supaya unduhan memuat angka ringkas yang
+            sama dengan yang dibaca di layar — bukan hanya tabel detailnya. */}
+        {kpis && kpis.length > 0 && (
+          <View style={st.metaWrap}>
+            {kpis.map((k, i) => (
+              <View key={i} style={st.metaCell}>
+                <Text style={st.metaLabel}>{s(k.label)}</Text>
+                <Text style={st.metaVal}>{s(k.value)}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         <View style={{ borderWidth: 0.5, borderColor: C.border }}>
           {/* header */}
