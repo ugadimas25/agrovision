@@ -270,8 +270,30 @@ async function nurseryScreen(ctx: RlsContext): Promise<ReportScreenBase> {
 // ── 04 · Penyiangan (mockup 7) ──────────────────────────────────────────────
 async function weedingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
   const rows = await rlsQuery<Record<string, string | null>>(ctx, `
-    SELECT w.weeded_on::text, b.code AS block, b.area_ha, w.method, w.area_ha AS weed_area, w.labor_count, u.full_name AS officer, w.approval_status::text AS st
-      FROM app.weeding_records w JOIN app.blocks b ON b.id=w.block_id LEFT JOIN app.users u ON u.id=w.created_by ORDER BY w.weeded_on DESC`);
+    SELECT w.weeded_on::text, b.code AS block, b.area_ha, w.method, w.area_ha AS weed_area,
+           w.labor_count, u.full_name AS officer, w.approval_status::text AS st,
+           -- Jadwal vs Realisasi, DIHITUNG (migrasi 0051). Sebelumnya kolom ini
+           -- literal 'Tepat waktu' untuk setiap baris.
+           --
+           -- Pembandingnya jarak ke penyiangan SEBELUMNYA pada blok yang sama
+           -- (LAG), bukan tanggal janji: jadwalnya siklus "tiap N hari". Baris
+           -- pertama sebuah blok tidak punya pembanding -> NULL -> em-dash.
+           -- Blok tanpa jadwal aktif juga NULL: belum dijadwalkan bukan berarti
+           -- tepat waktu.
+           CASE
+             WHEN ws.interval_day IS NULL THEN NULL
+             WHEN lag(w.weeded_on) OVER (PARTITION BY w.block_id ORDER BY w.weeded_on) IS NULL THEN NULL
+             WHEN (w.weeded_on - lag(w.weeded_on) OVER (PARTITION BY w.block_id ORDER BY w.weeded_on))
+                  <= ws.interval_day + ws.tolerance_day THEN 'Tepat waktu'
+             ELSE 'Terlambat ' || (
+                    (w.weeded_on - lag(w.weeded_on) OVER (PARTITION BY w.block_id ORDER BY w.weeded_on))
+                    - ws.interval_day)::text || ' hari'
+           END AS jadwal
+      FROM app.weeding_records w
+      JOIN app.blocks b ON b.id = w.block_id
+      LEFT JOIN app.users u ON u.id = w.created_by
+      LEFT JOIN app.weeding_schedules ws ON ws.block_id = w.block_id AND ws.is_active
+     ORDER BY w.weeded_on DESC`);
   const totWeed = sum(rows.map((r) => N(r.weed_area)));
   const totBlockArea = sum([...new Map(rows.map((r) => [r.block, N(r.area_ha)])).values()]);
   const cakupan = totWeed !== null && totBlockArea && totBlockArea > 0 ? Math.min(100, (totWeed / totBlockArea) * 100) : null;
@@ -303,12 +325,12 @@ async function weedingScreen(ctx: RlsContext): Promise<ReportScreenBase> {
       title: "Detail Penyiangan",
       columns: [
         { label: "Tanggal" }, { label: "Kode Blok" }, { label: "Metode" }, { label: "Luas (ha)", align: "right" }, { label: "Cakupan vs Total", align: "right", kind: "new" },
-        { label: "Tenaga Kerja (HOK)", align: "right" }, { label: "Biaya per ha", align: "right", kind: "new" }, { label: "Petugas" }, { label: "Status" },
+        { label: "Tenaga Kerja (HOK)", align: "right" }, { label: "Biaya per ha", align: "right", kind: "new" }, { label: "Jadwal vs Realisasi", kind: "new" }, { label: "Petugas" }, { label: "Status" },
       ],
       rows: rows.map((r) => {
         const wa = N(r.weed_area); const ba = N(r.area_ha);
         const cov = wa !== null && ba && ba > 0 ? Math.min(100, (wa / ba) * 100) : null;
-        return [D(r.weeded_on), r.block, r.method ?? "—", nf(wa, 2), cov === null ? "—" : `${nf(cov, 0)}%`, nf(N(r.labor_count)), "Rp —", r.officer ?? "—", statusLabelId(r.st ?? "")];
+        return [D(r.weeded_on), r.block, r.method ?? "—", nf(wa, 2), cov === null ? "—" : `${nf(cov, 0)}%`, nf(N(r.labor_count)), "Rp —", r.jadwal, r.officer ?? "—", statusLabelId(r.st ?? "")];
       }),
       footNote: "Biaya ter-refleksi saat disetujui. Kolom biru = rekomendasi tambahan. Kosong = —.",
     },
@@ -884,7 +906,9 @@ const SCREEN_DETAIL_COLUMNS: Record<string, string[]> = {
   "chemical": ["Bahan Aktif", "Rekomendasi Fase"],
   "equipment": ["Utilisasi", "Konsumsi/jam"],
   "anggaran": ["Burn Rate (%)", "Forecast Sisa (Rp)"],
-  "penyiangan": ["Cakupan vs Total"],
+  // Kolom "Jadwal vs Realisasi" kembali di 0051, jadi penyiangan 10 kolom lagi.
+  // Petugas turun mengikuti aturan umum (nama orang ke baris detail).
+  "penyiangan": ["Cakupan vs Total", "Petugas"],
   "pruning": ["Detail"],
   "approval": ["Approver"],
 };

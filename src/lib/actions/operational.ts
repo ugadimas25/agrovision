@@ -8,6 +8,7 @@ import {
   createLandPreparation,
   createLandSuitability,
   createNurseryInspection,
+  setWeedingSchedule,
   createSeedDistribution,
   createDbhMeasurement,
   createPruningRecord,
@@ -458,5 +459,46 @@ export async function submitOpAction(_p: ActionState, fd: FormData): Promise<Act
     revalidatePath(MODULE_PATH[parsed.data.module]);
     revalidatePath("/approval");
     return { ok: true, message: "Diajukan untuk approval." };
+  } catch (e) { return { ok: false, message: toMessage(e) }; }
+}
+
+// --- Jadwal penyiangan (migrasi 0051) ---
+//
+// Menentukan kadensi penyiangan = keputusan operasi, bukan pencatatan lapangan,
+// jadi gerbangnya approver/super_admin — creator mencatat pekerjaannya, tidak
+// menetapkan targetnya sendiri.
+const weedSchedSchema = z.object({
+  blockId: uuid,
+  intervalDay: z.coerce.number().int().min(1, "Interval minimal 1 hari").max(365),
+  // Tanpa toleransi kolom laporan akan hampir selalu merah dan berhenti dibaca.
+  toleranceDay: z.coerce.number().int().min(0).max(90),
+  note: z.string().trim().max(500).optional(),
+});
+
+export async function setWeedingScheduleAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const ctx = await requireRole("approver", "super_admin");
+    if (!ctx.companyId) return { ok: false, message: "Pilih satu entitas dulu di kanan atas." };
+    const parsed = weedSchedSchema.safeParse({
+      blockId: fd.get("blockId"),
+      intervalDay: fd.get("intervalDay"),
+      toleranceDay: fd.get("toleranceDay") || "7",
+      note: fd.get("note") ?? "",
+    });
+    if (!parsed.success) {
+      return { ok: false, message: "Periksa isian yang ditandai.", fieldErrors: fieldErrors(parsed.error) };
+    }
+    await setWeedingSchedule(ctx, {
+      blockId: parsed.data.blockId,
+      intervalDay: parsed.data.intervalDay,
+      toleranceDay: parsed.data.toleranceDay,
+      note: parsed.data.note || null,
+    });
+    revalidatePath("/aktivitas/weeding");
+    revalidatePath("/laporan/penyiangan");
+    return {
+      ok: true,
+      message: `Jadwal disetel: tiap ${parsed.data.intervalDay} hari (toleransi ${parsed.data.toleranceDay} hari). Kolom Jadwal vs Realisasi di laporan ikut terisi.`,
+    };
   } catch (e) { return { ok: false, message: toMessage(e) }; }
 }

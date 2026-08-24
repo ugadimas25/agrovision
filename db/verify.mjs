@@ -237,6 +237,37 @@ async function run() {
   ok('blok yang sama BOLEH dinilai komoditas berbeda (K-04)', true,
      `${cropA.code} + ${cropB.code}`)
 
+  console.log('\n=== Jadwal penyiangan (0051) ===')
+  await asUser(U_APPROVER, 'approver', C1)
+  await c.query(`INSERT INTO app.weeding_schedules (company_id, block_id, interval_day, tolerance_day, created_by)
+                 VALUES ($1,$2,30,7,$3)`, [C1, blk.id, U_APPROVER])
+  ok('approver bisa menyetel jadwal penyiangan', true, '30 hari, toleransi 7')
+
+  // Satu jadwal AKTIF per blok: dua yang aktif membuat laporan memilih berdasarkan
+  // urutan baris (pelajaran indeks 0046 pada price_list).
+  try {
+    await c.query(`INSERT INTO app.weeding_schedules (company_id, block_id, interval_day, created_by)
+                   VALUES ($1,$2,45,$3)`, [C1, blk.id, U_APPROVER])
+    ok('jadwal AKTIF kedua untuk blok sama DITOLAK', false, 'berhasil padahal seharusnya ditolak')
+  } catch (e) {
+    ok('jadwal AKTIF kedua untuk blok sama DITOLAK',
+       /ws_one_active_per_block/.test(e.message), e.message.slice(0, 60))
+  }
+
+  // Cek "blok entitas lain" ADA di db/verify-adversarial.mjs, bukan di sini:
+  // entitas C2 pada fixture ini tidak punya blok, jadi cek bersyarat di sini akan
+  // diam-diam dilompati — dan cek yang dilompati tanpa suara lebih buruk daripada
+  // tidak ada cek, karena hitungan PASS-nya tetap terlihat naik.
+
+  // Interval nol/negatif tidak bermakna.
+  try {
+    await c.query(`INSERT INTO app.weeding_schedules (company_id, block_id, interval_day, created_by)
+                   VALUES ($1,$2,0,$3)`, [C1, blk.id, U_APPROVER])
+    ok('interval 0 hari DITOLAK', false, 'diterima')
+  } catch (e) {
+    ok('interval 0 hari DITOLAK', /ws_interval_positive|ws_one_active/.test(e.message), e.message.slice(0, 60))
+  }
+
   // =========================================================================
   // Temuan telaah adversarial 0041–0047 (24 Agu 2026).
   // Keputusan pemilik produk: TAMPILKAN, jangan blokir.

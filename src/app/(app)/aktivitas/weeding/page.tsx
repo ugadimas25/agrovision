@@ -7,7 +7,8 @@ import { getDict } from "@/lib/i18n";
 import { OpRecordForm } from "@/components/ui/OpRecordForm";
 import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
-import { listOpRecords } from "@/lib/repo/operational";
+import { listOpRecords, listWeedingSchedules } from "@/lib/repo/operational";
+import { ScheduleForm } from "./ScheduleForm";
 import { createWeedingAction } from "@/lib/actions/operational";
 
 export const metadata = { title: "Penyiangan — AgroVision" };
@@ -24,11 +25,15 @@ export default async function Page() {
   let ctx;
   try { ctx = await requireContext(); } catch { redirect("/login"); }
   const t = getDict(await getLocale());
-  const [rows, blocks] = await Promise.all([
+  const [rows, blocks, schedules] = await Promise.all([
     listOpRecords(ctx, "weeding_records"),
     searchBlockOptions(ctx),
+    // Jadwal penyiangan (migrasi 0051) — dasar kolom "Jadwal vs Realisasi".
+    listWeedingSchedules(ctx),
   ]);
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
+  // Menentukan kadensi = keputusan operasi, bukan pencatatan lapangan.
+  const canSchedule = ["approver", "super_admin"].includes(ctx.session.role);
   const ready = canWrite && ctx.companyId && blocks.length > 0;
 
   return (
@@ -36,6 +41,9 @@ export default async function Page() {
       <PageHeader title={t("nav.weeding")} subtitle={t("sub.weeding")} />
       {ready && (
         <div className="mb-5">
+          {canSchedule && ctx.companyId && blocks.length > 0 && (
+            <ScheduleForm blocks={blocks} schedules={schedules} />
+          )}
           <OpRecordForm
             title="Catat penyiangan"
             action={createWeedingAction}
