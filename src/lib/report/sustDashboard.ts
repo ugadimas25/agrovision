@@ -1,4 +1,6 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
+import { EMPTY_FILTER, type DashboardFilter, type Terbatas } from "./filters";
+import { resolveFilter } from "./filterResolve";
 import { latestCarbonRun, listCertPrograms } from "@/lib/repo/sustainability";
 import type { IndStatus } from "./types";
 
@@ -6,6 +8,8 @@ export type SustKpi = { key: "carbon" | "complete" | "cert" | "trace"; label: st
 export type CertReady = { name: string; pct: number };
 
 export type SustDashboard = {
+  /** AI-24: metrik yang tidak bisa mengikuti filter, beserta alasannya. */
+  terbatas: Terbatas[];
   kpis: SustKpi[];
   carbon: { gross: number | null; sequestration: number | null; net: number | null };
   hasCarbon: boolean;
@@ -25,7 +29,27 @@ const STANDARDS = [
 const EMPTY = "—";
 const nf = (v: number, d = 0) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v);
 
-export async function sustainabilityDashboardView(ctx: RlsContext): Promise<SustDashboard> {
+/**
+ * AI-24 · dashboard ini yang paling sedikit bisa difilter, dan itu dinyatakan
+ * apa adanya:
+ *   * rasio pupuk organik BISA — fertilizer_applications punya block_id,
+ *     applied_on, dan crop_code.
+ *   * neraca karbon TIDAK — app.carbon_runs adalah snapshot SE-PERUSAHAAN per
+ *     periode, satu baris; tidak ada dimensi blok maupun komoditas di dalamnya.
+ *   * program sertifikasi TIDAK — cakupannya entitas, bukan blok.
+ *
+ * Menyembunyikan batasan itu akan membuat pembaca menyangka angka karbon sudah
+ * dipersempit ke blok yang dipilihnya. Jadi nilainya em-dash beserta alasannya.
+ */
+export async function sustainabilityDashboardView(
+  ctx: RlsContext,
+  filter: DashboardFilter = EMPTY_FILTER,
+): Promise<SustDashboard> {
+  const f = await resolveFilter(ctx, filter);
+  // Hanya blok/komoditas yang membuat angka karbon tak bisa dipersempit. Filter
+  // PERIODE saja tidak: carbon_runs punya period_start/period_end, jadi periode
+  // masih bermakna untuk dashboard ini.
+  const petaBlok = f.blockIds !== null || f.cropCodes !== null;
   const [run, programs, org] = await Promise.all([
     latestCarbonRun(ctx),
     listCertPrograms(ctx),
@@ -33,12 +57,24 @@ export async function sustainabilityDashboardView(ctx: RlsContext): Promise<Sust
       SELECT COALESCE(SUM(fa.total_quantity) FILTER (WHERE ft.kind='organic'),0)::text AS organic,
              COALESCE(SUM(fa.total_quantity),0)::text AS total
         FROM app.fertilizer_applications fa JOIN app.fertilizer_types ft ON ft.id=fa.fertilizer_type_id
-       WHERE fa.approval_status='approved'`),
+       WHERE fa.approval_status='approved'
+         AND ($1::uuid[] IS NULL OR fa.block_id = ANY($1))
+         AND ($2::date IS NULL OR fa.applied_on BETWEEN $2::date AND $3::date)
+         AND ($4::text[] IS NULL OR fa.crop_code = ANY($4))`,
+      [f.blockIds, f.dateFrom, f.dateTo, f.cropCodes]),
   ]);
 
-  const net = run?.netBalanceTco2e ?? null;
-  const gross = run?.grossEmissionTco2e ?? null;
-  const seq = run?.sequestrationTco2e ?? null;
+  const terbatas: Terbatas[] = [];
+  if (petaBlok) {
+    terbatas.push({ metrik: "Neraca karbon", alasan: "carbon_runs adalah snapshot se-perusahaan per periode, tanpa dimensi blok/komoditas" });
+    terbatas.push({ metrik: "Program sertifikasi", alasan: "cakupannya entitas, bukan blok" });
+  }
+
+  // petaBlok = blok atau komoditas dipilih -> angka karbon tidak boleh tampil
+  // seolah sudah dipersempit.
+  const net = petaBlok ? null : run?.netBalanceTco2e ?? null;
+  const gross = petaBlok ? null : run?.grossEmissionTco2e ?? null;
+  const seq = petaBlok ? null : run?.sequestrationTco2e ?? null;
   const completeness = run?.dataCompletenessPct ?? null;
   const hasCarbon = run !== null;
 
@@ -68,6 +104,7 @@ export async function sustainabilityDashboardView(ctx: RlsContext): Promise<Sust
   ];
 
   return {
+    terbatas,
     kpis, carbon: { gross, sequestration: seq, net }, hasCarbon, mapStatus,
     certReady, certifiedCount, landHistoryDone: 0, landHistoryTotal: 7,
     organic, insights,

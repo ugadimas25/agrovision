@@ -1,5 +1,3 @@
-import type { RlsContext } from "@/lib/db";
-import { rlsQuery } from "@/lib/db";
 
 /**
  * AI-24 / K-08 · kontrak filter dashboard.
@@ -13,6 +11,12 @@ import { rlsQuery } from "@/lib/db";
  * tautan. Diklik tidak melakukan apa pun, dan nilainya dipatok ("Semua periode",
  * "Kelapa & Durian"). Jadi keluhan "filter tidak berfungsi, angka statis" bukan
  * soal query yang salah: UI-nya menjanjikan kemampuan yang tidak ada.
+ *
+ * Berkas ini SENGAJA bebas impor server-only: ia dipakai komponen "use client"
+ * (FinancialDashboardView, SustainabilityDashboardView). Menarik `@/lib/db` ke
+ * sini akan membawa modul `pg` ke bundle peramban dan MEMATIKAN seluruh aplikasi
+ * dengan galat di pg/lib/connection-parameters.js — terbukti, dan bukan galat yang
+ * menyebut penyebabnya. Bagian yang butuh query ada di ./filterResolve.ts.
  *
  * Semua dimensi MULTI-PILIH (catatan 2.1). Parameter berulang, bukan
  * dipisah koma: `?estate=a&estate=b`. Alasannya bentuk itu yang dihasilkan
@@ -81,46 +85,26 @@ export type ResolvedFilter = {
   komoditasDipilih: boolean;
 };
 
-export async function resolveFilter(
-  ctx: RlsContext,
-  f: DashboardFilter,
-): Promise<ResolvedFilter> {
-  let blockIds: string[] | null = null;
+/**
+ * AI-24 · metrik yang TIDAK BISA mengikuti dimensi filter tertentu.
+ *
+ * Tiap dashboard menyusun daftarnya sendiri dan menyerahkannya ke lapisan
+ * tampilan, supaya angka yang tidak bisa menghormati filter dirender em-dash
+ * beserta ALASANNYA — bukan angka tak terfilter yang seolah mengikuti, dan bukan
+ * nol (nol terbaca sebagai fakta).
+ *
+ * Ini bukan kekurangan yang disembunyikan: batasannya nyata di skema, dan satu-
+ * satunya pilihan jujur adalah mengatakannya. Contoh yang paling menonjol —
+ * `reflectedCosts()` menjumlahkan SE-PERUSAHAAN tanpa GROUP BY blok/periode
+ * (AKAR-2 docs/13 §3). Membuatnya bisa difilter adalah pekerjaan terpisah yang
+ * memang sudah disebut teks asli AI-02.
+ */
+export type Terbatas = { metrik: string; alasan: string };
 
-  if (f.blockIds.length > 0 || f.estateIds.length > 0) {
-    const rows = await rlsQuery<{ id: string }>(
-      ctx,
-      `SELECT id FROM app.blocks
-        WHERE archived_at IS NULL
-          AND ( ($1::uuid[] IS NOT NULL AND id = ANY($1))
-             OR ($2::uuid[] IS NOT NULL AND estate_id = ANY($2)) )`,
-      [f.blockIds.length ? f.blockIds : null, f.estateIds.length ? f.estateIds : null],
-    );
-    blockIds = rows.map((r) => r.id);
-  }
-
-  let dateFrom: string | null = null;
-  let dateTo: string | null = null;
-  if (f.periodIds.length > 0) {
-    // Beberapa fase sekaligus dipadatkan menjadi SATU rentang menyeluruh.
-    // Itu memang lebih longgar daripada gabungan rentang terpisah bila fasenya
-    // tidak bersambung — tapi fase proyek di sini berurutan, dan satu rentang
-    // membuat tiap subquery cukup punya dua parameter alih-alih daftar rentang.
-    const [r] = await rlsQuery<{ from: string | null; to: string | null }>(
-      ctx,
-      `SELECT min(starts_on)::text AS from, max(ends_on)::text AS to
-         FROM app.fiscal_periods WHERE id = ANY($1)`,
-      [f.periodIds],
-    );
-    dateFrom = r?.from ?? null;
-    dateTo = r?.to ?? null;
-  }
-
-  return {
-    blockIds,
-    dateFrom,
-    dateTo,
-    cropCodes: f.cropCodes.length ? f.cropCodes : null,
-    komoditasDipilih: f.cropCodes.length > 0,
-  };
+/** Ringkas jadi satu kalimat untuk ditampilkan di bawah bilah filter. */
+export function ringkasBatasan(list: Terbatas[]): string | null {
+  if (list.length === 0) return null;
+  const per = new Map<string, string[]>();
+  for (const t of list) per.set(t.alasan, [...(per.get(t.alasan) ?? []), t.metrik]);
+  return [...per].map(([alasan, ms]) => `${ms.join(", ")} — ${alasan}`).join("; ");
 }

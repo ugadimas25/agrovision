@@ -1,5 +1,6 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
-import { EMPTY_FILTER, resolveFilter, type DashboardFilter } from "./filters";
+import { EMPTY_FILTER, type DashboardFilter } from "./filters";
+import { resolveFilter } from "./filterResolve";
 import { listSeedStock } from "@/lib/repo/operational";
 
 /**

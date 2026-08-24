@@ -51,7 +51,7 @@ export function OperationalDashboardView({
 
       {/* KPI */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {data.kpis.map((k) => <KpiCard key={k.key} kpi={k} />)}
+        {data.kpis.map((k) => <KpiCard key={k.key} kpi={k} testId={`kpi-${k.key}`} />)}
       </div>
 
       {/* Perjalanan Budidaya + Peta */}
@@ -103,7 +103,7 @@ export function OperationalDashboardView({
 }
 
 
-function KpiCard({ kpi }: { kpi: Kpi }) {
+function KpiCard({ kpi, testId }: { kpi: Kpi; testId?: string }) {
   const Icon = KPI_ICON[kpi.icon];
   const empty = kpi.value === "—";
   return (
@@ -112,7 +112,7 @@ function KpiCard({ kpi }: { kpi: Kpi }) {
         <span className="rounded-full bg-emerald-50 p-2.5 text-emerald-600"><Icon className="h-5 w-5" /></span>
         <div className="min-w-0">
           <p className="text-sm text-slate-500">{kpi.label}</p>
-          <p className={cn("mt-0.5 text-3xl font-bold tabular-nums", empty ? "text-slate-300" : "text-slate-800")}>
+          <p data-testid={testId} className={cn("mt-0.5 text-3xl font-bold tabular-nums", empty ? "text-slate-300" : "text-slate-800")}>
             {kpi.value}{!empty && kpi.unit ? <span className="ml-1 text-base font-semibold text-slate-500">{kpi.unit}</span> : null}
           </p>
         </div>

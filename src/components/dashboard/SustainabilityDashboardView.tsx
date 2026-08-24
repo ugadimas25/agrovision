@@ -4,9 +4,13 @@ import {
   Cloud, ClipboardCheck, Award, ShieldCheck, TreePalm, MapPin, Warehouse, Factory, ArrowRight, Leaf,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
-import { DashboardFilterBar, KpiCard, Panel, EmptyPanel } from "@/components/dashboard/shared";
+import { KpiCard, Panel, EmptyPanel } from "@/components/dashboard/shared";
 import { EstateMap } from "@/components/dashboard/EstateMap";
 import type { SustDashboard, SustKpi } from "@/lib/report/sustDashboard";
+import { FilterBar } from "@/components/dashboard/FilterBar";
+import { ringkasBatasan, type DashboardFilter } from "@/lib/report/filters";
+
+type Opt = { value: string; label: string };
 
 const num = (v: number, d = 0) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v);
 
@@ -14,7 +18,18 @@ const KPI_ICON = { carbon: Cloud, complete: ClipboardCheck, cert: Award, trace: 
 const INS_TONE = { emerald: "border-emerald-200 bg-emerald-50/50", sky: "border-sky-200 bg-sky-50/50", amber: "border-amber-200 bg-amber-50/50" };
 const INS_FG = { emerald: "text-emerald-700", sky: "text-sky-700", amber: "text-amber-700" };
 
-export function SustainabilityDashboardView({ data, company }: { data: SustDashboard; company: string }) {
+export function SustainabilityDashboardView({
+  data, filter, basePath, estates, blocks, periods, crops,
+}: {
+  data: SustDashboard;
+  // `company` dibuang: dulu ia nilai chip "Estate" pada bilah mati.
+  filter: DashboardFilter;
+  basePath: string;
+  estates: Opt[];
+  blocks: Opt[];
+  periods: Opt[];
+  crops: Opt[];
+}) {
   const carbonData = [
     { name: "Emisi Bruto", value: data.carbon.gross ?? 0, c: "#a8a49a" },
     { name: "Penyerapan", value: data.carbon.sequestration ?? 0, c: "#4f9d5d" },
@@ -28,14 +43,24 @@ export function SustainabilityDashboardView({ data, company }: { data: SustDashb
 
   return (
     <div className="space-y-4">
-      <DashboardFilterBar company={company} />
+      {/* AI-24: bilah filter bersama — menggantikan DashboardFilterBar yang isinya
+          <div> mati. Metrik yang tidak bisa mengikuti filter dinyatakan di bawahnya,
+          bukan dibiarkan tampak seolah sudah dipersempit. */}
+      <FilterBar basePath={basePath} filter={filter}
+                 estates={estates} blocks={blocks} periods={periods} crops={crops} />
+      {ringkasBatasan(data.terbatas) && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+          <strong>Tidak mengikuti filter:</strong> {ringkasBatasan(data.terbatas)}. Nilainya
+          ditandai <strong>—</strong> agar tidak terbaca sebagai nol.
+        </p>
+      )}
       <div>
         <h1 className="text-2xl font-bold text-slate-800">Dashboard Sustainability</h1>
         <p className="text-sm text-slate-500">Capaian dampak lingkungan: karbon, sertifikasi/kepatuhan, ketertelusuran, biodiversitas.</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {data.kpis.map((k) => <KpiCard key={k.key} icon={KPI_ICON[k.key]} label={k.label} value={k.value} unit={k.unit} note={k.note} tone={k.tone} iconTone={iconTone(k)} />)}
+        {data.kpis.map((k) => <KpiCard key={k.key} icon={KPI_ICON[k.key]} label={k.label} value={k.value} unit={k.unit} note={k.note} tone={k.tone} iconTone={iconTone(k)}  testId={`kpi-${k.key}`} />)}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

@@ -394,11 +394,20 @@ export async function budgetVsActual(ctx: RlsContext): Promise<BudgetVsActualRow
 }
 
 /** Total pengeluaran approved. Dipakai KPI; null bila belum ada data sama sekali. */
-export async function totalApprovedSpend(ctx: RlsContext): Promise<number | null> {
+export async function totalApprovedSpend(
+  ctx: RlsContext,
+  // AI-24: filter opsional. Dibuat opsional supaya pemanggil lain (laporan,
+  // dashboard lain) tidak perlu ikut berubah saat filter dipasang di satu tempat.
+  f?: { blockIds: string[] | null; dateFrom: string | null; dateTo: string | null },
+): Promise<number | null> {
   const rows = await rlsQuery<{ total: string | null; n: string }>(
     ctx,
     `SELECT sum(amount_idr) AS total, count(*) AS n
-       FROM app.cost_transactions WHERE approval_status = 'approved'`,
+       FROM app.cost_transactions
+      WHERE approval_status = 'approved'
+        AND ($1::uuid[] IS NULL OR block_id = ANY($1))
+        AND ($2::date IS NULL OR transaction_date BETWEEN $2::date AND $3::date)`,
+    [f?.blockIds ?? null, f?.dateFrom ?? null, f?.dateTo ?? null],
   );
   const n = Number(rows[0]?.n ?? 0);
   return n === 0 ? null : Number(rows[0].total ?? 0);

@@ -5,16 +5,31 @@ import {
   TrendingUp, ArrowDownRight, Wallet, ClipboardList, Info, BarChart3, LineChart as LineIcon, Sprout, TreePine, CalendarClock,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { DashboardFilterBar, KpiCard, Panel, EmptyPanel, InsightTable } from "@/components/dashboard/shared";
+import { KpiCard, Panel, EmptyPanel, InsightTable } from "@/components/dashboard/shared";
 import type { FinDashboard, FinKpi } from "@/lib/report/finDashboard";
 import { formatIdr, formatIdrShort } from "@/lib/format";
+import { FilterBar } from "@/components/dashboard/FilterBar";
+import { ringkasBatasan, type DashboardFilter } from "@/lib/report/filters";
+
+type Opt = { value: string; label: string };
 
 const num = (v: number, d = 0) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v);
 
 const KPI_ICON = { revenue: TrendingUp, expense: ArrowDownRight, profit: Wallet, budget: ClipboardList } as const;
 const GRADE_COLOR: Record<string, string> = { "Grade A": "#1a6c2c", "Grade B": "#4f9d5d", "Grade C": "#fbbf24", "Grade —": "#a8a49a" };
 
-export function FinancialDashboardView({ data, company }: { data: FinDashboard; company: string }) {
+export function FinancialDashboardView({
+  data, filter, basePath, estates, blocks, periods, crops,
+}: {
+  data: FinDashboard;
+  // `company` dibuang: dulu ia nilai chip "Estate" pada bilah mati.
+  filter: DashboardFilter;
+  basePath: string;
+  estates: Opt[];
+  blocks: Opt[];
+  periods: Opt[];
+  crops: Opt[];
+}) {
   const gradeKeys = Array.from(new Set(data.revenue.flatMap((r) => r.grades.map((g) => `Grade ${g.grade}`))));
   const revData = data.revenue.map((r) => {
     const o: Record<string, string | number> = { commodity: r.commodity };
@@ -25,7 +40,17 @@ export function FinancialDashboardView({ data, company }: { data: FinDashboard; 
 
   return (
     <div className="space-y-4">
-      <DashboardFilterBar company={company} />
+      {/* AI-24: bilah filter bersama — menggantikan DashboardFilterBar yang isinya
+          <div> mati. Metrik yang tidak bisa mengikuti filter dinyatakan di bawahnya,
+          bukan dibiarkan tampak seolah sudah dipersempit. */}
+      <FilterBar basePath={basePath} filter={filter}
+                 estates={estates} blocks={blocks} periods={periods} crops={crops} />
+      {ringkasBatasan(data.terbatas) && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+          <strong>Tidak mengikuti filter:</strong> {ringkasBatasan(data.terbatas)}. Nilainya
+          ditandai <strong>—</strong> agar tidak terbaca sebagai nol.
+        </p>
+      )}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Dashboard Finansial</h1>
@@ -39,7 +64,7 @@ export function FinancialDashboardView({ data, company }: { data: FinDashboard; 
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {data.kpis.map((k) => <KpiCard key={k.key} icon={KPI_ICON[k.key]} label={k.label} value={k.value} unit={k.unit} note={k.note} tone={k.tone} badge={k.badge} iconTone={iconTone(k)} />)}
+        {data.kpis.map((k) => <KpiCard key={k.key} icon={KPI_ICON[k.key]} label={k.label} value={k.value} unit={k.unit} note={k.note} tone={k.tone} badge={k.badge} iconTone={iconTone(k)}  testId={`kpi-${k.key}`} />)}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

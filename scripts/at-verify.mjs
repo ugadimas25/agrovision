@@ -793,6 +793,37 @@ async function main() {
     ok("filter komoditas menjelaskan metrik yang tidak bisa mengikutinya",
       /tidak menyimpan komoditas/.test(kom.html));
 
+    // Bagian 2: dua dashboard lain memakai KOMPONEN dan kontrak yang sama.
+    //
+    // Di sini nilai KPI dibaca lewat data-testid, BUKAN lewat pola `>angka<`
+    // seperti dashboard Operasional di atas. Alasannya konkret: KPI kedua
+    // dashboard ini dirender "Rp 1,2 jt" / "12,3" + unit dalam SATU node, jadi
+    // pola `>angka<` tidak menangkapnya dan uji melaporkan "tidak berubah"
+    // padahal berubah. Yang diperiksa adalah metrik yang memang HARUS berubah:
+    // laba menjadi em-dash saat filter aktif (biaya perusahaan-lebar tidak bisa
+    // dipersempit -- AKAR-2), demikian pula neraca karbon saat blok dipilih.
+    const kpi = (html, key) => {
+      const m = new RegExp(`data-testid="kpi-${key}"[^>]*>([\\s\\S]*?)</p>`).exec(html);
+      return m ? m[1].replace(/<[^>]*>/g, "").trim() : null;
+    };
+    for (const [path, nama, key] of [
+      ["/dashboard/financial", "Finansial", "profit"],
+      ["/dashboard/sustainability", "Keberlanjutan", "carbon"],
+    ]) {
+      const p0 = await demoAdmin.get(path);
+      ok(`${nama}: bilah filter bersama terpasang`, /data-testid="filter-dashboard"/.test(p0.html));
+      const b = /name="blok" value="([^"]+)"/.exec(p0.html)?.[1];
+      const p1 = await demoAdmin.get(`${path}?blok=${b}`);
+      const v0 = kpi(p0.html, key), v1 = kpi(p1.html, key);
+      // v0 harus ANGKA, bukan em-dash: kalau tanpa filter pun sudah em-dash,
+      // "berubah menjadi em-dash" tidak membuktikan apa pun.
+      ok(`${nama}: KPI ${key} punya angka tanpa filter`, Boolean(v0) && v0 !== "—", `${v0}`);
+      ok(`${nama}: KPI ${key} jujur em-dash saat filter aktif`, v1 === "—", `${v0} -> ${v1}`);
+      // Metrik yang TIDAK bisa mengikuti filter wajib dinyatakan, bukan didiamkan.
+      ok(`${nama}: metrik yang tak bisa difilter dinyatakan alasannya`,
+        /Tidak mengikuti filter/.test(p1.html));
+    }
+
     // Parameter palsu dari URL tidak boleh menjadi galat maupun celah — disaring
     // jadi "tanpa filter".
     const ngawur = await demoAdmin.get("/dashboard?blok=bukan-uuid&komoditas=%27%3B--");

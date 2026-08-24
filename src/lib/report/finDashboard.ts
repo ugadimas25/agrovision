@@ -1,4 +1,6 @@
 import { rlsQuery, type RlsContext } from "@/lib/db";
+import { EMPTY_FILTER, filterAktif, type DashboardFilter, type Terbatas } from "./filters";
+import { resolveFilter } from "./filterResolve";
 import { budgetVsActual, totalApprovedSpend } from "@/lib/repo/costing";
 import { reflectedCosts } from "@/lib/repo/pricing";
 import { formatIdrShort, formatIdr } from "@/lib/format";
@@ -25,6 +27,11 @@ export type RevenueCommodity = { commodity: string; total: number; grades: { gra
 export type BudgetFase = { fase: string; anggaran: number; realisasi: number | null };
 
 export type FinDashboard = {
+  /**
+   * AI-24: metrik yang tidak bisa mengikuti filter, beserta alasannya. Dirender
+   * di bawah bilah filter supaya angka em-dash tidak terbaca sebagai "nol".
+   */
+  terbatas: Terbatas[];
   kpis: FinKpi[];
   dataIncomplete: boolean;
   budgetFases: BudgetFase[];
@@ -36,16 +43,39 @@ export type FinDashboard = {
   insights: InsightRow[];
 };
 
-export async function financialDashboardView(ctx: RlsContext): Promise<FinDashboard> {
+/**
+ * AI-24 · filter diterapkan di mana skemanya memungkinkan, dan DIAKUI di mana
+ * tidak. Panen & pengeluaran punya block_id + tanggal (+ crop_code untuk panen),
+ * jadi keduanya ikut. `reflectedCosts()` menjumlahkan SE-PERUSAHAAN tanpa GROUP BY
+ * blok/periode (AKAR-2, docs/13 §3) — ia tidak bisa dipersempit tanpa pekerjaan
+ * yang memang sudah disebut teks asli AI-02, jadi nilainya dirender em-dash saat
+ * filter aktif alih-alih tampil seolah mengikuti.
+ */
+export async function financialDashboardView(
+  ctx: RlsContext,
+  filter: DashboardFilter = EMPTY_FILTER,
+): Promise<FinDashboard> {
+  const f = await resolveFilter(ctx, filter);
+  const aktif = filterAktif(filter);
   const [budgets, spend, reflection, harvest, rates] = await Promise.all([
     budgetVsActual(ctx),
-    totalApprovedSpend(ctx),
+    totalApprovedSpend(ctx, f),
     reflectedCosts(ctx),
     rlsQuery<{ crop_code: string; grade: string | null; ton: string }>(ctx,
       `SELECT crop_code, grade, COALESCE(SUM(quantity_ton),0)::text AS ton
-         FROM app.harvest_records WHERE approval_status='approved' GROUP BY crop_code, grade`),
+         FROM app.harvest_records
+        WHERE approval_status='approved'
+          AND ($1::uuid[] IS NULL OR block_id = ANY($1))
+          AND ($2::date IS NULL OR harvested_on BETWEEN $2::date AND $3::date)
+          AND ($4::text[] IS NULL OR crop_code = ANY($4))
+        GROUP BY crop_code, grade`,
+      [f.blockIds, f.dateFrom, f.dateTo, f.cropCodes]),
     rlsQuery<{ code: string; rate: string }>(ctx, `SELECT code, rate_idr AS rate FROM app.price_list WHERE kind='revenue'`),
   ]);
+
+  const terbatas: Terbatas[] = aktif
+    ? [{ metrik: "Biaya ter-refleksi", alasan: "dihitung se-perusahaan, belum punya dimensi blok/periode (AKAR-2)" }]
+    : [];
 
   const rateFor = (crop: string) => {
     const code = crop === "DURIAN" ? "REV-DUR-A" : "REV-COCO";
@@ -78,8 +108,11 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
   const hasBudget = budgets.length > 0;
   const serapan =
     hasBudget && sumBudget > 0 && sumActual !== null ? (sumActual / sumBudget) * 100 : null;
-  const laba = reflection.balanceIdr;
-  const labaSemu = hasRevenue && reflection.totalCostIdr < (totalRevenue ?? 0) * 0.05;
+  // Laba = revenue - biaya ter-refleksi. Karena biayanya se-perusahaan, labanya
+  // ikut tidak bisa dipersempit: menampilkannya saat filter aktif berarti
+  // membandingkan revenue satu blok dengan biaya seluruh perusahaan.
+  const laba = aktif ? null : reflection.balanceIdr;
+  const labaSemu = !aktif && hasRevenue && reflection.totalCostIdr < (totalRevenue ?? 0) * 0.05;
 
   // anggaran vs realisasi per fase (pakai periodName sebagai fase)
   // realisasi per fase dijumlahkan dari yang DIKETAHUI saja; fase yang belum
@@ -109,6 +142,7 @@ export async function financialDashboardView(ctx: RlsContext): Promise<FinDashbo
   ];
 
   return {
+    terbatas,
     kpis, dataIncomplete: labaSemu || spend === null,
     budgetFases, hasBudget,
     revenue, totalRevenue, totalVolume: totalVolume > 0 ? totalVolume : null,
