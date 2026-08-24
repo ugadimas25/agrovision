@@ -830,3 +830,134 @@ export async function setWeedingSchedule(
     );
   });
 }
+
+/**
+ * AI-22 · satu hasil survei beserta jawabannya.
+ *
+ * Sebelum ini daftar /survei hanya menampilkan Form/Blok/Tanggal/Petugas/Status —
+ * 66 baris submission_values di dataset demo tidak bisa dilihat sama sekali dari
+ * UI. Penguji QA (catatan 10) berhenti di situ.
+ */
+export type SurveyAnswer = {
+  fieldId: string;
+  section: string | null;
+  label: string;
+  fieldType: string;
+  /** null = pertanyaan itu tidak dijawab. Dirender em-dash, BUKAN 0/kosong. */
+  value: string | null;
+};
+
+export type SurveySubmissionDetail = {
+  id: string;
+  formName: string;
+  formModule: string;
+  formVersion: number;
+  blockCode: string | null;
+  estateName: string | null;
+  submittedAt: string | null;
+  submittedByName: string | null;
+  approvalStatus: string;
+  rejectionReason: string | null;
+  deviceId: string | null;
+  /** Koordinat titik submission bila perangkat mengirimnya. */
+  lat: number | null;
+  lon: number | null;
+  answers: SurveyAnswer[];
+};
+
+export async function surveySubmissionDetail(
+  ctx: RlsContext,
+  id: string,
+): Promise<SurveySubmissionDetail | null> {
+  return withRls(ctx, async (client) => {
+    const head = await client.query(
+      `SELECT ss.id, f.name AS form_name, f.module AS form_module, fv.version,
+              b.code AS block_code, e.name AS estate_name,
+              (ss.submitted_at AT TIME ZONE 'Asia/Jakarta')::date::text AS submitted_at,
+              u.full_name AS submitted_by_name, ss.approval_status, ss.rejection_reason,
+              ss.device_id,
+              ST_Y(ss.geom::geometry) AS lat, ST_X(ss.geom::geometry) AS lon
+         FROM app.survey_submissions ss
+         JOIN app.form_versions fv ON fv.id = ss.form_version_id
+         JOIN app.forms f ON f.id = fv.form_id
+         LEFT JOIN app.blocks b ON b.id = ss.block_id
+         LEFT JOIN app.estates e ON e.id = b.estate_id
+         LEFT JOIN app.users u ON u.id = ss.submitted_by
+        WHERE ss.id = $1`,
+      [id],
+    );
+    const h = head.rows[0];
+    // null, bukan throw: RLS mengembalikan 0 baris untuk submission entitas lain,
+    // dan itu harus terlihat sebagai "tidak ada", bukan galat server.
+    if (!h) return null;
+
+    // LEFT JOIN dari form_fields, bukan dari submission_values: pertanyaan yang
+    // TIDAK dijawab harus tetap muncul sebagai em-dash. Kalau di-join dari sisi
+    // nilai, pertanyaan kosong hilang dari layar dan hasil survei setengah
+    // terisi terlihat seperti hasil yang lengkap.
+    const vals = await client.query(
+      `SELECT ff.id AS field_id, ff.section_name, ff.label, ff.field_type::text AS field_type,
+              sv.value_text, sv.value_num, sv.value_bool, sv.value_date::text AS value_date,
+              sv.value_json,
+              CASE WHEN sv.value_geom IS NULL THEN NULL
+                   ELSE ST_Y(sv.value_geom::geometry)::text || ', ' || ST_X(sv.value_geom::geometry)::text
+              END AS value_geom
+         FROM app.form_fields ff
+         LEFT JOIN app.submission_values sv
+                ON sv.field_id = ff.id AND sv.submission_id = $1
+        WHERE ff.form_version_id = (SELECT form_version_id FROM app.survey_submissions WHERE id = $1)
+        ORDER BY ff.sort_order, ff.label`,
+      [id],
+    );
+
+    const answers: SurveyAnswer[] = vals.rows.map((r) => {
+      // Kolom dipilih menurut tipe field. Bila kolom itu kosong tapi kolom lain
+      // terisi, nilai yang terisi itu tetap ditampilkan — itu jawaban asli
+      // petugas, dan menyembunyikannya sebagai em-dash akan MENGHILANGKAN data
+      // yang benar-benar ada. Yang tidak boleh adalah sebaliknya: mengarang isi.
+      const kandidat: (string | null)[] = [];
+      switch (r.field_type) {
+        case "number": case "scale": kandidat.push(r.value_num === null ? null : String(r.value_num)); break;
+        case "date": kandidat.push(r.value_date as string | null); break;
+        case "yes_no": kandidat.push(r.value_bool === null ? null : r.value_bool ? "Ya" : "Tidak"); break;
+        case "gps": case "polygon": kandidat.push(r.value_geom as string | null); break;
+        case "multi_choice": case "table":
+          kandidat.push(r.value_json === null ? null : JSON.stringify(r.value_json)); break;
+        default: kandidat.push(r.value_text as string | null);
+      }
+      kandidat.push(
+        r.value_text as string | null,
+        r.value_num === null ? null : String(r.value_num),
+        r.value_bool === null ? null : r.value_bool ? "Ya" : "Tidak",
+        r.value_date as string | null,
+        r.value_geom as string | null,
+        r.value_json === null ? null : JSON.stringify(r.value_json),
+      );
+      const value = kandidat.find((v) => v !== null && v !== "") ?? null;
+      return {
+        fieldId: String(r.field_id),
+        section: (r.section_name as string) ?? null,
+        label: String(r.label),
+        fieldType: String(r.field_type),
+        value,
+      };
+    });
+
+    return {
+      id: String(h.id),
+      formName: String(h.form_name),
+      formModule: String(h.form_module),
+      formVersion: Number(h.version),
+      blockCode: (h.block_code as string) ?? null,
+      estateName: (h.estate_name as string) ?? null,
+      submittedAt: (h.submitted_at as string) ?? null,
+      submittedByName: (h.submitted_by_name as string) ?? null,
+      approvalStatus: String(h.approval_status),
+      rejectionReason: (h.rejection_reason as string) ?? null,
+      deviceId: (h.device_id as string) ?? null,
+      lat: h.lat === null ? null : Number(h.lat),
+      lon: h.lon === null ? null : Number(h.lon),
+      answers,
+    };
+  });
+}

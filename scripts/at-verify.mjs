@@ -914,6 +914,67 @@ async function main() {
     ok("filter ngawur diperlakukan sebagai tanpa filter", angka(ngawur.html) === angka(base.html));
   }
 
+  console.log("\n=== AI-22: hasil survei bisa DILIHAT, bukan cuma dihitung ===");
+  {
+    // Sebelum ini daftar /survei hanya memberi Form/Blok/Tanggal/Petugas/Status;
+    // 66 baris submission_values di dataset demo tidak bisa dicapai dari UI.
+    const s = await login("admin@demo.invalid", { company: "00000000-0000-4000-8000-0000000000d0" });
+    const daftar = await s.get("/survei");
+    const tautan = /data-testid="lihat-hasil-survei"[^>]*/.test(daftar.html)
+      || /href="\/survei\/hasil\/([0-9a-f-]{36})"/.test(daftar.html);
+    ok("daftar survei punya aksi Lihat per baris", tautan);
+    const sid = /href="\/survei\/hasil\/([0-9a-f-]{36})"/.exec(daftar.html)?.[1];
+    ok("prasyarat: ada hasil survei di dataset demo", Boolean(sid), `${sid ?? "tidak ada"}`);
+
+    const detail = await s.get(`/survei/hasil/${sid}`);
+    ok("halaman detail terbuka", detail.status === 200 && /data-testid="detail-hasil-survei"/.test(detail.html),
+      `status ${detail.status}`);
+
+    // Jawabannya benar-benar tampil. Dibandingkan langsung ke DB supaya bukan
+    // sekadar "ada tulisan" — jumlah pertanyaan pada versi form itu harus sama.
+    const nField = await psql(`SELECT count(*)::text FROM app.form_fields
+      WHERE form_version_id = (SELECT form_version_id FROM app.survey_submissions WHERE id='${sid}')`);
+    const nJawab = await psql(`SELECT count(*)::text FROM app.submission_values WHERE submission_id='${sid}'`);
+    const teks = detail.html.replace(/<!--[\s\S]*?-->/g, "");
+    const kelengkapan = /data-testid="kelengkapan-jawaban"[^>]*>([\s\S]*?)<\/dd>/.exec(teks)?.[1]
+      ?.replace(/<[^>]*>/g, "").trim();
+    ok("kelengkapan dihitung dari DB, bukan diklaim",
+      kelengkapan === `${nJawab} / ${nField} pertanyaan`,
+      `layar "${kelengkapan}" vs DB ${nJawab}/${nField}`);
+
+    // Pertanyaan yang TIDAK dijawab wajib tetap muncul sebagai em-dash: kalau
+    // hanya yang terisi dirender, hasil survei setengah lengkap terlihat lengkap.
+    const kosong = Number(nField) - Number(nJawab);
+    ok("pertanyaan tak terjawab tetap dirender em-dash",
+      kosong === 0 || (teks.match(/data-empty="true"/g) ?? []).length >= kosong,
+      `${kosong} pertanyaan kosong, ${(teks.match(/data-empty="true"/g) ?? []).length} penanda kosong`);
+
+    // Isolasi tenant, dari arah sebaliknya: seluruh submission ada di entitas
+    // DEMO, jadi yang diuji adalah sesi DEV membuka id milik DEMO. Versi pertama
+    // uji ini mencari submission "entitas lain" yang memang tidak ada, lalu
+    // melaporkan PASS dengan catatan "tidak ada yang bisa diuji" — hijau tanpa
+    // menguji apa pun.
+    const dev = await login("admin@agrovision.local");
+    const bocor = await dev.get(`/survei/hasil/${sid}`);
+    ok("hasil survei entitas lain TIDAK terbuka",
+      !/data-testid="detail-hasil-survei"/.test(bocor.html) && bocor.status !== 500,
+      `status ${bocor.status}`);
+
+    // id ngawur tidak boleh menjadi 500 dari galat uuid Postgres (22P02).
+    //
+    // Yang diperiksa halaman 404-nya, BUKAN status 404. Di aplikasi ini
+    // notFound() di bawah batas loading.tsx menjawab HTTP 200: shell-nya sudah
+    // ter-flush sebelum notFound() dipanggil, jadi statusnya tidak bisa diubah
+    // lagi. Itu perilaku yang sudah ada (13 berkas loading.tsx, termasuk
+    // /survei/[formId] yang lebih tua) dan bukan bawaan AI-22 — memaksa uji ini
+    // menuntut 404 hanya akan menggagalkan hal yang tidak diubah PR ini.
+    const ngawurId = await s.get("/survei/hasil/bukan-uuid");
+    ok("id survei ngawur menjadi halaman 404, bukan 500 maupun kebocoran",
+      ngawurId.status !== 500 && !/data-testid="detail-hasil-survei"/.test(ngawurId.html)
+        && /could not be found|Halaman tidak ditemukan|404/.test(ngawurId.html),
+      `status ${ngawurId.status}`);
+  }
+
   console.log("\n=== AI-28: aksi baris pengguna (nonaktifkan / aktifkan / hapus) ===");
   {
     // Blok ini memakai pengguna SEKALI PAKAI, bukan akun seed.

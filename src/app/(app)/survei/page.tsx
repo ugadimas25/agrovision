@@ -61,7 +61,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ p
             <ResponsiveTable>
               <table className="w-full text-sm">
                 <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs text-slate-500">
-                  <tr><th className="px-4 py-2.5 font-medium">Form</th><th className="px-4 py-2.5 font-medium">Blok</th><th className="px-4 py-2.5 font-medium">Tanggal</th><th className="px-4 py-2.5 font-medium">Petugas</th><th className="px-4 py-2.5 font-medium">Status</th></tr>
+                  <tr><th className="px-4 py-2.5 font-medium">Form</th><th className="px-4 py-2.5 font-medium">Blok</th><th className="px-4 py-2.5 font-medium">Tanggal</th><th className="px-4 py-2.5 font-medium">Petugas</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 text-right font-medium">Aksi</th></tr>
                 </thead>
                 <tbody>
                   {subs.rows.map((r) => (
@@ -71,6 +71,14 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ p
                       <td data-label="Tanggal" className="px-4 py-2.5 text-slate-600">{formatDate(r.submittedAt)}</td>
                       <td data-label="Petugas" data-empty={!r.submittedByName} className="px-4 py-2.5 text-slate-500">{r.submittedByName ?? EMPTY}</td>
                       <td data-label="Status" className="px-4 py-2.5"><RecordStatusBadge status={r.approvalStatus} /></td>
+                      {/* AI-22: tanpa ini, 66 baris submission_values di dataset
+                          demo tidak bisa dilihat dari UI sama sekali. */}
+                      <td data-label="Aksi" className="px-4 py-2.5 text-right">
+                        <Link href={`/survei/hasil/${r.id}`} data-testid="lihat-hasil-survei"
+                              className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                          Lihat <ChevronRight className="h-3.5 w-3.5" />
+                        </Link>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
