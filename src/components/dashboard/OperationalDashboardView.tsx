@@ -1,11 +1,17 @@
+// Building2/CalendarDays/Tag/ChevronDown/Bell dulu dipakai FilterBar privat yang
+// isinya <div> mati; ikon-ikonnya pindah ke komponen FilterBar bersama (AI-24).
 import {
-  Building2, CalendarDays, Tag, Leaf, ChevronDown, ChevronRight, Bell,
+  Leaf, ChevronRight,
   Sprout, Wheat, Database, MapPin, Shovel, TreePine, Droplets, FlaskConical,
 } from "lucide-react";
 import { EstateMap } from "@/components/dashboard/EstateMap";
 import { STATUS_COLOR, STATUS_LABEL } from "@/lib/report/types";
 import type { OpDashboardView, Kpi, JourneyStage, TimelineRow, OpInsight, StageStatus } from "@/lib/report/opDashboard";
 import { cn } from "@/lib/utils";
+import { FilterBar } from "@/components/dashboard/FilterBar";
+import type { DashboardFilter } from "@/lib/report/filters";
+
+type Opt = { value: string; label: string };
 
 const KPI_ICON = { seedprep: Sprout, survival: Leaf, harvest: Wheat, data: Database };
 const STAGE_ICON = { map: MapPin, prep: Shovel, seed: Sprout, grow: TreePine, harvest: Wheat };
@@ -17,10 +23,26 @@ const PRIO = {
   Rendah: { fg: "#45443f", bg: "#f2f0eb" },
 };
 
-export function OperationalDashboardView({ data, company }: { data: OpDashboardView; company: string }) {
+export function OperationalDashboardView({
+  data, filter, estates, blocks, periods, crops,
+}: {
+  data: OpDashboardView;
+  // `company` DIHAPUS dari props: dulu ia nilai chip "Estate" pada FilterBar
+  // privat. Bilah filter bersama membaca daftar estate yang sungguhan, jadi nama
+  // entitas tidak lagi punya tempat di sini.
+  filter: DashboardFilter;
+  estates: Opt[];
+  blocks: Opt[];
+  periods: Opt[];
+  crops: Opt[];
+}) {
   return (
     <div className="space-y-4">
-      <FilterBar company={company} />
+      {/* AI-24: bilah filter SUNGGUHAN, satu komponen bersama. Yang digantinya
+          adalah salinan lokal berisi <div> ber-ikon ChevronDown — terlihat seperti
+          dropdown tapi diklik tidak melakukan apa pun. */}
+      <FilterBar basePath="/dashboard" filter={filter}
+                 estates={estates} blocks={blocks} periods={periods} crops={crops} />
 
       <div>
         <h1 className="text-2xl font-bold text-slate-800">Dashboard Operasional</h1>
@@ -80,29 +102,6 @@ export function OperationalDashboardView({ data, company }: { data: OpDashboardV
   );
 }
 
-function FilterBar({ company }: { company: string }) {
-  const chip = (Icon: typeof Building2, label: string, value: string) => (
-    <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm">
-      <Icon className="h-4 w-4 text-slate-500" />
-      <div className="leading-tight">
-        <span className="block text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
-        <span className="font-medium text-slate-700">{value}</span>
-      </div>
-      <ChevronDown className="h-3.5 w-3.5 text-slate-300" />
-    </div>
-  );
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {chip(Building2, "Estate", company)}
-      {chip(CalendarDays, "Periode", "Semua periode")}
-      {chip(Tag, "Blok", "Semua blok")}
-      {chip(Leaf, "Komoditas", "Kelapa & Durian")}
-      <span className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500" title="Notifikasi">
-        <Bell className="h-4 w-4" />
-      </span>
-    </div>
-  );
-}
 
 function KpiCard({ kpi }: { kpi: Kpi }) {
   const Icon = KPI_ICON[kpi.icon];

@@ -754,6 +754,52 @@ async function main() {
       `${lampau} kategori terlampaui`);
   }
 
+  console.log("\n=== AI-24: filter dashboard benar-benar mengubah angka ===");
+  {
+    // Sebelum ini ketiga dashboard merender bilah filter berisi <div> ber-ikon
+    // ChevronDown — terlihat seperti dropdown, tapi tanpa <select>, tanpa <form>,
+    // tanpa tautan. Diklik tidak melakukan apa pun dan nilainya dipatok. Jadi yang
+    // diuji di sini BUKAN "URL-nya berubah", tapi "angkanya berubah".
+    const angka = (html) => [...visible(html).matchAll(/>([0-9][0-9.,]{0,12})</g)].map((m) => m[1]).join("|");
+
+    // Sesi entitas DEMO, bukan DEV: entitas DEV hampir tanpa data operasional, jadi
+    // filter apa pun di sana tidak mengubah angka apa pun dan uji "angkanya berubah"
+    // akan gagal karena ketiadaan data — bukan karena filternya rusak.
+    const demoAdmin = await login("admin@demo.invalid", { company: "00000000-0000-4000-8000-0000000000d0" });
+
+    const base = await demoAdmin.get("/dashboard");
+    ok("bilah filter adalah <form method=GET>, bukan div mati",
+      /<form[^>]*method="GET"[^>]*data-testid="filter-dashboard"|data-testid="filter-dashboard"[^>]*method="GET"/.test(base.html)
+      || (/data-testid="filter-dashboard"/.test(base.html) && /method="GET"/.test(base.html)));
+    const kotak = (base.html.match(/type="checkbox"[^>]*name="(estate|blok|periode|komoditas)"/g) ?? []).length;
+    ok("keempat dimensi multi-pilih lewat checkbox", kotak >= 4, `${kotak} checkbox`);
+
+    const blok = /name="blok" value="([^"]+)"/.exec(base.html)?.[1];
+    const est = /name="estate" value="([^"]+)"/.exec(base.html)?.[1];
+    ok("opsi filter terisi dari database", Boolean(blok && est));
+
+    const satuBlok = await demoAdmin.get(`/dashboard?blok=${blok}`);
+    ok("angka dashboard BERUBAH saat satu blok dipilih", angka(base.html) !== angka(satuBlok.html));
+    ok("pilihan tetap tercentang setelah diterapkan (keadaan ada di URL)",
+      (satuBlok.html.match(/name="blok"[^>]*checked/g) ?? []).length === 1);
+    ok("tombol Bersihkan hanya muncul saat filter aktif",
+      /Bersihkan/.test(satuBlok.html) && !/Bersihkan/.test(base.html));
+
+    const satuEstate = await demoAdmin.get(`/dashboard?estate=${est}`);
+    ok("angka dashboard BERUBAH saat satu estate dipilih", angka(base.html) !== angka(satuEstate.html));
+
+    // Kejujuran filter: tiga tabel aktivitas tidak punya dimensi komoditas.
+    const kom = await demoAdmin.get("/dashboard?komoditas=DURIAN");
+    ok("filter komoditas menjelaskan metrik yang tidak bisa mengikutinya",
+      /tidak menyimpan komoditas/.test(kom.html));
+
+    // Parameter palsu dari URL tidak boleh menjadi galat maupun celah — disaring
+    // jadi "tanpa filter".
+    const ngawur = await demoAdmin.get("/dashboard?blok=bukan-uuid&komoditas=%27%3B--");
+    ok("parameter filter ngawur disaring, bukan melempar 500", ngawur.status === 200);
+    ok("filter ngawur diperlakukan sebagai tanpa filter", angka(ngawur.html) === angka(base.html));
+  }
+
   console.log("\n=== 0051: Jadwal vs Realisasi penyiangan DIHITUNG, bukan diklaim ===");
   {
     // Kolom ini sebelumnya literal "Tepat waktu" untuk setiap baris. Sekarang

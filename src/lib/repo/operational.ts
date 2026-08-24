@@ -366,6 +366,25 @@ export async function listCropOptions(
   return rows.map((r) => ({ value: r.id, label: r.variety ? `${r.name} — ${r.variety}` : r.name }));
 }
 
+/**
+ * Opsi komoditas untuk FILTER dashboard (AI-24) — berbeda dari listCropOptions
+ * di atas, dan bedanya disengaja:
+ *   * `value` = KODE, bukan uuid. Kolom yang difilter adalah `crop_code` pada
+ *     harvest_records & fertilizer_applications; memakai uuid akan memaksa join
+ *     tambahan di setiap subquery dashboard.
+ *   * TANPA saringan `is_tree`. Filter harus menawarkan seluruh komoditas yang
+ *     bisa muncul di data, bukan hanya yang berkayu (itu syarat khusus DBH).
+ */
+export async function listCropCodeOptions(
+  ctx: RlsContext,
+): Promise<{ value: string; label: string }[]> {
+  const rows = await rlsQuery<{ code: string; name: string }>(
+    ctx,
+    `SELECT code, name FROM app.crops ORDER BY name`,
+  );
+  return rows.map((r) => ({ value: r.code, label: r.name }));
+}
+
 export async function listFertilizerTypeOptions(
   ctx: RlsContext,
 ): Promise<{ value: string; label: string }[]> {
