@@ -824,6 +824,18 @@ async function main() {
         /Tidak mengikuti filter/.test(p1.html));
     }
 
+    // Kartu KPI tidak boleh MENGAKU kemampuan yang tidak ada. "Traceability:
+    // Aktif / Semua rantai terpetakan" dulu literal tanpa satu pun query,
+    // padahal /traceability masih placeholder dan tak ada tabel rantai.
+    const sust = await demoAdmin.get("/dashboard/sustainability");
+    ok("KPI Traceability tidak mengaku aktif tanpa data", kpi(sust.html, "trace") === "—",
+      `${kpi(sust.html, "trace")}`);
+    // Standar tanpa program = em-dash, bukan 0%. Di dataset demo hanya 1 dari 9
+    // standar punya program, jadi bila semuanya tampil berangka, `?? 0` kembali.
+    const nolPersen = (sust.html.match(/>0%</g) ?? []).length;
+    ok("standar tanpa program tidak dirender 0%", nolPersen === 0 && /belum ada program/.test(sust.html),
+      `${nolPersen} kemunculan "0%"`);
+
     // Parameter palsu dari URL tidak boleh menjadi galat maupun celah — disaring
     // jadi "tanpa filter".
     const ngawur = await demoAdmin.get("/dashboard?blok=bukan-uuid&komoditas=%27%3B--");

@@ -5,7 +5,13 @@ import { latestCarbonRun, listCertPrograms } from "@/lib/repo/sustainability";
 import type { IndStatus } from "./types";
 
 export type SustKpi = { key: "carbon" | "complete" | "cert" | "trace"; label: string; value: string; unit?: string; note?: string; tone?: "default" | "pos" | "neg" };
-export type CertReady = { name: string; pct: number };
+/**
+ * pct null = standar itu BELUM punya program sama sekali (bukan "kesiapan 0%").
+ * Sebelumnya `?? 0`, sehingga 8 dari 9 standar di dataset demo tampil "0%"
+ * dengan bilah kosong -- tak terbedakan dari standar yang sudah dinilai dan
+ * hasilnya memang nol. Itu doktrin null-bukan-nol, di dashboard.
+ */
+export type CertReady = { name: string; pct: number | null };
 
 export type SustDashboard = {
   /** AI-24: metrik yang tidak bisa mengikuti filter, beserta alasannya. */
@@ -79,8 +85,12 @@ export async function sustainabilityDashboardView(
   const hasCarbon = run !== null;
 
   const readinessByName = new Map(programs.map((p) => [p.standardName, p.avgReadiness]));
-  const certReady: CertReady[] = STANDARDS.map((s) => ({ name: s, pct: Math.round(readinessByName.get(s) ?? 0) }));
-  const certifiedCount = programs.filter((p) => (p.avgReadiness ?? 0) >= 100).length;
+  const certReady: CertReady[] = STANDARDS.map((s) => {
+    const r = readinessByName.get(s);
+    return { name: s, pct: r === undefined || r === null ? null : Math.round(r) };
+  });
+  const certifiedCount = programs.filter((p) => p.avgReadiness !== null && p.avgReadiness >= 100).length;
+  const dinilai = programs.filter((p) => p.avgReadiness !== null).length;
 
   const orgTon = org[0] ? Number(org[0].organic) : 0;
   const totTon = org[0] ? Number(org[0].total) : 0;
@@ -91,9 +101,13 @@ export async function sustainabilityDashboardView(
 
   const kpis: SustKpi[] = [
     { key: "carbon", label: "Neraca Karbon", value: tco2e(net), unit: net === null ? undefined : "tCO₂e", note: net === null ? "belum ada run" : net >= 0 ? "Net Sink" : "Net Emitter", tone: net === null ? "default" : net >= 0 ? "pos" : "neg" },
-    { key: "complete", label: "Kelengkapan Karbon", value: completeness === null ? EMPTY : nf(completeness, 0), unit: completeness === null ? undefined : "%", note: "Data lengkap" },
-    { key: "cert", label: "Sertifikasi", value: `${certifiedCount}/${STANDARDS.length}`, note: "Standar siap" },
-    { key: "trace", label: "Traceability", value: "Aktif", note: "Semua rantai terpetakan", tone: "pos" },
+    { key: "complete", label: "Kelengkapan Karbon", value: completeness === null ? EMPTY : nf(completeness, 0), unit: completeness === null ? undefined : "%", note: "kelengkapan data run" },
+    { key: "cert", label: "Sertifikasi", value: `${certifiedCount}/${STANDARDS.length}`, note: `standar siap · ${dinilai} sudah dinilai` },
+    // "Aktif" / "Semua rantai terpetakan" dulu literal, tanpa satu pun query --
+    // padahal /traceability masih halaman placeholder dan tidak ada tabel rantai
+    // di skema. Kartu yang mengaku kemampuan yang tidak ada lebih berbahaya
+    // daripada kartu kosong.
+    { key: "trace", label: "Traceability", value: EMPTY, note: "modul belum tersedia" },
   ];
 
   const insights: { title: string; text: string; tone: "emerald" | "sky" | "amber"; action: string }[] = [

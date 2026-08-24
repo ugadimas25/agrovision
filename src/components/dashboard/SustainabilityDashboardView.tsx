@@ -104,10 +104,10 @@ export function SustainabilityDashboardView({
               <li key={s.name} className="text-[11px]">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-600">{i + 1}. {s.name}</span>
-                  <span className="tabular-nums text-slate-500">{s.pct}%</span>
+                  <span className="tabular-nums text-slate-500">{s.pct === null ? "— belum ada program" : `${s.pct}%`}</span>
                 </div>
                 <div className="mt-0.5 h-1.5 w-full rounded-full bg-slate-100">
-                  <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, s.pct))}%` }} />
+                  {s.pct !== null && <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, s.pct))}%` }} />}
                 </div>
               </li>
             ))}
