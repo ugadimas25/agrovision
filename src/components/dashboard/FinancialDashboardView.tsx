@@ -4,7 +4,7 @@ import Link from "next/link";
 import {
   TrendingUp, ArrowDownRight, Wallet, ClipboardList, Info, BarChart3, LineChart as LineIcon, Sprout, TreePine, CalendarClock,
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from "recharts";
 import { KpiCard, Panel, EmptyPanel, InsightTable } from "@/components/dashboard/shared";
 import type { FinDashboard, FinKpi } from "@/lib/report/finDashboard";
 import { formatIdr, formatIdrShort } from "@/lib/format";
@@ -16,6 +16,10 @@ type Opt = { value: string; label: string };
 const num = (v: number, d = 0) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: d }).format(v);
 
 const KPI_ICON = { revenue: TrendingUp, expense: ArrowDownRight, profit: Wallet, budget: ClipboardList } as const;
+// Palet irisan struktur biaya. Jumlah kategori tidak tetap (datang dari master
+// data), jadi warnanya di-modulo -- bukan dipetakan per nama, yang akan membuat
+// kategori baru tampil tanpa warna.
+const SLICE_COLOR = ["#1a6c2c", "#2f8f43", "#4f9d5d", "#7bb885", "#a3cfa9", "#fbbf24", "#f59e0b", "#d97706", "#a8a49a", "#78716c"];
 const GRADE_COLOR: Record<string, string> = { "Grade A": "#1a6c2c", "Grade B": "#4f9d5d", "Grade C": "#fbbf24", "Grade —": "#a8a49a" };
 
 export function FinancialDashboardView({
@@ -108,8 +112,34 @@ export function FinancialDashboardView({
           )}
         </Panel>
 
-        <Panel title="Struktur Biaya">
-          <EmptyPanel icon={Info} title="Data biaya belum tersedia" desc="Lengkapi data biaya untuk melihat komposisi struktur biaya (internal/outsource/kontrak)." />
+        <Panel title="Struktur Biaya per Kategori">
+          {data.costStructure.length === 0 ? (
+            <EmptyPanel icon={Info} title="Belum ada biaya disetujui" desc="Komposisi muncul dari transaksi biaya yang sudah disetujui, dikelompokkan per kategori induk." />
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie data={data.costStructure} dataKey="total" nameKey="name" innerRadius={38} outerRadius={70} paddingAngle={1}>
+                    {data.costStructure.map((c, i) => <Cell key={c.name} fill={SLICE_COLOR[i % SLICE_COLOR.length]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => formatIdr(Number(v))} />
+                </PieChart>
+              </ResponsiveContainer>
+              <ul data-testid="struktur-biaya" className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-xs">
+                {data.costStructure.slice(0, 5).map((c, i) => (
+                  <li key={c.name} className="flex items-center gap-2">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: SLICE_COLOR[i % SLICE_COLOR.length] }} />
+                    <span className="min-w-0 flex-1 truncate text-slate-600">{c.name}</span>
+                    <span className="tabular-nums font-medium text-slate-700">{num(c.pct, 1)}%</span>
+                    <span className="tabular-nums text-slate-500">{formatIdrShort(c.total)}</span>
+                  </li>
+                ))}
+                {data.costStructure.length > 5 && (
+                  <li className="text-slate-400">+{data.costStructure.length - 5} kategori lain</li>
+                )}
+              </ul>
+            </>
+          )}
         </Panel>
       </div>
 

@@ -824,6 +824,37 @@ async function main() {
         /Tidak mengikuti filter/.test(p1.html));
     }
 
+    // AI-24 bagian 3: panel "Struktur Biaya" dulu dipatok kosong selamanya
+    // (hasCostStructure: false, dan view-nya bahkan tidak pernah membacanya),
+    // sambil menjanjikan komposisi internal/outsource/kontrak -- sumbu yang tidak
+    // ada kolomnya. Sekarang dihitung per kategori induk dari transaksi disetujui.
+    const fin0 = await demoAdmin.get("/dashboard/financial");
+    const strukturDari = (html) => {
+      // React menyisipkan komentar penanda antar-teks: "31,9<!-- -->%". Tanpa
+      // dibuang, pola `>angka%<` tidak cocok dan uji melaporkan panel kosong
+      // padahal terisi -- persis salah-baca yang sudah menipu sekali di berkas ini.
+      const bersih = html.replace(/<!--[\s\S]*?-->/g, "");
+      const m = /data-testid="struktur-biaya"[\s\S]*?<\/ul>/.exec(bersih);
+      if (!m) return null;
+      return [...m[0].matchAll(/>([\d.,]+)%</g)].map((x) => x[1]);
+    };
+    const s0 = strukturDari(fin0.html);
+    ok("Struktur Biaya terisi dari transaksi disetujui, bukan panel kosong abadi",
+      Array.isArray(s0) && s0.length >= 3, `${s0 ? s0.length : 0} kategori terlihat`);
+    ok("porsi kategori bukan 100% satu irisan (bukti benar-benar dikelompokkan)",
+      Array.isArray(s0) && s0.length >= 3 && s0.every((v) => Number(v.replace(",", ".")) < 100),
+      `${(s0 ?? []).join("% · ")}%`);
+    // Insight pertama dihitung: menyebut nama kategori terbesar + porsinya.
+    ok("insight konsentrasi biaya menyebut angka, bukan prosa tetap",
+      /menyerap [\d.,]+% dari Rp/.test(fin0.html));
+    // Dan komposisinya IKUT filter blok.
+    const bFin = /name="blok" value="([^"]+)"/.exec(fin0.html)?.[1];
+    const fin1 = await demoAdmin.get(`/dashboard/financial?blok=${bFin}`);
+    const s1 = strukturDari(fin1.html);
+    ok("komposisi biaya berubah saat satu blok dipilih",
+      JSON.stringify(s0) !== JSON.stringify(s1),
+      `${(s0 ?? []).join("/")}% -> ${(s1 ?? []).join("/")}%`);
+
     // Kartu KPI tidak boleh MENGAKU kemampuan yang tidak ada. "Traceability:
     // Aktif / Semua rantai terpetakan" dulu literal tanpa satu pun query,
     // padahal /traceability masih placeholder dan tak ada tabel rantai.
