@@ -685,6 +685,33 @@ async function main() {
       && /tidak memakai driver/.test(salah.html));
   }
 
+  console.log("\n=== Dataset demo: serapan anggaran masuk akal DAN menguji peringatan ===");
+  {
+    // Sebelum ini nilai pengeluaran seed tidak punya hubungan dengan anggaran
+    // induknya, jadi kategori beranggaran kecil pasti terlampaui jauh — Servis
+    // Kendaraan 346%, Pestisida 305%, Jasa Survei 247%. Bagi orang yang melihat
+    // demo, itu terbaca seperti aplikasinya salah hitung.
+    //
+    // Yang dijaga di sini DUA arah sekaligus: angkanya wajar, TAPI tetap ada yang
+    // terlampaui — kalau semuanya di bawah 100%, jalur peringatan "anggaran
+    // terlampaui" tidak pernah dijalankan demo mana pun.
+    const DEMO = "(SELECT id FROM app.companies WHERE code='DEMO')";
+    const kosong = Number(await psql(
+      `SELECT count(*) FROM app.v_budget_vs_actual WHERE company_id=${DEMO} AND actual_idr IS NULL`));
+    ok("setiap baris anggaran demo punya realisasi", kosong === 0, `${kosong} baris tanpa realisasi`);
+
+    const ekstrem = await psql(
+      `SELECT coalesce(string_agg(cost_category_name||' '||utilisation_pct||'%', ', '), '')
+         FROM app.v_budget_vs_actual
+        WHERE company_id=${DEMO} AND (utilisation_pct < 25 OR utilisation_pct > 150)`);
+    ok("nol serapan demo di luar rentang wajar 25–150%", ekstrem === "", ekstrem || "seluruhnya wajar");
+
+    const lampau = Number(await psql(
+      `SELECT count(*) FROM app.v_budget_vs_actual WHERE company_id=${DEMO} AND is_over_budget`));
+    ok("ada anggaran terlampaui, supaya jalur peringatan teruji", lampau >= 1 && lampau <= 3,
+      `${lampau} kategori terlampaui`);
+  }
+
   console.log("\n=== AI-48: batas 8 kolom utama di mobile (K-07) ===");
   {
     const SLUGS = ["kesesuaian-lahan", "persiapan-lahan", "bibit", "penyiangan", "pemupukan",
