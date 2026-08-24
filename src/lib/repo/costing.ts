@@ -514,6 +514,55 @@ export async function listPendingApprovals(
 // Periode fiskal & anggaran
 // ---------------------------------------------------------------------------
 
+/**
+ * Biaya APPROVED yang tidak bisa dibandingkan ke anggaran (view 0048).
+ *
+ * Temuan telaah adversarial 0041–0047: ada tiga jalan berbeda membuat biaya yang
+ * sudah disetujui tidak pernah muncul di perbandingan anggaran, dan ketiganya
+ * tanpa peringatan — nilai belum bisa dihitung (tarif tidak ada/nonaktif),
+ * kategori belum dipetakan, atau tanggal kejadian di luar semua periode.
+ *
+ * Keputusan pemilik produk 24 Agu 2026: tampilkan, jangan blokir. Memblokir
+ * approval karena tarif belum diisi akan menghentikan pekerjaan lapangan.
+ */
+export type UnmatchedCost = {
+  id: string;
+  transactionDate: string | null;
+  blockCode: string | null;
+  sourceTable: string | null;
+  quantity: number | null;
+  unit: string | null;
+  amountIdr: number | null;
+  costCategoryName: string | null;
+  reason: string;
+};
+
+export async function unmatchedCosts(ctx: RlsContext): Promise<UnmatchedCost[]> {
+  const rows = await rlsQuery<{
+    id: string; transaction_date: string | null; block_code: string | null;
+    source_table: string | null; quantity: string | null; unit: string | null;
+    amount_idr: string | null; cost_category_name: string | null; reason: string;
+  }>(
+    ctx,
+    `SELECT id, transaction_date, block_code, source_table, quantity, unit,
+            amount_idr, cost_category_name, reason
+       FROM app.v_cost_unmatched
+      ORDER BY transaction_date DESC NULLS LAST, reason`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    transactionDate: r.transaction_date,
+    blockCode: r.block_code,
+    sourceTable: r.source_table,
+    // null dipertahankan: "belum diketahui" bukan nol.
+    quantity: r.quantity === null ? null : Number(r.quantity),
+    unit: r.unit,
+    amountIdr: r.amount_idr === null ? null : Number(r.amount_idr),
+    costCategoryName: r.cost_category_name,
+    reason: r.reason,
+  }));
+}
+
 export type FiscalPeriod = {
   id: string;
   code: string;

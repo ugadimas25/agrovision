@@ -238,6 +238,66 @@ async function run() {
      `${cropA.code} + ${cropB.code}`)
 
   // =========================================================================
+  // Temuan telaah adversarial 0041–0047 (24 Agu 2026).
+  // Keputusan pemilik produk: TAMPILKAN, jangan blokir.
+  // =========================================================================
+  console.log('\n=== Temuan telaah adversarial: biaya tak cocok & koreksi tarif ===')
+  await asUser(U_APPROVER, 'approver', C1)
+
+  // Biaya approved TANPA kategori harus terdaftar sebagai "belum bisa dibandingkan",
+  // bukan hilang tanpa jejak dari perbandingan anggaran.
+  //
+  // source_table WAJIB diisi: CHECK ct_category_required (0044) menuntut biaya
+  // MANUAL selalu berkategori, jadi kategori NULL hanya bisa lahir dari
+  // materialisasi. Itu persis kasus nyatanya — tarif nonaktif saat approval.
+  await c.query(`INSERT INTO app.cost_transactions
+    (company_id,cost_center_id,block_id,cost_category_id,fiscal_period_id,transaction_date,amount_idr,approval_status,created_by,source_table,source_record_id)
+    VALUES ($1,$2,$3,NULL,$4,'2026-03-09',2000000,'approved',$5,'weeding_records',gen_random_uuid())`,
+    [C1, cc.id, blk.id, per.id, U_APPROVER])
+  r = await c.query(`SELECT reason FROM app.v_cost_unmatched WHERE company_id=$1 AND amount_idr=2000000`, [C1])
+  ok('biaya tanpa kategori terdaftar sebagai tak-cocok', r.rows[0]?.reason === 'kategori belum dipetakan',
+     r.rows[0]?.reason ?? 'TIDAK TERDAFTAR')
+
+  // Tanpa periode fiskal: alasannya berbeda, dan nilainya tetap terlihat.
+  await c.query(`INSERT INTO app.cost_transactions
+    (company_id,cost_center_id,block_id,cost_category_id,fiscal_period_id,transaction_date,amount_idr,approval_status,created_by)
+    VALUES ($1,$2,$3,$4,NULL,'2026-03-10',3000000,'approved',$5)`,
+    [C1, cc.id, blk.id, cat.id, U_APPROVER])
+  // catatan: yang ini berkategori, jadi ct_category_required lolos tanpa source_table.
+  r = await c.query(`SELECT reason FROM app.v_cost_unmatched WHERE company_id=$1 AND amount_idr=3000000`, [C1])
+  ok('biaya di luar periode terdaftar sebagai tak-cocok', r.rows[0]?.reason === 'di luar periode anggaran',
+     r.rows[0]?.reason ?? 'TIDAK TERDAFTAR')
+
+  // Isolasi tenant: view baru WAJIB security_invoker, kalau tidak satu tenant
+  // melihat biaya tenant lain.
+  r = await c.query(`SELECT reloptions FROM pg_class WHERE oid='app.v_cost_unmatched'::regclass`)
+  ok('v_cost_unmatched security_invoker aktif',
+     (r.rows[0]?.reloptions ?? []).includes('security_invoker=true'), String(r.rows[0]?.reloptions))
+
+  // Koreksi tarif pada hari penerbitannya (migrasi 0049) -- lihat bagian K-09 di
+  // bawah untuk fixture tarifnya; di sini yang diuji SEMANTIKnya.
+  await asUser(U_ADMIN, 'super_admin', C1)
+  await c.query(`SELECT app.publish_price(
+                   p_code => 'UJI-KOREKSI', p_rate_idr => 100, p_valid_from => (now() AT TIME ZONE 'Asia/Jakarta')::date,
+                   p_unit => 'ha', p_kind => 'cost', p_category => 'Uji koreksi')`)
+  await c.query(`SELECT app.publish_price('UJI-KOREKSI', 175, (now() AT TIME ZONE 'Asia/Jakarta')::date)`)
+  r = await c.query(`SELECT count(*)::int n, max(rate_idr)::float8 rate FROM app.price_list
+                      WHERE company_id=$1 AND code='UJI-KOREKSI'`, [C1])
+  ok('koreksi tarif hari yang sama MENIMPA, tidak menambah versi',
+     r.rows[0].n === 1 && r.rows[0].rate === 175, `${r.rows[0].n} versi, tarif ${r.rows[0].rate}`)
+
+  // Yang TIDAK boleh: menyentuh versi yang mulai tanggal lain.
+  await c.query(`SELECT app.publish_price('UJI-KOREKSI', 200,
+                   ((now() AT TIME ZONE 'Asia/Jakarta')::date + 1))`)
+  try {
+    await c.query(`SELECT app.publish_price('UJI-KOREKSI', 999,
+                     ((now() AT TIME ZONE 'Asia/Jakarta')::date - 30))`)
+    ok('backdating ke tanggal lain tetap DITOLAK', false, 'diterima padahal seharusnya ditolak')
+  } catch (e) {
+    ok('backdating ke tanggal lain tetap DITOLAK', /backdating dilarang/.test(e.message), e.message.slice(0, 60))
+  }
+
+  // =========================================================================
   // AI-44a / K-09 §19: tiga kelas field pada price_list.
   //
   // Sebelum ini tidak ada jalur create sama sekali (INSERT hanya di seed-demo),
