@@ -118,6 +118,37 @@ async function purge() {
   if (ids.length === 0) { console.log('Tidak ada data demo.'); return }
   await c.query('BEGIN')
   for (const t of [
+    // Enam belas tabel di bawah menunjuk data demo tapi TIDAK punya DELETE di sini
+    // sampai 24 Agu 2026. Dua di antaranya sudah terisi dan benar-benar mematahkan
+    // purge: agri_input_stock_movements (migrasi 0043) menyebabkan
+    // "violates foreign key constraint agri_input_stock_movements_chemical_id_fkey",
+    // dan weeding_schedules (0051) akan menyusul.
+    //
+    // Ini bukan cacat kosmetik: app.check_production_readiness() MENYURUH
+    // menjalankan db:purge:demo untuk membersihkan data demo sebelum deploy publik.
+    // Selama purge tidak bisa selesai, penghalang itu TIDAK PERNAH bisa dibereskan.
+    //
+    // Empat belas sisanya masih kosong di dataset demo, jadi belum menimbulkan
+    // galat — dan justru itu bahayanya: daftar ini dipelihara tangan dan diam-diam
+    // menyimpang dari skema setiap kali ada migrasi baru. Semuanya ditambahkan
+    // sekaligus, ber-scope company/blok, supaya migrasi berikutnya tidak
+    // mematahkannya lagi. Uji purge->seed di at:verify menjaga hal ini.
+    `DELETE FROM app.agri_input_stock_movements WHERE company_id = ANY($1)`,
+    `DELETE FROM app.weeding_schedules WHERE company_id = ANY($1)`,
+    `DELETE FROM app.tree_survey_points WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id = ANY($1))`,
+    `DELETE FROM app.trees WHERE plot_id IN (SELECT pl.id FROM app.plots pl JOIN app.blocks b ON b.id=pl.block_id WHERE b.company_id = ANY($1))`,
+    `DELETE FROM app.planting_records WHERE planting_plan_id IN (SELECT pp.id FROM app.planting_plans pp JOIN app.blocks b ON b.id=pp.block_id WHERE b.company_id = ANY($1))`,
+    `DELETE FROM app.planting_plans WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id = ANY($1))`,
+    `DELETE FROM app.drone_orthophotos WHERE company_id = ANY($1)`,
+    `DELETE FROM app.block_boundary_versions WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id = ANY($1))`,
+    `DELETE FROM app.boundary_imports WHERE company_id = ANY($1)`,
+    `DELETE FROM app.approval_requests WHERE company_id = ANY($1)`,
+    `DELETE FROM app.assignments WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id = ANY($1))`,
+    `DELETE FROM app.activities WHERE company_id = ANY($1)`,
+    `DELETE FROM app.overhead_allocation_rules WHERE company_id = ANY($1)`,
+    `DELETE FROM app.fertilizer_schedules WHERE company_id = ANY($1)`,
+    `DELETE FROM app.report_definitions WHERE company_id = ANY($1)`,
+    `DELETE FROM app.vendors WHERE company_id = ANY($1)`,
     `DELETE FROM app.evidence_links WHERE evidence_id IN (SELECT id FROM app.evidence_files WHERE company_id = ANY($1))`,
     `DELETE FROM app.evidence_verifications WHERE evidence_id IN (SELECT id FROM app.evidence_files WHERE company_id = ANY($1))`,
     `DELETE FROM app.evidence_files WHERE company_id = ANY($1)`,
@@ -871,6 +902,19 @@ async function seed() {
       [CO, code, kind, category, driver, unit, rate, note, users[0][0], catId])
   }
 
+  // Jadwal penyiangan (migrasi 0051). Interval dibedakan antar blok supaya kolom
+  // "Jadwal vs Realisasi" di laporan menunjukkan KEDUA hasil — tepat waktu dan
+  // terlambat — bukan satu warna saja. Dua blok sengaja TIDAK dijadwalkan, supaya
+  // em-dash "belum dijadwalkan" juga terlihat dan tidak dikira bug.
+  for (const [i, blockId] of blockIds.slice(0, 8).entries()) {
+    await c.query(
+      `INSERT INTO app.weeding_schedules
+         (company_id, block_id, interval_day, tolerance_day, note, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [CO, blockId, [21, 30, 30, 45, 60, 30, 21, 45][i], i % 3 === 0 ? 3 : 7,
+       'Jadwal contoh dataset demo', users[0][0]])
+  }
+
   // Agri-Input: katalog chemical (stok + rekomendasi) & equipment.
   const chemRows = [
     ['UREA',    'Urea 46% N',            'pupuk',      false, 'kg', 12000, 3000, 'vegetatif', 'N tinggi untuk fase vegetatif'],
@@ -921,11 +965,27 @@ async function seed() {
   }
 
   // Farm Activities: weeding, spraying, harvest (approved agar terhitung).
-  for (let i = 0; i < 3; i++) {
+  //
+  // Penyiangan sengaja disusun supaya kolom "Jadwal vs Realisasi" (migrasi 0051)
+  // menunjukkan KEEMPAT hasil yang mungkin — kalau semua baris jatuh ke satu hasil,
+  // kolomnya tidak membuktikan apa pun:
+  //   BRT-01 (interval 21, toleransi 3): 10 Apr -> 28 Apr = 18 hari  -> Tepat waktu
+  //   BRT-02 (interval 30, toleransi 7): 11 Apr -> 8 Jun  = 58 hari  -> Terlambat 28 hari
+  //   BRT-03 (interval 30)             : satu catatan saja           -> em-dash (pertama)
+  //   blok ke-9 TANPA jadwal (hanya 8 blok pertama dijadwalkan)      -> em-dash (belum dijadwalkan)
+  const weedingSeed = [
+    [0, '2026-04-10', 'manual',  12, 4],
+    [0, '2026-04-28', 'manual',  10, 3],   // selisih 18 hari  <= 21+3  -> Tepat waktu
+    [1, '2026-04-11', 'mekanis', 13, 5],
+    [1, '2026-06-08', 'mekanis', 11, 4],   // selisih 58 hari  >  30+7  -> Terlambat 28 hari
+    [2, '2026-04-12', 'mulsa',   14, 6],
+    [8, '2026-05-05', 'manual',   9, 3],   // blok tanpa jadwal
+  ]
+  for (const [bi, tanggal, metode, luas, tenaga] of weedingSeed) {
     await c.query(
       `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, labor_count, approval_status, created_by)
        VALUES ($1,$2,$3,$4,$5,'approved',$6)`,
-      [blockIds[i], '2026-04-1' + i, ['manual','mekanis','mulsa'][i], 12 + i, 4 + i, users[2][0]])
+      [blockIds[bi], tanggal, metode, luas, tenaga, users[2][0]])
   }
   for (let i = 0; i < 2; i++) {
     await c.query(

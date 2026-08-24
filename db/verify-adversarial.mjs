@@ -173,6 +173,36 @@ async function run() {
   // dibuktikan dari sisi penyerang: tarif adalah pengendali SELURUH angka
   // keuangan (K-06 Keputusan 3 menyempitkannya ke super_admin saja).
   // =========================================================================
+  console.log('\n=== 0051: jadwal penyiangan tidak boleh disetel viewer/creator ===')
+  // URUTAN PENTING: penolakan peran diuji SEBELUM super_admin menyetel apa pun.
+  // Versi pertama uji ini menyetel jadwal lebih dulu, sehingga creator ditolak oleh
+  // indeks ws_one_active_per_block -- bukan oleh RLS. Ia "lulus" tanpa membuktikan
+  // gerbang perannya sama sekali; matcher mustFail yang menangkapnya.
+  for (const [peran, uid] of [['viewer', U_VIEWER], ['creator', U_CREATOR]]) {
+    await as(uid, peran, CA)
+    await mustFail(c, `${peran} menyetel jadwal penyiangan DITOLAK RLS`,
+      `INSERT INTO app.weeding_schedules (company_id, block_id, interval_day, created_by)
+       VALUES ($1,(SELECT id FROM app.blocks WHERE company_id=$1 LIMIT 1),14,$2)`,
+      [CA, uid], /row-level security/)
+  }
+  await as(U_ADMIN, 'super_admin', CA)
+  await c.query(`INSERT INTO app.weeding_schedules (company_id, block_id, interval_day, created_by)
+                 VALUES ($1,(SELECT id FROM app.blocks WHERE company_id=$1 LIMIT 1),30,$2)`, [CA, U_ADMIN])
+  ok('super_admin bisa menyetel jadwal penyiangan', true)
+  // Trigger ws_block_same_company: blok entitas LAIN tidak boleh dijadwalkan,
+  // walau company_id yang dikirim benar. Tanpa trigger ini, RLS meloloskannya
+  // karena company_id-nya memang milik pemanggil.
+  await as(U_ADMIN, 'super_admin', CA)
+  await mustFail(c, 'menjadwalkan blok entitas lain DITOLAK trigger',
+    `INSERT INTO app.weeding_schedules (company_id, block_id, interval_day, created_by)
+     VALUES ($1,(SELECT id FROM app.blocks WHERE company_id=$2 LIMIT 1),30,$3)`,
+    [CA, CB, U_ADMIN], /bukan milik entitas/)
+
+  // Isolasi tenant: jadwal entitas lain tidak terlihat.
+  await as(U_TENANT_B, 'approver', CB)
+  r = await c.query(`SELECT count(*)::int n FROM app.weeding_schedules`)
+  ok('jadwal penyiangan entitas lain tidak terlihat', r.rows[0].n === 0, `${r.rows[0].n} baris terlihat`)
+
   console.log('\n=== AI-44a: tarif hanya boleh disentuh super_admin ===')
   await as(U_ADMIN, 'super_admin', CA)
   await c.query(`SELECT app.publish_price(

@@ -685,6 +685,48 @@ async function main() {
       && /tidak memakai driver/.test(salah.html));
   }
 
+  console.log("\n=== db:purge:demo tidak boleh menyimpang dari skema ===");
+  {
+    // `db:purge:demo` adalah daftar DELETE yang dipelihara TANGAN, jadi ia diam-diam
+    // menyimpang dari skema setiap kali ada migrasi yang menambah tabel ber-FK ke data
+    // demo. Pada 24 Agu 2026 ada 16 tabel yang luput; dua sudah terisi dan benar-benar
+    // mematahkan purge dengan "violates foreign key constraint
+    // agri_input_stock_movements_chemical_id_fkey".
+    //
+    // Bukan cacat kosmetik: app.check_production_readiness() MENYURUH menjalankan
+    // db:purge:demo untuk membersihkan data demo sebelum deploy publik. Selama purge
+    // tidak bisa selesai, penghalang itu tidak pernah bisa dibereskan.
+    //
+    // Uji ini TIDAK menjalankan purge — itu akan menghapus data yang dipakai cek lain.
+    // Ia membandingkan daftar DELETE terhadap tabel yang BENAR-BENAR berisi baris milik
+    // entitas demo, jadi penyimpangan berikutnya muncul sebagai uji gagal, bukan sebagai
+    // perintah yang mati justru saat dibutuhkan.
+    const { readFileSync } = await import("node:fs");
+    const seed = readFileSync("db/seed-demo.mjs", "utf8");
+    const adaDelete = new Set([...seed.matchAll(/DELETE FROM app\.(\w+)/g)].map((m) => m[1]));
+
+    const berFk = (await psql(`
+      SELECT DISTINCT tc.table_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+       WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='app'
+         AND ccu.table_name IN ('companies','blocks','plots','agri_input_chemicals','seed_batches')
+       ORDER BY 1`)).split("\n").map((x) => x.trim()).filter(Boolean);
+
+    const luput = berFk.filter((t) => !adaDelete.has(t));
+    const berisi = [];
+    for (const t of luput) {
+      const punya = await psql(`SELECT column_name FROM information_schema.columns
+                                 WHERE table_schema='app' AND table_name='${t}' AND column_name='company_id'`);
+      if (!punya) continue;
+      const n = Number(await psql(`SELECT count(*) FROM app.${t}
+        WHERE company_id IN (SELECT id FROM app.companies WHERE is_demo AND code IN ('DEMO','DEMO2'))`));
+      if (n > 0) berisi.push(`${t} (${n} baris)`);
+    }
+    ok("nol tabel berisi data demo yang luput dari daftar purge", berisi.length === 0,
+      berisi.join(", ") || `${luput.length} tabel luput, semuanya kosong`);
+  }
+
   console.log("\n=== Dataset demo: serapan anggaran masuk akal DAN menguji peringatan ===");
   {
     // Sebelum ini nilai pengeluaran seed tidak punya hubungan dengan anggaran
@@ -710,6 +752,46 @@ async function main() {
       `SELECT count(*) FROM app.v_budget_vs_actual WHERE company_id=${DEMO} AND is_over_budget`));
     ok("ada anggaran terlampaui, supaya jalur peringatan teruji", lampau >= 1 && lampau <= 3,
       `${lampau} kategori terlampaui`);
+  }
+
+  console.log("\n=== 0051: Jadwal vs Realisasi penyiangan DIHITUNG, bukan diklaim ===");
+  {
+    // Kolom ini sebelumnya literal "Tepat waktu" untuk setiap baris. Sekarang
+    // dihitung dari jarak ke penyiangan sebelumnya pada blok yang sama vs interval
+    // jadwal (migrasi 0051). Yang diuji: KEEMPAT hasil muncul — kalau semuanya
+    // jatuh ke satu hasil, kolomnya tidak membuktikan perhitungan apa pun.
+    const DEMO = "(SELECT id FROM app.companies WHERE code='DEMO')";
+    const hasil = await psql(`
+      SELECT DISTINCT coalesce(
+        CASE WHEN ws.interval_day IS NULL THEN NULL
+             WHEN lag(w.weeded_on) OVER (PARTITION BY w.block_id ORDER BY w.weeded_on) IS NULL THEN NULL
+             WHEN (w.weeded_on - lag(w.weeded_on) OVER (PARTITION BY w.block_id ORDER BY w.weeded_on))
+                  <= ws.interval_day + ws.tolerance_day THEN 'tepat'
+             ELSE 'terlambat' END, 'kosong')
+        FROM app.weeding_records w
+        JOIN app.blocks b ON b.id = w.block_id AND b.company_id = ${DEMO}
+        LEFT JOIN app.weeding_schedules ws ON ws.block_id = w.block_id AND ws.is_active`);
+    const set = new Set(hasil.split("\n").map((x) => x.trim()).filter(Boolean));
+    ok("dataset demo memuat hasil 'tepat waktu' DAN 'terlambat'",
+      set.has("tepat") && set.has("terlambat"), [...set].join(", "));
+    ok("blok tanpa jadwal / catatan pertama dirender kosong, bukan 'tepat waktu'",
+      set.has("kosong"), [...set].join(", "));
+
+    // Kolomnya benar-benar ada lagi di layar DAN ekspor, dengan nilai terhitung.
+    const scr = await admin.get("/laporan/penyiangan");
+    ok("kolom Jadwal vs Realisasi kembali di layar", /Jadwal vs Realisasi/.test(scr.html));
+    // Yang diuji di sini STRUKTUR, bukan nilai: sesi `admin` at-verify ber-entitas
+    // DEV sedangkan data jadwal ada di DEMO, jadi memeriksa "Terlambat N hari" pada
+    // ekspor DEV akan selalu gagal — bukan karena kolomnya salah. Perhitungannya
+    // sendiri sudah dibuktikan dua cek psql di atas.
+    const xl = await admin.get("/laporan/penyiangan/excel");
+    ok("kolom Jadwal vs Realisasi terbawa ke Excel", /Jadwal vs Realisasi/.test(xl.html));
+
+    // Form jadwal: ada di HTML server (jalan tanpa JS) dan digate approver+.
+    const MARK = 'data-testid="jadwal-penyiangan"';
+    ok("form jadwal ada di HTML server", Boolean(pickForm((await admin.get("/aktivitas/weeding")).html, MARK)));
+    ok("creator tidak melihat form jadwal",
+      pickForm((await creator.get("/aktivitas/weeding")).html, MARK) === null);
   }
 
   console.log("\n=== AI-48: batas 8 kolom utama di mobile (K-07) ===");

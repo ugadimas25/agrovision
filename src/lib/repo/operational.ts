@@ -754,3 +754,60 @@ export async function submitSurvey(
     return subId;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Jadwal penyiangan (migrasi 0051)
+// ---------------------------------------------------------------------------
+
+export type WeedingSchedule = {
+  id: string;
+  blockId: string;
+  blockCode: string;
+  intervalDay: number;
+  toleranceDay: number;
+  note: string | null;
+};
+
+export async function listWeedingSchedules(ctx: RlsContext): Promise<WeedingSchedule[]> {
+  const rows = await rlsQuery<{
+    id: string; block_id: string; block_code: string;
+    interval_day: number; tolerance_day: number; note: string | null;
+  }>(
+    ctx,
+    `SELECT ws.id, ws.block_id, b.code AS block_code, ws.interval_day, ws.tolerance_day, ws.note
+       FROM app.weeding_schedules ws JOIN app.blocks b ON b.id = ws.block_id
+      WHERE ws.is_active
+      ORDER BY b.code`,
+  );
+  return rows.map((r) => ({
+    id: r.id, blockId: r.block_id, blockCode: r.block_code,
+    intervalDay: Number(r.interval_day), toleranceDay: Number(r.tolerance_day), note: r.note,
+  }));
+}
+
+/**
+ * Setel jadwal penyiangan sebuah blok.
+ *
+ * Indeks `ws_one_active_per_block` hanya mengizinkan SATU jadwal aktif per blok,
+ * jadi menyetel ulang berarti menonaktifkan yang lama lebih dulu — bukan menimpa.
+ * Riwayatnya dipertahankan supaya bisa dilihat kenapa sebuah baris laporan dulu
+ * dinilai tepat waktu padahal intervalnya kini berbeda.
+ */
+export async function setWeedingSchedule(
+  ctx: RlsContext,
+  input: { blockId: string; intervalDay: number; toleranceDay: number; note: string | null },
+): Promise<void> {
+  await withRls(ctx, async (client) => {
+    await client.query(
+      `UPDATE app.weeding_schedules SET is_active = false
+        WHERE block_id = $1 AND is_active`,
+      [input.blockId],
+    );
+    await client.query(
+      `INSERT INTO app.weeding_schedules
+         (company_id, block_id, interval_day, tolerance_day, note, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [ctx.companyId, input.blockId, input.intervalDay, input.toleranceDay, input.note, ctx.userId],
+    );
+  });
+}
