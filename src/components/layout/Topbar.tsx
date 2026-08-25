@@ -61,7 +61,8 @@ export function Topbar({
   activeCompanyId: string | null;
   companies: CompanyOption[];
   locale: Locale;
-  pendingApprovalCount: number;
+  /** null = role bukan approver/super_admin, ikon disembunyikan (bukan angka 0). */
+  pendingApprovalCount: number | null;
   onMenu?: () => void;
 }) {
   const d = getDict(locale);
@@ -116,19 +117,21 @@ export function Topbar({
       <div className="flex items-center gap-2 md:gap-3">
         <InstallPrompt locale={locale} />
 
-        <Link
-          href="/approval"
-          aria-label={`${d("nav.approval.inbox")} — ${pendingApprovalCount} ${d("chrome.approvalPending", "belum ditindaklanjuti")}`}
-          title={d("nav.approval.inbox")}
-          className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-50 hover:text-emerald-700 md:h-9 md:w-9"
-        >
-          <Mail className="h-5 w-5" aria-hidden="true" />
-          {pendingApprovalCount > 0 && (
-            <span className="absolute right-0.5 top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white md:-right-0.5 md:-top-0.5">
-              {pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}
-            </span>
-          )}
-        </Link>
+        {pendingApprovalCount !== null && (
+          <Link
+            href="/approval"
+            aria-label={`${d("nav.approval.inbox")} — ${pendingApprovalCount} ${d("chrome.approvalPending", "belum ditindaklanjuti")}`}
+            title={d("nav.approval.inbox")}
+            className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-50 hover:text-emerald-700 md:h-9 md:w-9"
+          >
+            <Mail className="h-5 w-5" aria-hidden="true" />
+            {pendingApprovalCount > 0 && (
+              <span className="absolute right-0.5 top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white md:-right-0.5 md:-top-0.5">
+                {pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}
+              </span>
+            )}
+          </Link>
+        )}
 
         {/* Desktop: bahasa + avatar + logout berjajar */}
         <div className="hidden items-center gap-3 md:flex">
