@@ -809,6 +809,71 @@ export async function listAllPending(
   });
 }
 
+// ---------------------------------------------------------------------------
+// B-22: riwayat approval (view v_approval_history, migrasi 0056)
+// ---------------------------------------------------------------------------
+
+export type ApprovalHistoryItem = {
+  moduleKey: string;
+  moduleLabel: string;
+  recordId: string;
+  blockCode: string | null;
+  detail: string | null;
+  amountIdr: number | null;
+  eventDate: string | null;
+  /** Status TERKINI record (bisa beda dari `decision` bila sudah diperbaiki & diputuskan ulang setelah B-21). */
+  currentStatus: string;
+  decision: "approved" | "rejected";
+  rejectionReason: string | null;
+  decidedByName: string | null;
+  decidedAt: string;
+  createdByName: string | null;
+};
+
+export async function listApprovalHistory(
+  ctx: RlsContext,
+  opts: { page?: number; pageSize?: number } = {},
+): Promise<Page<ApprovalHistoryItem>> {
+  const page = Math.max(1, opts.page ?? 1);
+  const pageSize = Math.min(100, Math.max(5, opts.pageSize ?? 25));
+  const offset = (page - 1) * pageSize;
+
+  return withRls(ctx, async (client) => {
+    const total = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM app.v_approval_history`,
+    );
+    const rows = await client.query(
+      `SELECT module_key, module_label, record_id, block_code, detail, amount_idr,
+              event_date, current_status, decision, rejection_reason,
+              decided_by_name, decided_at, created_by_name
+         FROM app.v_approval_history
+        ORDER BY decided_at DESC, record_id
+        LIMIT $1 OFFSET $2`,
+      [pageSize, offset],
+    );
+    return {
+      rows: rows.rows.map((r) => ({
+        moduleKey: String(r.module_key),
+        moduleLabel: String(r.module_label),
+        recordId: String(r.record_id),
+        blockCode: (r.block_code as string) ?? null,
+        detail: (r.detail as string) ?? null,
+        amountIdr: r.amount_idr === null ? null : Number(r.amount_idr),
+        eventDate: (r.event_date as string) ?? null,
+        currentStatus: String(r.current_status),
+        decision: r.decision as "approved" | "rejected",
+        rejectionReason: (r.rejection_reason as string) ?? null,
+        decidedByName: (r.decided_by_name as string) ?? null,
+        decidedAt: String(r.decided_at),
+        createdByName: (r.created_by_name as string) ?? null,
+      })),
+      total: Number(total.rows[0].n),
+      page,
+      pageSize,
+    };
+  });
+}
+
 /** Keputusan approval lintas-modul lewat satu pintu app.decide_record(). */
 export async function decideRecord(
   ctx: RlsContext,

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { CheckSquare, ShieldAlert } from "lucide-react";
+import Link from "next/link";
+import { CheckSquare, History, ShieldAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
 import { listAllPending } from "@/lib/repo/costing";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -44,6 +45,14 @@ export default async function ApprovalPage({
       <PageHeader
         title={t("nav.approval.inbox")}
         subtitle={t("sub.approval")}
+        actions={
+          <Link
+            href="/approval/riwayat"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <History className="h-4 w-4" /> Riwayat
+          </Link>
+        }
       />
 
       {!canDecide && (
