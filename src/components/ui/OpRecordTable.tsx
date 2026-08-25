@@ -71,7 +71,7 @@ export function OpRecordTable({
                 </td>
                 <td data-action className="px-4 py-2.5 text-right">
                   {canWrite && (r.approvalStatus === "draft" || r.approvalStatus === "rejected") && (
-                    <div className="flex w-full flex-wrap items-start justify-end gap-x-3 gap-y-2">
+                    <div className="flex w-full flex-wrap items-center justify-end gap-x-2 gap-y-2">
                       {editFields && updateAction && (
                         <OpRecordEditor
                           id={r.id}
