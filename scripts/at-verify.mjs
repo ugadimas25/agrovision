@@ -1084,8 +1084,8 @@ async function main() {
     const EMAIL = "at28-sekali-pakai@uji.invalid";
     await psql(`DELETE FROM app.user_company_access WHERE user_id IN (SELECT id FROM app.users WHERE email='${EMAIL}')`);
     await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
-    await psql(`INSERT INTO app.users (company_id, external_id, email, full_name, role, app_role, is_active)
-                VALUES (${DEV}, 'at28-sekali-pakai', '${EMAIL}', 'Uji AI-28', 'manager', 'viewer', true)`);
+    await psql(`INSERT INTO app.users (company_id, external_id, email, full_name, app_role, is_active)
+                VALUES (${DEV}, 'at28-sekali-pakai', '${EMAIL}', 'Uji AI-28', 'viewer', true)`);
     await psql(`INSERT INTO app.user_company_access (user_id, company_id)
                 SELECT id, ${DEV} FROM app.users WHERE email='${EMAIL}' ON CONFLICT DO NOTHING`);
     const target = await psql(`SELECT id::text FROM app.users WHERE email='${EMAIL}'`);
