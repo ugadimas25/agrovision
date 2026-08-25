@@ -501,6 +501,46 @@ async function run() {
       WHERE id = $1 AND approval_status IN ('draft','rejected')`, [wrOther2.rows[0].id])
   ok('creator TIDAK bisa mengedit record ditolak milik orang lain', editOther.rowCount === 0, `${editOther.rowCount} baris`)
 
+  console.log('\n=== B-22: riwayat approval (v_approval_history) — lingkup & isi benar ===')
+  await as(U_CREATOR, 'creator', CA)
+  const histX = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by)
+     VALUES ($1, now(), 'manual', 3, $2) RETURNING id`, [A_BLK1, U_CREATOR])
+  const HIST_X = histX.rows[0].id
+  await c.query(`UPDATE app.weeding_records SET approval_status = 'submitted' WHERE id = $1`, [HIST_X])
+  await as(U_ADMIN, 'super_admin', CA)
+  const histY = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, approval_status, created_by)
+     VALUES ($1, now(), 'manual', 4, 'submitted', $2) RETURNING id`, [A_BLK1, U_ADMIN])
+  const HIST_Y = histY.rows[0].id
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(`SELECT app.decide_record('weeding_record', $1, 'approved', NULL)`, [HIST_X])
+  await c.query(`SELECT app.decide_record('weeding_record', $1, 'rejected', 'volume tidak masuk akal')`, [HIST_Y])
+
+  await as(U_CREATOR, 'creator', CA)
+  r = await c.query(
+    `SELECT record_id FROM app.v_approval_history WHERE record_id IN ($1,$2)`, [HIST_X, HIST_Y])
+  ok('creator hanya melihat riwayat miliknya sendiri di v_approval_history',
+    r.rows.length === 1 && r.rows[0].record_id === HIST_X, `${r.rows.length} baris terlihat`)
+
+  await as(U_APPROVER, 'approver', CA)
+  r = await c.query(
+    `SELECT record_id, decision, rejection_reason, decided_by_name, current_status
+       FROM app.v_approval_history WHERE record_id IN ($1,$2) ORDER BY decision`, [HIST_X, HIST_Y])
+  ok('approver melihat kedua riwayat (miliknya sendiri + orang lain)', r.rows.length === 2, `${r.rows.length} baris`)
+  const approved = r.rows.find(x => x.record_id === HIST_X)
+  const rejected = r.rows.find(x => x.record_id === HIST_Y)
+  ok('baris disetujui: decision benar, tanpa alasan penolakan, decided_by terisi',
+    approved?.decision === 'approved' && approved?.rejection_reason === null && approved?.decided_by_name === 'Approver A',
+    JSON.stringify(approved))
+  ok('baris ditolak: decision + alasan penolakan tercatat benar',
+    rejected?.decision === 'rejected' && rejected?.rejection_reason === 'volume tidak masuk akal',
+    JSON.stringify(rejected))
+
+  r = await c.query(`SELECT record_id FROM app.v_pending_approvals WHERE record_id IN ($1,$2)`, [HIST_X, HIST_Y])
+  ok('record yang sudah diputuskan TIDAK lagi muncul di Inbox (v_pending_approvals) -- perilaku default tak berubah',
+    r.rows.length === 0, `${r.rows.length} baris tersisa di Inbox`)
+
   await c.query('ROLLBACK')
   await c.end()
   console.log(`\n${'='.repeat(56)}\nADVERSARIAL:  PASS ${pass}   FAIL ${fail}`)
