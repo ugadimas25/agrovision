@@ -13,10 +13,11 @@ import { searchBlockOptions } from "@/lib/repo/blocks";
 import { listOpRecords, listFertilizerTypeOptions } from "@/lib/repo/operational";
 import { listRecommendations } from "@/lib/repo/fertilizer";
 import { listOptions } from "@/lib/repo/master";
-import { createFertilizerAction } from "@/lib/actions/operational";
+import { createFertilizerAction, updateOpRecordAction } from "@/lib/actions/operational";
 import { RecommendationForm } from "./RecommendationForm";
 import { RecommendationTable } from "@/components/fertilizer/RecommendationTable";
 import { todayInOperationalZone } from "@/lib/date";
+import type { Field } from "@/components/ui/OpRecordForm";
 
 export const metadata = { title: "Pemupukan — AgroVision" };
 
@@ -116,26 +117,33 @@ export default async function Page() {
           <p className="text-sm text-amber-900">Belum ada jenis pupuk. <Link href="/pengaturan/master-data" className="font-medium underline">Tambah di Master Data</Link> dulu.</p>
         </div>
       )}
-      {ready && (
-        <div className="mb-5">
-          <OpRecordForm
-            title="Catat pemupukan"
-            action={createFertilizerAction}
-            fields={[
-              { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
-              { kind: "select", name: "cropCode", label: "Komoditas", options: [{ value: "DURIAN", label: "Durian" }, { value: "COCONUT", label: "Kelapa" }], allowEmpty: true },
-              { kind: "select", name: "fertilizerTypeId", label: "Jenis pupuk", options: ferts, required: true, hint: "Dari master data" },
-              { kind: "select", name: "growthPhase", label: "Fase pertumbuhan", options: PHASES, required: true },
-              { kind: "text", name: "appliedOn", label: "Tanggal aplikasi", type: "date", required: true },
-              { kind: "text", name: "totalQuantity", label: "Jumlah total", type: "number", step: "0.001", min: "0", required: true },
-              { kind: "select", name: "uomItemId", label: "Satuan", options: units, allowEmpty: true },
-              { kind: "text", name: "treeCount", label: "Jumlah pohon (opsional)", type: "number", min: "0" },
-              { kind: "textarea", name: "note", label: "Catatan (opsional)" },
-            ]}
-          />
-        </div>
-      )}
-      <OpRecordTable rows={rows.rows} moduleKey="fertilizer_applications" emptyIcon={FlaskConical} emptyTitle="Belum ada catatan pemupukan" canWrite={canWrite} />
+      {(() => {
+        const fields: Field[] = [
+          { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
+          { kind: "select", name: "cropCode", label: "Komoditas", options: [{ value: "DURIAN", label: "Durian" }, { value: "COCONUT", label: "Kelapa" }], allowEmpty: true },
+          { kind: "select", name: "fertilizerTypeId", label: "Jenis pupuk", options: ferts, required: true, hint: "Dari master data" },
+          { kind: "select", name: "growthPhase", label: "Fase pertumbuhan", options: PHASES, required: true },
+          { kind: "text", name: "appliedOn", label: "Tanggal aplikasi", type: "date", required: true },
+          { kind: "text", name: "totalQuantity", label: "Jumlah total", type: "number", step: "0.001", min: "0", required: true },
+          { kind: "select", name: "uomItemId", label: "Satuan", options: units, allowEmpty: true },
+          { kind: "text", name: "treeCount", label: "Jumlah pohon (opsional)", type: "number", min: "0" },
+          { kind: "textarea", name: "note", label: "Catatan (opsional)" },
+        ];
+        return (
+          <>
+            {ready && (
+              <div className="mb-5">
+                <OpRecordForm title="Catat pemupukan" action={createFertilizerAction} fields={fields} />
+              </div>
+            )}
+            <OpRecordTable
+              rows={rows.rows} moduleKey="fertilizer_applications" emptyIcon={FlaskConical}
+              emptyTitle="Belum ada catatan pemupukan" canWrite={canWrite}
+              editFields={fields} updateAction={updateOpRecordAction}
+            />
+          </>
+        );
+      })()}
     </div>
   );
 }

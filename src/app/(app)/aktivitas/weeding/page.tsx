@@ -9,7 +9,8 @@ import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
 import { listOpRecords, listWeedingSchedules } from "@/lib/repo/operational";
 import { ScheduleForm } from "./ScheduleForm";
-import { createWeedingAction } from "@/lib/actions/operational";
+import { createWeedingAction, updateOpRecordAction } from "@/lib/actions/operational";
+import type { Field } from "@/components/ui/OpRecordForm";
 
 export const metadata = { title: "Penyiangan — AgroVision" };
 
@@ -35,6 +36,14 @@ export default async function Page() {
   // Menentukan kadensi = keputusan operasi, bukan pencatatan lapangan.
   const canSchedule = ["approver", "super_admin"].includes(ctx.session.role);
   const ready = canWrite && ctx.companyId && blocks.length > 0;
+  const fields: Field[] = [
+    { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
+    { kind: "text", name: "weededOn", label: "Tanggal", type: "date", required: true },
+    { kind: "select", name: "method", label: "Metode", options: METHODS, required: true },
+    { kind: "text", name: "areaHa", label: "Luas (ha)", type: "number", step: "0.01", min: "0.01", required: true },
+    { kind: "text", name: "laborCount", label: "Jumlah tenaga", type: "number", min: "0" },
+    { kind: "textarea", name: "note", label: "Catatan (opsional)" },
+  ];
 
   return (
     <div>
@@ -44,21 +53,14 @@ export default async function Page() {
           {canSchedule && ctx.companyId && blocks.length > 0 && (
             <ScheduleForm blocks={blocks} schedules={schedules} />
           )}
-          <OpRecordForm
-            title="Catat penyiangan"
-            action={createWeedingAction}
-            fields={[
-              { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
-              { kind: "text", name: "weededOn", label: "Tanggal", type: "date", required: true },
-              { kind: "select", name: "method", label: "Metode", options: METHODS, required: true },
-              { kind: "text", name: "areaHa", label: "Luas (ha)", type: "number", step: "0.01", min: "0.01", required: true },
-              { kind: "text", name: "laborCount", label: "Jumlah tenaga", type: "number", min: "0" },
-              { kind: "textarea", name: "note", label: "Catatan (opsional)" },
-            ]}
-          />
+          <OpRecordForm title="Catat penyiangan" action={createWeedingAction} fields={fields} />
         </div>
       )}
-      <OpRecordTable rows={rows.rows} moduleKey="weeding_records" emptyIcon={Sprout} emptyTitle="Belum ada catatan penyiangan" canWrite={canWrite} />
+      <OpRecordTable
+        rows={rows.rows} moduleKey="weeding_records" emptyIcon={Sprout}
+        emptyTitle="Belum ada catatan penyiangan" canWrite={canWrite}
+        editFields={fields} updateAction={updateOpRecordAction}
+      />
     </div>
   );
 }

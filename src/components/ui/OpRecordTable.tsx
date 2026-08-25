@@ -1,10 +1,13 @@
 import { RecordStatusBadge } from "./RecordStatusBadge";
 import { EmptyState } from "./EmptyState";
 import { OpSubmitButton } from "./OpSubmitButton";
+import { OpRecordEditor } from "./OpRecordEditor";
 import { ResponsiveTable } from "./ResponsiveTable";
 import { formatDate, EMPTY } from "@/lib/format";
 import type { LucideIcon } from "lucide-react";
 import type { OpRecord } from "@/lib/repo/operational";
+import type { Field } from "./OpRecordForm";
+import type { updateOpRecordAction } from "@/lib/actions/operational";
 
 /** Tabel record operasional generik + tombol Ajukan untuk draft/rejected. */
 export function OpRecordTable({
@@ -14,6 +17,8 @@ export function OpRecordTable({
   emptyTitle,
   canWrite,
   blockHeader = "Blok",
+  editFields,
+  updateAction,
 }: {
   rows: OpRecord[];
   moduleKey: string;
@@ -22,6 +27,13 @@ export function OpRecordTable({
   canWrite: boolean;
   /** Label kolom induk record — default "Blok"; nursery memakai "Batch". */
   blockHeader?: string;
+  /**
+   * B-21: field editor per baris draft/rejected. Opsional — tabel yang belum
+   * memberi ini (mis. dipakai untuk tampilan read-only) tidak menampilkan
+   * tombol "Perbaiki", hanya "Ajukan" seperti sebelumnya.
+   */
+  editFields?: Field[];
+  updateAction?: typeof updateOpRecordAction;
 }) {
   if (rows.length === 0) {
     return (
@@ -59,7 +71,18 @@ export function OpRecordTable({
                 </td>
                 <td data-action className="px-4 py-2.5 text-right">
                   {canWrite && (r.approvalStatus === "draft" || r.approvalStatus === "rejected") && (
-                    <OpSubmitButton module={moduleKey} id={r.id} />
+                    <div className="flex w-full flex-wrap items-center justify-end gap-x-2 gap-y-2">
+                      {editFields && updateAction && (
+                        <OpRecordEditor
+                          id={r.id}
+                          module={moduleKey}
+                          fields={editFields}
+                          values={r.editValues}
+                          action={updateAction}
+                        />
+                      )}
+                      <OpSubmitButton module={moduleKey} id={r.id} />
+                    </div>
                   )}
                 </td>
               </tr>

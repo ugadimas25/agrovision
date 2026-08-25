@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Compass } from "lucide-react";
 import type { PerChar } from "@/lib/repo/suitability";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
+import { OpSubmitButton } from "@/components/ui/OpSubmitButton";
 import { formatDate, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,7 @@ export type HistoryRow = {
   subclass: string | null;
   assessedAt: string;
   approvalStatus: string;
+  rejectionReason: string | null;
   limiting: string[];
   /** Rincian per karakteristik (dihitung ulang dari params tersimpan). */
   perChar: PerChar[];
@@ -34,7 +36,7 @@ export type HistoryRow = {
   isDemo?: boolean;
 };
 
-export function AssessmentHistory({ rows }: { rows: HistoryRow[] }) {
+export function AssessmentHistory({ rows, canWrite }: { rows: HistoryRow[]; canWrite: boolean }) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   if (rows.length === 0) {
@@ -53,6 +55,7 @@ export function AssessmentHistory({ rows }: { rows: HistoryRow[] }) {
             <th className="px-4 py-2.5 font-medium">Subkelas</th>
             <th className="px-4 py-2.5 font-medium">Tanggal</th>
             <th className="px-4 py-2.5 font-medium">Status</th>
+            <th className="px-4 py-2.5" />
           </tr>
         </thead>
         <tbody>
@@ -87,11 +90,29 @@ export function AssessmentHistory({ rows }: { rows: HistoryRow[] }) {
                   </td>
                   <td data-label="Subkelas" data-empty={!r.subclass} className="px-4 py-2.5 font-mono text-xs text-slate-600">{r.subclass ?? EMPTY}</td>
                   <td data-label="Tanggal" className="px-4 py-2.5 text-slate-500">{formatDate(r.assessedAt)}</td>
-                  <td data-label="Status" className="px-4 py-2.5 text-slate-500">{r.approvalStatus}</td>
+                  <td data-label="Status" className="px-4 py-2.5 text-slate-500">
+                    {r.approvalStatus}
+                    {r.rejectionReason && (
+                      <>
+                        <p className="mt-1 max-w-[220px] text-xs leading-relaxed text-red-600">{r.rejectionReason}</p>
+                        {canWrite && (
+                          <p className="mt-1 max-w-[220px] text-xs leading-relaxed text-slate-400">
+                            Penilaian di sini tersimpan sebagai riwayat versi — perbaiki dengan mengisi ulang
+                            blok yang sama di form atas, lalu Ajukan.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td data-action onClick={(e) => e.stopPropagation()} className="px-4 py-2.5 text-right">
+                    {canWrite && (r.approvalStatus === "draft" || r.approvalStatus === "rejected") && (
+                      <OpSubmitButton module="land_suitability_assessments" id={r.id} />
+                    )}
+                  </td>
                 </tr>
                 {open && (
                   <tr key={`${r.id}-detail`} className="border-b border-slate-100 bg-slate-50/40">
-                    <td colSpan={7} className="px-4 py-3">
+                    <td colSpan={8} className="px-4 py-3">
                       {assessed.length === 0 ? (
                         <p className="text-xs text-slate-500">Tidak ada parameter terukur yang tersimpan pada penilaian ini.</p>
                       ) : (

@@ -150,6 +150,8 @@ export type SuitabilityRow = {
   params: Record<string, string | number>;
   note: string | null;
   approvalStatus: string;
+  rejectionReason: string | null;
+  createdBy: string | null;
 };
 
 export async function listSuitabilityAssessments(ctx: RlsContext): Promise<SuitabilityRow[]> {
@@ -157,14 +159,15 @@ export async function listSuitabilityAssessments(ctx: RlsContext): Promise<Suita
     id: string; block_code: string; assessed_at: string; crop_name: string | null;
     crop_code: string | null; suit_class: string | null; subclass: string | null;
     limiting: string[] | null; params: Record<string, string | number> | null;
-    note: string | null; approval_status: string;
+    note: string | null; approval_status: string; rejection_reason: string | null;
+    created_by: string | null;
   }>(
     ctx,
     `SELECT lsa.id, b.code AS block_code,
             (lsa.assessed_at AT TIME ZONE 'Asia/Jakarta')::date::text AS assessed_at,
             cr.name AS crop_name,
             cr.code AS crop_code, lsa.suit_class, lsa.subclass, lsa.limiting,
-            lsa.params, lsa.note, lsa.approval_status
+            lsa.params, lsa.note, lsa.approval_status, lsa.rejection_reason, lsa.created_by::text
        FROM app.land_suitability_assessments lsa
        JOIN app.blocks b ON b.id = lsa.block_id
        LEFT JOIN app.crops cr ON cr.id = lsa.crop_id
@@ -182,6 +185,8 @@ export async function listSuitabilityAssessments(ctx: RlsContext): Promise<Suita
     params: r.params ?? {},
     note: r.note,
     approvalStatus: r.approval_status,
+    rejectionReason: r.rejection_reason,
+    createdBy: r.created_by,
   }));
 }
 

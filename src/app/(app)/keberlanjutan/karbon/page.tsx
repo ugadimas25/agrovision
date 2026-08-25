@@ -6,8 +6,8 @@ import {
 } from "@/lib/repo/sustainability";
 import { listCropOptions, listOpRecords } from "@/lib/repo/operational";
 import { searchBlockOptions } from "@/lib/repo/blocks";
-import { createDbhAction } from "@/lib/actions/operational";
-import { OpRecordForm } from "@/components/ui/OpRecordForm";
+import { createDbhAction, updateOpRecordAction } from "@/lib/actions/operational";
+import { OpRecordForm, type Field } from "@/components/ui/OpRecordForm";
 import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getLocale } from "@/lib/i18n-server";
@@ -50,6 +50,13 @@ export default async function KarbonPage() {
   ]);
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   const dbhReady = canWrite && ctx.companyId && blockOptions.length > 0 && cropOptions.length > 0;
+  const dbhFields: Field[] = [
+    { kind: "select", name: "blockId", label: "Blok", options: blockOptions, required: true },
+    { kind: "select", name: "cropId", label: "Tanaman", options: cropOptions, required: true },
+    { kind: "text", name: "measuredAt", label: "Tanggal ukur", type: "date", required: true },
+    { kind: "text", name: "dbhCm", label: "DBH (cm)", type: "number", step: "0.01", min: "0.01", required: true, hint: "Diukur pada ketinggian 1,3 m dari tanah" },
+    { kind: "text", name: "heightM", label: "Tinggi pohon (m) — opsional", type: "number", step: "0.01", min: "0.01" },
+  ];
 
   const net = run?.netBalanceTco2e ?? null;
 
@@ -193,17 +200,7 @@ export default async function KarbonPage() {
         </p>
         {dbhReady && (
           <div className="mb-4">
-            <OpRecordForm
-              title="Catat pengukuran DBH"
-              action={createDbhAction}
-              fields={[
-                { kind: "select", name: "blockId", label: "Blok", options: blockOptions, required: true },
-                { kind: "select", name: "cropId", label: "Tanaman", options: cropOptions, required: true },
-                { kind: "text", name: "measuredAt", label: "Tanggal ukur", type: "date", required: true },
-                { kind: "text", name: "dbhCm", label: "DBH (cm)", type: "number", step: "0.01", min: "0.01", required: true, hint: "Diukur pada ketinggian 1,3 m dari tanah" },
-                { kind: "text", name: "heightM", label: "Tinggi pohon (m) — opsional", type: "number", step: "0.01", min: "0.01" },
-              ]}
-            />
+            <OpRecordForm title="Catat pengukuran DBH" action={createDbhAction} fields={dbhFields} />
           </div>
         )}
         <OpRecordTable
@@ -212,6 +209,8 @@ export default async function KarbonPage() {
           emptyIcon={Ruler}
           emptyTitle="Belum ada pengukuran DBH"
           canWrite={canWrite}
+          editFields={dbhFields}
+          updateAction={updateOpRecordAction}
         />
       </section>
 

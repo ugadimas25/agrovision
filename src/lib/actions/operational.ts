@@ -16,6 +16,7 @@ import {
   createSprayingRecord,
   createHarvestRecord,
   submitOpRecord,
+  updateOpRecord,
 } from "@/lib/repo/operational";
 
 export type ActionState = { ok: boolean; message: string; fieldErrors?: Record<string, string> };
@@ -262,7 +263,7 @@ const spraySchema = z.object({
   totalVolume: z.coerce
     .number({ message: "Volume total wajib diisi" })
     .refine((v) => v > 0, "Volume total harus lebih dari 0 — tanpa volume, biaya penyemprotan tidak bisa dihitung"),
-  unit: z.string().trim().max(20).optional(),
+  unit: z.string().trim().min(1, "Satuan wajib diisi").max(20),
   note: z.string().trim().max(500).optional(),
 });
 
@@ -281,7 +282,7 @@ export async function createSprayingAction(_p: ActionState, fd: FormData): Promi
         blockId: parsed.data.blockId, sprayedOn: parsed.data.sprayedOn,
         chemicalId: parsed.data.chemicalId || null, target: parsed.data.target || null,
         dosePerHa: numOrNull(parsed.data.dosePerHa), totalVolume: numOrNull(parsed.data.totalVolume),
-        unit: parsed.data.unit || null, note: parsed.data.note || null,
+        unit: parsed.data.unit, note: parsed.data.note || null,
       }).then(() => {}),
     );
   } catch (e) { return { ok: false, message: toMessage(e) }; }
@@ -459,6 +460,180 @@ export async function submitOpAction(_p: ActionState, fd: FormData): Promise<Act
     revalidatePath(MODULE_PATH[parsed.data.module]);
     revalidatePath("/approval");
     return { ok: true, message: "Diajukan untuk approval." };
+  } catch (e) { return { ok: false, message: toMessage(e) }; }
+}
+
+/**
+ * B-21: perbaiki record draft/rejected, generik 9 modul operasional.
+ * Satu action (bukan 9), dirutekan pakai field "module" — pola yang sama
+ * dengan submitOpAction di atas. Parsing per modul SENGAJA meniru persis
+ * create*Action masing-masing (union kosong-string, refine, dsb.) supaya
+ * aturan validasinya identik antara buat baru dan perbaiki.
+ */
+export async function updateOpRecordAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const ctx = await requireRole("creator", "approver", "super_admin");
+    const moduleParsed = z.enum(OP_MODULES).safeParse(fd.get("module"));
+    const idParsed = uuid.safeParse(fd.get("id"));
+    if (!moduleParsed.success || !idParsed.success) return { ok: false, message: "Data tidak valid." };
+    const mod = moduleParsed.data;
+    const id = idParsed.data;
+
+    switch (mod) {
+      case "fertilizer_applications": {
+        const parsed = fertSchema.safeParse({
+          blockId: fd.get("blockId"), fertilizerTypeId: fd.get("fertilizerTypeId"),
+          cropCode: fd.get("cropCode") ?? "",
+          growthPhase: fd.get("growthPhase"), appliedOn: fd.get("appliedOn"),
+          totalQuantity: fd.get("totalQuantity"), uomItemId: fd.get("uomItemId") ?? "",
+          treeCount: fd.get("treeCount") || "", note: fd.get("note") ?? "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, fertilizerTypeId: parsed.data.fertilizerTypeId,
+            cropCode: parsed.data.cropCode || null, growthPhase: parsed.data.growthPhase,
+            appliedOn: parsed.data.appliedOn, totalQuantity: parsed.data.totalQuantity,
+            uomItemId: parsed.data.uomItemId || null,
+            treeCount: typeof parsed.data.treeCount === "number" ? parsed.data.treeCount : null,
+            note: parsed.data.note || null,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "land_preparations": {
+        const parsed = prepSchema.safeParse({
+          blockId: fd.get("blockId"), checkedAt: fd.get("checkedAt"),
+          soilPh: fd.get("soilPh") || "", holeCount: fd.get("holeCount") || "",
+          effectiveAreaHa: fd.get("effectiveAreaHa") || "", status: fd.get("status"),
+          note: fd.get("note") ?? "",
+          plantingLayoutItemId: fd.get("plantingLayoutItemId") ?? undefined,
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, checkedAt: parsed.data.checkedAt,
+            soilPh: typeof parsed.data.soilPh === "number" ? parsed.data.soilPh : null,
+            holeCount: typeof parsed.data.holeCount === "number" ? parsed.data.holeCount : null,
+            effectiveAreaHa: typeof parsed.data.effectiveAreaHa === "number" ? parsed.data.effectiveAreaHa : null,
+            status: parsed.data.status, note: parsed.data.note || null,
+            plantingLayoutItemId: parsed.data.plantingLayoutItemId,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "land_suitability_assessments": {
+        const num = (k: string) => { const v = fd.get(k); return v ? v : ""; };
+        const parsed = suitSchema.safeParse({
+          blockId: fd.get("blockId"), assessedAt: fd.get("assessedAt"),
+          slopePct: num("slopePct"), elevationM: num("elevationM"), rainfallMmYear: num("rainfallMmYear"),
+          scoreDurian: num("scoreDurian"), scoreCoconut: num("scoreCoconut"), note: fd.get("note") ?? "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        const n2 = (v: number | "" | undefined) => (typeof v === "number" ? v : null);
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, assessedAt: parsed.data.assessedAt,
+            slopePct: n2(parsed.data.slopePct), elevationM: n2(parsed.data.elevationM),
+            rainfallMmYear: n2(parsed.data.rainfallMmYear), scoreDurian: n2(parsed.data.scoreDurian),
+            scoreCoconut: n2(parsed.data.scoreCoconut), note: parsed.data.note || null,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "pruning_records": {
+        const parsed = pruneSchema.safeParse({
+          blockId: fd.get("blockId"), prunedOn: fd.get("prunedOn"),
+          treeCount: fd.get("treeCount") || "", note: fd.get("note") ?? "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, prunedOn: parsed.data.prunedOn,
+            treeCount: typeof parsed.data.treeCount === "number" ? parsed.data.treeCount : null,
+            note: parsed.data.note || null,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "weeding_records": {
+        const parsed = weedSchema.safeParse({
+          blockId: fd.get("blockId"), weededOn: fd.get("weededOn"), method: fd.get("method"),
+          areaHa: fd.get("areaHa") || "", laborCount: fd.get("laborCount") || "", note: fd.get("note") ?? "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, weededOn: parsed.data.weededOn, method: parsed.data.method,
+            areaHa: numOrNull(parsed.data.areaHa), laborCount: numOrNull(parsed.data.laborCount),
+            note: parsed.data.note || null,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "spraying_records": {
+        const parsed = spraySchema.safeParse({
+          blockId: fd.get("blockId"), sprayedOn: fd.get("sprayedOn"), chemicalId: fd.get("chemicalId") || "",
+          target: fd.get("target") ?? "", dosePerHa: fd.get("dosePerHa") || "", totalVolume: fd.get("totalVolume") || "",
+          unit: fd.get("unit") ?? "", note: fd.get("note") ?? "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, sprayedOn: parsed.data.sprayedOn,
+            chemicalId: parsed.data.chemicalId || null, target: parsed.data.target || null,
+            dosePerHa: numOrNull(parsed.data.dosePerHa), totalVolume: parsed.data.totalVolume,
+            unit: parsed.data.unit, note: parsed.data.note || null,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "harvest_records": {
+        const parsed = harvestSchema.safeParse({
+          blockId: fd.get("blockId"), harvestedOn: fd.get("harvestedOn"), cropCode: fd.get("cropCode"),
+          quantityTon: fd.get("quantityTon"), grade: fd.get("grade") ?? "", note: fd.get("note") ?? "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval", "/dashboard/financial", "/costing/refleksi"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, harvestedOn: parsed.data.harvestedOn, cropCode: parsed.data.cropCode,
+            quantityTon: parsed.data.quantityTon, grade: parsed.data.grade || null, note: parsed.data.note || null,
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "nursery_inspections": {
+        const parsed = nurseryInspSchema.safeParse({
+          seedBatchId: fd.get("seedBatchId"), inspectedOn: fd.get("inspectedOn"),
+          qtyAlive: String(fd.get("qtyAlive") ?? ""),
+          qtyDead: fd.get("qtyDead") || "", qtyDamaged: fd.get("qtyDamaged") || "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        const zeroIfEmpty = (v: number | "" | undefined) => (typeof v === "number" ? v : 0);
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            seedBatchId: parsed.data.seedBatchId, inspectedOn: parsed.data.inspectedOn,
+            qtyAlive: parsed.data.qtyAlive,
+            qtyDead: zeroIfEmpty(parsed.data.qtyDead), qtyDamaged: zeroIfEmpty(parsed.data.qtyDamaged),
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+      case "dbh_measurements": {
+        const parsed = dbhSchema.safeParse({
+          blockId: fd.get("blockId"), cropId: fd.get("cropId"), measuredAt: fd.get("measuredAt"),
+          dbhCm: fd.get("dbhCm") || "", heightM: fd.get("heightM") || "",
+        });
+        if (!parsed.success) return { ok: false, message: "Periksa isian.", fieldErrors: fieldErrors(parsed.error) };
+        return await run(["creator"], [MODULE_PATH[mod], "/approval"], async () => {
+          const n = await updateOpRecord(ctx, mod, id, {
+            blockId: parsed.data.blockId, cropId: parsed.data.cropId, measuredAt: parsed.data.measuredAt,
+            dbhCm: parsed.data.dbhCm, heightM: numOrNull(parsed.data.heightM),
+          });
+          if (n === 0) throw new Error("Tidak bisa disimpan — statusnya bukan draft/ditolak, atau bukan milik Anda.");
+        });
+      }
+    }
   } catch (e) { return { ok: false, message: toMessage(e) }; }
 }
 

@@ -10,7 +10,8 @@ import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
 import { listOpRecords } from "@/lib/repo/operational";
 import { listChemicalOptions } from "@/lib/repo/agriInput";
-import { createSprayingAction } from "@/lib/actions/operational";
+import { createSprayingAction, updateOpRecordAction } from "@/lib/actions/operational";
+import type { Field } from "@/components/ui/OpRecordForm";
 
 export const metadata = { title: "Penyemprotan — AgroVision" };
 
@@ -25,26 +26,23 @@ export default async function Page() {
   ]);
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   const ready = canWrite && ctx.companyId && blocks.length > 0;
+  const fields: Field[] = [
+    { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
+    { kind: "text", name: "sprayedOn", label: "Tanggal", type: "date", required: true },
+    { kind: "select", name: "chemicalId", label: "Bahan (Agri-Input)", options: chemicals, allowEmpty: true, hint: chemicals.length === 0 ? "Belum ada bahan — tambah di Agri-Input › Chemical" : "Dari katalog Chemical" },
+    { kind: "text", name: "target", label: "Target (OPT/gulma)", type: "text", placeholder: "mis. ulat penggerek" },
+    { kind: "text", name: "dosePerHa", label: "Dosis /ha", type: "number", step: "any", min: "0" },
+    { kind: "text", name: "totalVolume", label: "Volume total", type: "number", step: "any", min: "0.01", required: true },
+    { kind: "text", name: "unit", label: "Satuan", type: "text", placeholder: "liter / kg", required: true },
+    { kind: "textarea", name: "note", label: "Catatan (opsional)" },
+  ];
 
   return (
     <div>
       <PageHeader title={t("nav.spraying")} subtitle={t("sub.spraying")} />
       {ready && (
         <div className="mb-5">
-          <OpRecordForm
-            title="Catat penyemprotan"
-            action={createSprayingAction}
-            fields={[
-              { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
-              { kind: "text", name: "sprayedOn", label: "Tanggal", type: "date", required: true },
-              { kind: "select", name: "chemicalId", label: "Bahan (Agri-Input)", options: chemicals, allowEmpty: true, hint: chemicals.length === 0 ? "Belum ada bahan — tambah di Agri-Input › Chemical" : "Dari katalog Chemical" },
-              { kind: "text", name: "target", label: "Target (OPT/gulma)", type: "text", placeholder: "mis. ulat penggerek" },
-              { kind: "text", name: "dosePerHa", label: "Dosis /ha", type: "number", step: "any", min: "0" },
-              { kind: "text", name: "totalVolume", label: "Volume total", type: "number", step: "any", min: "0.01", required: true },
-              { kind: "text", name: "unit", label: "Satuan", type: "text", placeholder: "liter / kg" },
-              { kind: "textarea", name: "note", label: "Catatan (opsional)" },
-            ]}
-          />
+          <OpRecordForm title="Catat penyemprotan" action={createSprayingAction} fields={fields} />
         </div>
       )}
       {canWrite && ctx.companyId && chemicals.length === 0 && (
@@ -52,7 +50,11 @@ export default async function Page() {
           Belum ada bahan kimia. <Link href="/agri-input/chemical" className="font-medium text-emerald-700 underline">Tambah di Agri-Input › Chemical</Link> agar bisa dipilih di sini.
         </p>
       )}
-      <OpRecordTable rows={rows.rows} moduleKey="spraying_records" emptyIcon={SprayCan} emptyTitle="Belum ada catatan penyemprotan" canWrite={canWrite} />
+      <OpRecordTable
+        rows={rows.rows} moduleKey="spraying_records" emptyIcon={SprayCan}
+        emptyTitle="Belum ada catatan penyemprotan" canWrite={canWrite}
+        editFields={fields} updateAction={updateOpRecordAction}
+      />
     </div>
   );
 }

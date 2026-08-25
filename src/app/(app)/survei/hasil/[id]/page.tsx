@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ArrowLeft, MapPin, Smartphone } from "lucide-react";
+import { ArrowLeft, MapPin, Smartphone, Pencil } from "lucide-react";
 import { requireContext } from "@/lib/session";
 import { surveySubmissionDetail } from "@/lib/repo/operational";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -32,6 +32,13 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   const d = await surveySubmissionDetail(ctx, id);
   if (!d) notFound();
+
+  // B-21: RLS (role_split + B-23) sudah membatasi siapa yang boleh melihat
+  // baris ditolak orang lain; tombol ini tidak mengulang cek kepemilikan di
+  // TypeScript -- sama seperti OpRecordTable/AssessmentHistory, RLS yang
+  // menegakkan batasnya saat updateSurveySubmissionAction benar-benar menulis.
+  const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
+  const canFix = canWrite && d.approvalStatus === "rejected";
 
   const terjawab = d.answers.filter((a) => a.value !== null).length;
   const seksi = [...new Set(d.answers.map((a) => a.section ?? "Tanpa seksi"))];
@@ -91,9 +98,19 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       </dl>
 
       {d.rejectionReason && (
-        <p className="mb-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-800">
-          <strong>Alasan penolakan:</strong> {d.rejectionReason}
-        </p>
+        <div className="mb-5 flex flex-col items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs leading-relaxed text-red-800">
+            <strong>Alasan penolakan:</strong> {d.rejectionReason}
+          </p>
+          {canFix && (
+            <Link
+              href={`/survei/${d.formId}?editId=${d.id}`}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-100"
+            >
+              <Pencil className="h-3.5 w-3.5" /> Perbaiki &amp; ajukan ulang
+            </Link>
+          )}
+        </div>
       )}
 
       {d.answers.length === 0 ? (

@@ -8,7 +8,8 @@ import { OpRecordForm } from "@/components/ui/OpRecordForm";
 import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
 import { listOpRecords } from "@/lib/repo/operational";
-import { createHarvestAction } from "@/lib/actions/operational";
+import { createHarvestAction, updateOpRecordAction } from "@/lib/actions/operational";
+import type { Field } from "@/components/ui/OpRecordForm";
 
 export const metadata = { title: "Panen — AgroVision" };
 
@@ -27,6 +28,14 @@ export default async function Page() {
   ]);
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   const ready = canWrite && ctx.companyId && blocks.length > 0;
+  const fields: Field[] = [
+    { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
+    { kind: "text", name: "harvestedOn", label: "Tanggal panen", type: "date", required: true },
+    { kind: "select", name: "cropCode", label: "Komoditas", options: CROPS, required: true },
+    { kind: "text", name: "quantityTon", label: "Tonase (ton)", type: "number", step: "0.001", min: "0", required: true },
+    { kind: "text", name: "grade", label: "Grade", type: "text", placeholder: "mis. A / B / super" },
+    { kind: "textarea", name: "note", label: "Catatan (opsional)" },
+  ];
 
   return (
     <div>
@@ -37,21 +46,14 @@ export default async function Page() {
       </p>
       {ready && (
         <div className="mb-5">
-          <OpRecordForm
-            title="Catat panen"
-            action={createHarvestAction}
-            fields={[
-              { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
-              { kind: "text", name: "harvestedOn", label: "Tanggal panen", type: "date", required: true },
-              { kind: "select", name: "cropCode", label: "Komoditas", options: CROPS, required: true },
-              { kind: "text", name: "quantityTon", label: "Tonase (ton)", type: "number", step: "0.001", min: "0", required: true },
-              { kind: "text", name: "grade", label: "Grade", type: "text", placeholder: "mis. A / B / super" },
-              { kind: "textarea", name: "note", label: "Catatan (opsional)" },
-            ]}
-          />
+          <OpRecordForm title="Catat panen" action={createHarvestAction} fields={fields} />
         </div>
       )}
-      <OpRecordTable rows={rows.rows} moduleKey="harvest_records" emptyIcon={Wheat} emptyTitle="Belum ada catatan panen" canWrite={canWrite} />
+      <OpRecordTable
+        rows={rows.rows} moduleKey="harvest_records" emptyIcon={Wheat}
+        emptyTitle="Belum ada catatan panen" canWrite={canWrite}
+        editFields={fields} updateAction={updateOpRecordAction}
+      />
     </div>
   );
 }
