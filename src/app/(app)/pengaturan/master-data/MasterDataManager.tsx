@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { Fragment, useActionState } from "react";
 import Link from "next/link";
 import {
   Loader2,
@@ -26,6 +26,7 @@ type Item = {
   id: string;
   code: string;
   name: string;
+  parentId: string | null;
   parentName: string | null;
   sortOrder: number;
   isActive: boolean;
@@ -33,6 +34,29 @@ type Item = {
 };
 
 const initial: ActionState = { ok: false, message: "" };
+
+/**
+ * B-30: baris induk & turunan dikelompokkan secara visual (bukan tabel datar
+ * dengan kolom "Induk" yang mengulang nama induknya di tiap baris turunan).
+ * Baris induk BUKAN header dekoratif -- tetap item master sungguhan yang
+ * bisa di-"Ubah"/nonaktifkan, jadi tetap dirender lewat ItemRow yang sama,
+ * hanya visualnya (bg + indentasi turunan) yang beda dari baris datar biasa.
+ *
+ * Dikelompokkan eksplisit dari parentId, bukan mengandalkan urutan sort_order
+ * yang KEBETULAN sudah bersebelahan di data saat ini -- turunan baru dengan
+ * sort_order sembarangan akan tetap tergabung benar dengan cara ini.
+ */
+function groupHierarchical(items: Item[]): { parent: Item; children: Item[] }[] {
+  const topLevel = items.filter((it) => it.parentId === null);
+  const byParent = new Map<string, Item[]>();
+  for (const it of items) {
+    if (it.parentId === null) continue;
+    const list = byParent.get(it.parentId) ?? [];
+    list.push(it);
+    byParent.set(it.parentId, list);
+  }
+  return topLevel.map((parent) => ({ parent, children: byParent.get(parent.id) ?? [] }));
+}
 
 export function MasterDataManager({
   types,
@@ -169,21 +193,24 @@ export function MasterDataManager({
                   <tr>
                     <th className="px-4 py-2.5 font-medium">Kode</th>
                     <th className="px-4 py-2.5 font-medium">Nama</th>
-                    {isHierarchical && <th className="px-4 py-2.5 font-medium">Induk</th>}
                     <th className="px-4 py-2.5 text-right font-medium">Urutan</th>
                     <th className="px-4 py-2.5 font-medium">Status</th>
                     <th className="px-4 py-2.5" />
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((it) => (
-                    <ItemRow
-                      key={it.id}
-                      item={it}
-                      isHierarchical={isHierarchical}
-                      deactFormAction={deactFormAction}
-                    />
-                  ))}
+                  {isHierarchical
+                    ? groupHierarchical(items).map(({ parent, children }) => (
+                        <Fragment key={parent.id}>
+                          <ItemRow item={parent} variant="parent" deactFormAction={deactFormAction} />
+                          {children.map((child) => (
+                            <ItemRow key={child.id} item={child} variant="child" deactFormAction={deactFormAction} />
+                          ))}
+                        </Fragment>
+                      ))
+                    : items.map((it) => (
+                        <ItemRow key={it.id} item={it} deactFormAction={deactFormAction} />
+                      ))}
                 </tbody>
               </table>
             </ResponsiveTable>
@@ -226,11 +253,13 @@ export function MasterDataManager({
  */
 function ItemRow({
   item,
-  isHierarchical,
+  variant = "flat",
   deactFormAction,
 }: {
   item: Item;
-  isHierarchical: boolean;
+  /** B-30: "parent"/"child" hanya untuk tipe berjenjang -- kelompok visual
+   *  pengganti kolom "Induk" yang dihapus (lihat groupHierarchical). */
+  variant?: "flat" | "parent" | "child";
   deactFormAction: (formData: FormData) => void;
 }) {
   const [editState, editFormAction, saving] = useActionState(updateMasterItemAction, initial);
@@ -241,9 +270,19 @@ function ItemRow({
   const sortErrId = `urutan-${item.id}-error`;
 
   return (
-    <tr className="border-b border-slate-50 align-top last:border-0">
+    <tr
+      className={cn(
+        "align-top",
+        variant === "parent"
+          ? "border-b border-slate-100 bg-slate-50/60"
+          : "border-b border-slate-50 last:border-0",
+      )}
+    >
       <td data-label="Kode" className="px-4 py-2.5 font-mono text-xs text-slate-500">{item.code}</td>
-      <td data-label="Nama" className="px-4 py-2.5 text-slate-700">
+      <td data-label="Nama" className={cn("px-4 py-2.5 text-slate-700", variant === "parent" && "font-semibold")}>
+        {/* Turunan diindentasi + penanda pohon, pengganti kolom "Induk" yang
+            berulang menyebut nama induk di tiap barisnya (B-30). */}
+        {variant === "child" && <span className="mr-1 text-slate-300">&#x21B3;</span>}
         {item.name}
         {item.isGlobal && (
           <span className="ml-2 rounded bg-sky-50 px-1.5 py-0.5 text-xs font-medium text-sky-700">
@@ -251,9 +290,6 @@ function ItemRow({
           </span>
         )}
       </td>
-      {isHierarchical && (
-        <td data-label="Induk" data-empty={!item.parentName} className="px-4 py-2.5 text-slate-500">{item.parentName ?? "—"}</td>
-      )}
       <td data-label="Urutan" className="px-4 py-2.5 text-right tabular-nums text-slate-500">
         {item.sortOrder}
       </td>
