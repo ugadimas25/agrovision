@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Leaf, ArrowLeft, TriangleAlert } from "lucide-react";
+import { Leaf, ArrowLeft, TriangleAlert, ShieldAlert } from "lucide-react";
 import { getSession } from "@/lib/session";
+import { getAuthConfig } from "@/lib/auth/config";
 import { LoginForm } from "./LoginForm";
 
 export const metadata = { title: "Masuk — AgroVision" };
@@ -9,6 +10,17 @@ export const metadata = { title: "Masuk — AgroVision" };
 export default async function LoginPage() {
   // Sudah login: langsung ke dashboard.
   if (await getSession()) redirect("/dashboard");
+
+  // Konfigurasi dibaca di server dan diturunkan sebagai prop. Sengaja BUKAN
+  // NEXT_PUBLIC_*: nilai NEXT_PUBLIC di-inline saat build, sehingga setiap
+  // lingkungan (dev, staging, produksi) akan menuntut image-nya sendiri.
+  // Sebagai prop, satu image yang sama bisa dipakai di mana pun -- lihat
+  // catatan Dockerfile tentang NEXT_PUBLIC_*.
+  //
+  // apiKey Identity Platform memang PUBLIK (pengenal proyek, bukan rahasia):
+  // ia hanya menentukan proyek mana yang menerima permintaan masuk, dan tidak
+  // memberi hak apa pun tanpa kredensial pengguna.
+  const cfg = getAuthConfig();
 
   return (
     <div
@@ -35,18 +47,35 @@ export default async function LoginPage() {
             <p className="mt-1 text-sm text-slate-500">Platform Manajemen Agroforestry</p>
           </div>
 
-          <LoginForm />
+          {cfg.mode === "misconfigured" ? (
+            // Tanpa konfigurasi yang sah TIDAK ada form: menampilkan kolom yang
+            // pasti gagal hanya membuat pengguna mengira kata sandinya salah.
+            <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+              <p className="text-xs leading-relaxed text-red-800">
+                <strong>Login belum dikonfigurasi.</strong> {cfg.reason}
+              </p>
+            </div>
+          ) : (
+            <LoginForm
+              mode={cfg.mode}
+              apiKey={cfg.mode === "identity-platform" ? cfg.apiKey : undefined}
+            />
+          )}
 
-          {/* Peringatan ini WAJIB tetap ada sampai verifikasi ID token terpasang.
-              Menghapusnya membuat pengguna menyangka autentikasinya sudah aman. */}
-          <div className="mt-6 flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-            <p className="text-xs leading-relaxed text-amber-800">
-              <strong>Mode pengembangan.</strong> Login belum memverifikasi kredensial — cukup email
-              terdaftar. Integrasi Identity Platform belum terpasang. Jangan gunakan untuk data
-              sungguhan.
-            </p>
-          </div>
+          {/* Peringatan ini WAJIB tetap ada selama mode stub aktif. Menghapusnya
+              membuat pengguna menyangka autentikasinya sudah aman. Di mode
+              identity-platform peringatannya justru tidak boleh muncul --
+              kredensial memang sudah diverifikasi. */}
+          {cfg.mode === "stub" && (
+            <div className="mt-6 flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <p className="text-xs leading-relaxed text-amber-800">
+                <strong>Mode pengembangan.</strong> AUTH_MODE=stub — login tidak memverifikasi
+                kredensial, cukup email terdaftar. Jangan gunakan untuk data sungguhan.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

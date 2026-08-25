@@ -59,7 +59,13 @@ steps:
       - --max-instances=4
       - --add-cloudsql-instances=${PROJECT_ID}:${_REGION}:agrovision-db
       - --set-secrets=DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest
-      - --set-env-vars=NODE_ENV=production,NEXT_PUBLIC_BASEMAP_STYLE_URL=${_BASEMAP_URL},GCS_BUCKET_EVIDENCE=${_EVIDENCE_BUCKET}
+      # AUTH_MODE sengaja TIDAK diset: bawaannya sudah identity-platform, dan
+      # AUTH_MODE=stub ditolak mentah-mentah saat NODE_ENV=production (B-27).
+      # Kedua nilai Identity Platform di bawah dikirim sebagai env runtime, bukan
+      # --build-arg: keduanya bukan NEXT_PUBLIC_*, jadi tidak di-inline saat
+      # build dan satu image yang sama bisa melayani proyek Identity Platform
+      # mana pun.
+      - --set-env-vars=NODE_ENV=production,NEXT_PUBLIC_BASEMAP_STYLE_URL=${_BASEMAP_URL},GCS_BUCKET_EVIDENCE=${_EVIDENCE_BUCKET},IDENTITY_PLATFORM_PROJECT_ID=${_IDENTITY_PROJECT_ID},IDENTITY_PLATFORM_API_KEY=${_IDENTITY_API_KEY}
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
@@ -79,6 +85,14 @@ substitutions:
   # container -- HILANG tiap scale-to-zero/deploy baru, jangan biarkan kosong
   # di produksi. Isi setelah Dimas membuat bucket + IAM (lihat PR untuk detail).
   _EVIDENCE_BUCKET: agrovision-evidence-393569486275
+  # Identity Platform (B-27). Kosong = halaman login menolak melayani dan
+  # menjelaskan variabel mana yang kurang -- bukan diam-diam jatuh ke login
+  # tanpa kredensial. Isi setelah Identity Platform diaktifkan di console
+  # (docs/12-deploy-gcp.md §9); _IDENTITY_PROJECT_ID biasanya = $PROJECT_ID.
+  _IDENTITY_PROJECT_ID: ""
+  # Web API key proyek. Publik menurut desain Firebase/Identity Platform --
+  # dikirim ke peramban dan hanya menentukan proyek tujuan permintaan masuk.
+  _IDENTITY_API_KEY: ""
 availableSecrets:
   secretManager:
     - versionName: projects/$PROJECT_ID/secrets/MIGRATION_DATABASE_URL/versions/latest

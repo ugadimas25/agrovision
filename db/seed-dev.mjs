@@ -60,9 +60,24 @@ try {
     `INSERT INTO app.user_estate_access (user_id, estate_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
     ['00000000-0000-4000-8000-000000000103', ES])
 
+  // Login stub (B-27, migrasi 0057). Akun di atas TIDAK punya kredensial di
+  // Identity Platform, jadi tanpa saklar ini seed dev tidak bisa dipakai masuk.
+  // Menyalakannya di sini -- bukan di migrasi -- disengaja: yang menyalakan
+  // login tanpa kata sandi haruslah tindakan yang jelas bernama "seed dev",
+  // bukan efek samping `db:migrate` yang juga dijalankan Cloud Build ke
+  // produksi. Saklarnya default false, dan app.check_production_readiness()
+  // melaporkannya sebagai penghalang selama menyala.
+  await c.query(
+    `UPDATE app.auth_settings
+        SET stub_login_enabled = true, updated_at = now(),
+            note = 'dinyalakan db/seed-dev.mjs -- akun dev tanpa kredensial'
+      WHERE singleton`)
+
   await c.query('COMMIT')
 
   console.log('Seed dev selesai.\n')
+  console.log('Login stub DINYALAKAN (app.auth_settings.stub_login_enabled = true).')
+  console.log('Aplikasi juga perlu AUTH_MODE=stub di .env.local -- lihat .env.example.\n')
   console.log('Login (email apa pun di bawah, tanpa password -- login stub):')
   for (const u of USERS) console.log(`  ${u.appRole.padEnd(12)} ${u.email}`)
   console.log('\nMaster data sengaja KOSONG. Buat lewat UI sebagai super_admin —')

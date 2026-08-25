@@ -28,14 +28,16 @@ GCP until each is done. Track them as release-gating.
 | B1 | **No `Dockerfile`** | repo root (missing) | A multi-stage image that runs `.next/standalone/server.js` **and** copies `public/` + `.next/static` (the standalone tracer omits both — see `next.config.ts`). Draft in §7. |
 | B2 | **No build/CI config** | repo root (missing) | A `cloudbuild.yaml` (or equivalent) that builds and pushes to Artifact Registry. §7. |
 | B3 | **Cloud Storage backend is a `TODO` that throws** | `src/lib/storage.ts:71` | `putEvidence()` must actually write to GCS via `@google-cloud/storage` when `GCS_BUCKET_EVIDENCE` is set. Today, setting that env var throws. §8. |
-| B4 | **Authentication has no credential check** | `src/lib/session.ts:219` (`resolveLogin`) | Verify a **GCP Identity Platform** ID token (signature, audience, issuer, expiry) and pass the `sub` claim to `app.resolve_session()`. Until then, login matches an email to a user with *no password check* — **must not be exposed publicly.** §9. |
+| ~~B4~~ | ~~**Authentication has no credential check**~~ | `src/lib/session.ts` (`resolveLoginWithIdToken`), `src/lib/auth/` | **DONE (B-27, migration 0057).** ID tokens are verified server-side (RS256 signature against Google's certs, `iss`/`aud`/`exp`/`iat`) before any cookie is issued; the `sub` claim goes to `app.resolve_session()`. The email-only login is development-only and needs all three of `AUTH_MODE=stub`, `NODE_ENV != production`, and `app.auth_settings.stub_login_enabled`. What remains is **operational**, not code: enabling Identity Platform and linking accounts — §9. |
 | B5 | **Production-readiness gate is red** | `app.check_production_readiness()` | Run `npm run db:check`. Every `blocking = true` row (demo tenants `is_demo`, non-empty `master_items`, the `evidence_links` mutation-test gap, etc.) must clear before go-live. §10. |
 | B6 | **465 MB of static tiles in the image** | `public/tiles` (3,571 files) | Move the orthophoto XYZ pyramid to a Cloud Storage bucket (CDN-fronted) so it is not baked into every container image / Cloud Run cold start. §8. |
 
-**B4 is the hard stop.** Deploying the current auth to a public `*.run.app`
-URL exposes every account to anyone who knows an email address. Options: finish
-Identity Platform verification (recommended, GCP-native), or gate the pilot
-behind Identity-Aware Proxy / a VPN while auth is completed.
+**B4 was the hard stop; it is closed in code.** The remaining risk moved from
+"anyone who knows an email can sign in" to "nobody can sign in until Identity
+Platform is configured and accounts are linked" — a deploy that skips §9 will
+serve a login page that refuses to work and says which env vars are missing.
+That is the intended failure direction, but it does mean §9 is now a
+**prerequisite of the deploy**, not a follow-up.
 
 ---
 
@@ -162,7 +164,7 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   secretmanager.googleapis.com \
   storage.googleapis.com \
-  identitytoolkit.googleapis.com          # Identity Platform (B4)
+  identitytoolkit.googleapis.com          # Identity Platform (§9)
 ```
 
 ### 4.4 Region
@@ -281,10 +283,12 @@ gcloud run deploy agrovision-web \
   --set-secrets DATABASE_URL=db-app-rw-url:latest,SESSION_SECRET=session-secret:latest \
   --min-instances 0 --max-instances 3 --concurrency 80 \
   --cpu 1 --memory 512Mi \
-  --no-allow-unauthenticated      # keep private until B4 auth is finished
+  --no-allow-unauthenticated      # private until §9 accounts are linked
 ```
-Flip to `--allow-unauthenticated` only **after** Identity Platform verification
-(B4) is live. Keep `max-instances × DATABASE_POOL_MAX` under the Cloud SQL
+Flip to `--allow-unauthenticated` only **after** §9 is done: the env vars set
+and at least one `app.users.external_id` linked to an Identity Platform UID.
+Token verification itself ships in the image (B-27); what a premature flip
+exposes is a login page nobody can get past, not an open door. Keep `max-instances × DATABASE_POOL_MAX` under the Cloud SQL
 connection limit.
 
 ### 6.6 Upload tiles to a bucket (B6)
@@ -348,21 +352,61 @@ Implement the GCS branch:
 
 ---
 
-## 9. Authentication (B4) — Identity Platform
+## 9. Authentication — Identity Platform (B-27, implemented)
 
-The auth is already **designed** for GCP Identity Platform; only the token
-verification is unwritten (`resolveLogin`, `src/lib/session.ts:219`). The
-documented flow:
-1. Client signs in to Identity Platform, gets an ID token.
-2. The server action sends the token to `resolveLogin`.
-3. Verify the token signature against Google's public keys; check
-   audience/issuer/expiry; extract the `sub` claim.
-4. Pass `sub` to `app.resolve_session()` (the single `SECURITY DEFINER` door).
+The flow, as built:
+1. The browser posts email + password **straight to Identity Platform**
+   (`identitytoolkit.googleapis.com/v1/accounts:signInWithPassword`) and gets an
+   ID token. The password never reaches Cloud Run, so it cannot appear in a
+   request log.
+2. The Server Action receives only that token.
+3. `src/lib/auth/identity-platform.ts` verifies it: RS256 only, signature against
+   Google's public certificates for the token's `kid`, `iss` =
+   `https://securetoken.google.com/<projectId>`, `aud` = `<projectId>`, and
+   `exp`/`iat`/`auth_time` within a 60-second skew.
+4. The `sub` claim goes to `app.resolve_session()` — the single `SECURITY
+   DEFINER` door — and only then is a session cookie issued.
 
-Until this is done, **do not expose the service publicly** (§6.5 keeps it
-`--no-allow-unauthenticated`). Enable Identity Platform in the console, add the
-sign-in providers the client needs (email/password, Google Workspace, etc.), and
-seed `app.users.external_id` with the Identity Platform `sub` values.
+Proof that each rejection actually fires: `npm run auth:verify` (36 checks).
+
+### One-time setup
+
+1. **Enable Identity Platform** in the console and add the sign-in providers you
+   need (email/password is what the login form drives today).
+2. **Create an account per user.** Self-signup is not required and is safer left
+   off: a token for an unknown person is refused anyway (step 4 below).
+3. **Link each account** by setting `app.users.external_id` to that account's
+   Identity Platform **UID**, over `MIGRATION_DATABASE_URL` (superuser — the app
+   role cannot write it):
+
+   ```sql
+   UPDATE app.users SET external_id = 'IDP_UID_HERE'
+    WHERE email = 'orang@perusahaan.co.id';
+   ```
+
+   Linking is deliberately an admin act, not something a first login performs by
+   itself. Verify with `SELECT email, external_id, is_active FROM app.users;`
+4. **Set the two env vars** on the Cloud Run service (already wired in
+   `cloudbuild.yaml` as `_IDENTITY_PROJECT_ID` / `_IDENTITY_API_KEY`):
+   `IDENTITY_PLATFORM_PROJECT_ID` (the GCP project id, also the `aud`) and
+   `IDENTITY_PLATFORM_API_KEY` (the project's Web API key — public by design;
+   it only names the project a sign-in request goes to). Leave `AUTH_MODE`
+   unset: unset means `identity-platform`, and `AUTH_MODE=stub` is refused
+   outright when `NODE_ENV=production`.
+
+Symptom guide: "Login belum dikonfigurasi …" on the login page means step 4 is
+missing (the message names the variable). "terverifikasi di Identity Platform,
+tetapi belum terhubung ke pengguna AgroVision" means step 3 is missing for that
+person — the credentials were correct.
+
+### The database has the last word
+
+`app.auth_settings.stub_login_enabled` (migration 0057) defaults to `false`, and
+`INSERT/UPDATE/DELETE` on that table are revoked from `app_rw`, so the running
+application cannot switch passwordless login on even if its env is wrong. Only a
+superuser connection can — which is what `npm run db:seed:dev` /
+`db:seed:demo` do for local work, and `npm run db:purge:demo` undoes. While it is
+on, `app.check_production_readiness()` reports it as **blocking**.
 
 ---
 
@@ -378,7 +422,9 @@ seed `app.users.external_id` with the Identity Platform `sub` values.
    (confirms B1's `public/` + `.next/static` copy and B6 bucket wiring).
 4. An evidence upload lands in the GCS bucket and reads back via signed URL
    (confirms B3).
-5. Login rejects an unknown email **and** an unverified token (confirms B4).
+5. A linked account signs in with its Identity Platform password; an unlinked
+   one is refused with "belum terhubung ke pengguna AgroVision"; and
+   `npm run auth:verify` passes 36/36 (confirms B-27).
 6. Cloud Logging shows container stdout; `withRls` failures and the migrate
    runner log there.
 
@@ -406,6 +452,7 @@ seed `app.users.external_id` with the Identity Platform `sub` values.
   the architecture the code already assumes, is fully GCP-native end to end
   (including Identity Platform auth), and upgrades cleanly to full production.
 - **Before any public deploy, close B1–B5** (Dockerfile, CI, GCS backend, auth,
-  readiness gate) — B4 (auth) is the hard stop.
+  readiness gate). B4 is closed in code (B-27); what is left of it is the §9
+  account linking, without which nobody can sign in.
 - Everything AgroVision needs runs on the client's GCP. Nothing here forces a
   non-GCP dependency.

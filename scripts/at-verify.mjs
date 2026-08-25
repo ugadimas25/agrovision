@@ -186,6 +186,22 @@ async function main() {
   ok("tanpa login → redirect ke /login", guard.status === 307 && guard.location?.includes("/login"),
     `HTTP ${guard.status}`);
 
+  // B-27: seluruh suite ini masuk lewat login stub (email saja, tanpa kata
+  // sandi). Sejak mode login jadi fail-closed, "gagal login" bisa berarti
+  // konfigurasi -- bukan cacat aplikasi. Diperiksa SEKALI di sini supaya
+  // penyebabnya terbaca, bukan muncul sebagai 149 kegagalan berbunyi
+  // "Form tidak ditemukan".
+  const loginPage = await anon.get("/login");
+  const stubMode = visible(loginPage.html).includes("AUTH_MODE=stub");
+  if (!stubMode) {
+    console.error("\nHalaman /login TIDAK sedang dalam mode stub.");
+    console.error("Suite ini butuh:");
+    console.error("  1. AUTH_MODE=stub di .env.local (lalu ulangi `npm run dev`)");
+    console.error("  2. npm run db:seed:dev  — menyalakan app.auth_settings.stub_login_enabled");
+    process.exit(1);
+  }
+  ok("halaman login mengumumkan mode stub-nya secara jujur (peringatan tampil)", true);
+
   console.log("\n=== Login tiga peran ===");
   const admin = await login("admin@agrovision.local");
   const creator = await login("creator@agrovision.local");

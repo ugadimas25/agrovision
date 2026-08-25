@@ -455,6 +455,62 @@ async function run() {
                        WHERE company_id=$1 AND code='UJI-WEED-BARU'`, [C1])
   ok('nonaktifkan baris lama MEMBEBASKAN drivernya untuk baris baru', pr.rows[0].n === 1)
 
+  // =========================================================================
+  // B-27: dua mode login, dan saklar yang membedakannya
+  //
+  // Sisi "harus ditolak" ada di db/verify-adversarial.mjs. Di sini sisi
+  // sebaliknya: saat saklar menyala, stub memang bekerja DAN gerbang produksi
+  // memang melaporkannya; saat mati, keduanya berbalik. Tanpa pasangan ini,
+  // "gerbang bersih" bisa berarti "gerbangnya memang tidak pernah melihat".
+  // =========================================================================
+  console.log('\n=== B-27: gerbang login stub (app.auth_settings) ===')
+  const su = new pg.Client({ connectionString: SUPER })
+  await su.connect()
+  const stubBefore = (await su.query(`SELECT stub_login_enabled FROM app.auth_settings WHERE singleton`))
+    .rows[0]?.stub_login_enabled === true
+  const setStub = (v) => su.query(`UPDATE app.auth_settings SET stub_login_enabled = $1 WHERE singleton`, [v])
+
+  let ar = await c.query(`SELECT count(*)::int n FROM app.auth_settings`)
+  ok('app.auth_settings persis satu baris (PK konstan + CHECK)', ar.rows[0].n === 1, `${ar.rows[0].n} baris`)
+
+  await setStub(true)
+  ar = await c.query(`SELECT external_id FROM app.lookup_login_stub('c@x.co')`)
+  ok('saklar ON: lookup_login_stub memetakan email -> external_id',
+    ar.rows[0]?.external_id === 'idp|c', ar.rows[0]?.external_id ?? 'kosong')
+
+  ar = await c.query(`SELECT external_id FROM app.lookup_login_stub('bukan-siapa-siapa@x.co')`)
+  ok('email tak terdaftar mengembalikan nol baris, bukan galat', ar.rows.length === 0)
+
+  ar = await c.query(`SELECT detail FROM app.check_production_readiness()
+                       WHERE blocking AND item = 'login stub masih aktif'`)
+  ok('saklar ON dilaporkan sebagai PENGHALANG produksi', ar.rows.length === 1,
+    ar.rows[0]?.detail ?? 'tidak dilaporkan')
+
+  await setStub(false)
+  try {
+    await c.query(`SELECT external_id FROM app.lookup_login_stub('c@x.co')`)
+    ok('saklar OFF: lookup_login_stub ditolak', false, 'berhasil padahal seharusnya ditolak')
+  } catch (e) {
+    ok('saklar OFF: lookup_login_stub ditolak', /login stub dimatikan/.test(e.message), e.message.slice(0, 70))
+  }
+
+  ar = await c.query(`SELECT item FROM app.check_production_readiness() WHERE blocking AND item LIKE 'login stub%'`)
+  ok('saklar OFF: penghalang login hilang dari gerbang produksi', ar.rows.length === 0,
+    ar.rows.map(x => x.item).join(' | ') || 'bersih')
+
+  ar = await c.query(`SELECT user_id FROM app.resolve_session('idp|c')`)
+  ok('jalur produksi (klaim sub -> resolve_session) tidak bergantung pada saklar',
+    ar.rows[0]?.user_id === U_CREATOR)
+
+  ar = await c.query(`SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                       WHERE n.nspname = 'app' AND p.proname = 'lookup_login_email'`)
+  ok('fungsi stub warisan app.lookup_login_email sudah dihapus (0057)', ar.rows.length === 0)
+
+  // Dipulihkan: db:test dan at:verify berbagi database, dan suite HTTP itu
+  // masuk lewat login stub.
+  await setStub(stubBefore)
+  await su.end()
+
   await c.end()
   console.log(`\n${'='.repeat(52)}\nPASS ${pass}   FAIL ${fail}`)
   process.exit(fail === 0 ? 0 : 1)
