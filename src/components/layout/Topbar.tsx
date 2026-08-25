@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, LogOut, Menu } from "lucide-react";
+import Link from "next/link";
+import { Building2, LogOut, Mail, Menu } from "lucide-react";
 import { logoutAction, setLocaleAction, switchCompanyAction } from "@/lib/actions/auth";
 import type { CompanyOption } from "@/lib/session";
 import { getDict, LOCALE_SWITCHER_ENABLED, LOCALES, type Locale } from "@/lib/i18n";
@@ -10,6 +11,29 @@ import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 
 function initials(name: string): string {
   return name.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
+}
+
+/**
+ * Badge Inbox Approval (B-28). count null = role bukan approver/super_admin,
+ * ikon disembunyikan sama sekali -- bukan ditampilkan dengan angka 0.
+ */
+function InboxBadge({ count }: { count: number | null }) {
+  if (count === null) return null;
+  return (
+    <Link
+      href="/approval"
+      title="Inbox Approval"
+      aria-label={`Inbox Approval, ${count} menunggu keputusan`}
+      className="relative flex h-11 w-11 items-center justify-center rounded-md text-slate-600 hover:bg-slate-50 md:h-9 md:w-9"
+    >
+      <Mail className="h-5 w-5" />
+      {count > 0 && (
+        <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold leading-none text-white">
+          {count > 99 ? "99+" : count}
+        </span>
+      )}
+    </Link>
+  );
 }
 
 function LocaleToggle({ locale }: { locale: Locale }) {
@@ -50,6 +74,7 @@ export function Topbar({
   role,
   activeCompanyId,
   companies,
+  pendingApprovalCount,
   locale,
   onMenu,
 }: {
@@ -58,6 +83,7 @@ export function Topbar({
   role: string;
   activeCompanyId: string | null;
   companies: CompanyOption[];
+  pendingApprovalCount: number | null;
   locale: Locale;
   onMenu?: () => void;
 }) {
@@ -116,6 +142,7 @@ export function Topbar({
         {/* Desktop: bahasa + avatar + logout berjajar */}
         <div className="hidden items-center gap-3 md:flex">
           <LocaleToggle locale={locale} />
+          <InboxBadge count={pendingApprovalCount} />
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-700 text-xs font-semibold text-white">
               {initials(fullName)}
@@ -137,7 +164,10 @@ export function Topbar({
           </form>
         </div>
 
-        {/* Mobile: dropdown akun */}
+        {/* Mobile: badge inbox + dropdown akun */}
+        <div className="md:hidden">
+          <InboxBadge count={pendingApprovalCount} />
+        </div>
         <div className="relative md:hidden">
           <button
             type="button"

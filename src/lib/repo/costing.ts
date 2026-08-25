@@ -809,6 +809,20 @@ export async function listAllPending(
   });
 }
 
+/**
+ * Jumlah item Inbox Approval yang menunggu keputusan (B-28) -- sumber
+ * hitungan sama persis dengan listAllPending, jangan duplikasi filter di
+ * tempat lain. Dipakai untuk badge di Topbar, bukan untuk render tabel.
+ */
+export async function countPendingApprovals(ctx: RlsContext): Promise<number> {
+  return withRls(ctx, async (client) => {
+    const result = await client.query<{ n: string }>(
+      `SELECT count(*) AS n FROM app.v_pending_approvals`,
+    );
+    return Number(result.rows[0].n);
+  });
+}
+
 /** Keputusan approval lintas-modul lewat satu pintu app.decide_record(). */
 export async function decideRecord(
   ctx: RlsContext,

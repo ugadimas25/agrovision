@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 import { getSession, getSessionCompanies } from "@/lib/session";
 import { getLocale } from "@/lib/i18n-server";
+import { countPendingApprovals } from "@/lib/repo/costing";
 import { AppShell } from "./AppShell";
+
+const DECIDER_ROLES = ["approver", "super_admin"];
 
 /**
  * Shell aplikasi. Server Component supaya sesi diambil di server dan menjadi
@@ -15,7 +18,17 @@ export async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const companies = await getSessionCompanies(session.userId);
+  const isDecider = DECIDER_ROLES.includes(session.role);
+  const [companies, pendingApprovalCount] = await Promise.all([
+    getSessionCompanies(session.userId),
+    isDecider
+      ? countPendingApprovals({
+          userId: session.userId,
+          role: session.role,
+          companyId: session.companyId,
+        })
+      : Promise.resolve(null),
+  ]);
   const locale = await getLocale();
 
   return (
@@ -26,6 +39,7 @@ export async function AppLayout({ children }: { children: React.ReactNode }) {
       email={session.email}
       activeCompanyId={session.companyId}
       companies={companies}
+      pendingApprovalCount={pendingApprovalCount}
     >
       {children}
     </AppShell>

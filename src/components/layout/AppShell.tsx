@@ -14,7 +14,7 @@ import type { CompanyOption } from "@/lib/session";
  * dengan focus-trap sederhana.
  */
 export function AppShell({
-  role, locale, fullName, email, activeCompanyId, companies, children,
+  role, locale, fullName, email, activeCompanyId, companies, pendingApprovalCount, children,
 }: {
   role: string;
   locale: Locale;
@@ -22,6 +22,8 @@ export function AppShell({
   email: string;
   activeCompanyId: string | null;
   companies: CompanyOption[];
+  /** null = role bukan approver/super_admin, badge disembunyikan (bukan angka 0). */
+  pendingApprovalCount: number | null;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -77,6 +79,7 @@ export function AppShell({
           role={role}
           activeCompanyId={activeCompanyId}
           companies={companies}
+          pendingApprovalCount={pendingApprovalCount}
           locale={locale}
           onMenu={() => setOpen(true)}
         />
