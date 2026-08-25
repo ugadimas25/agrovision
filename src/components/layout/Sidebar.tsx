@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Map, Sprout, Shovel, Compass, FlaskConical, Scissors,
   ClipboardList, Cloud, BadgeCheck, GitBranch, Wallet, PiggyBank,
-  FileBarChart2, CheckSquare, Database, Users, Leaf, ChevronDown,
+  FileBarChart2, Database, Users, Leaf, ChevronDown,
   SprayCan, Wheat, Wrench, TreePine, Calculator, TrendingUp, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -14,8 +14,8 @@ import { getDict, type Locale } from "@/lib/i18n";
 
 /**
  * Navigasi mengikuti IA hasil meeting 30-07-2026 (docs/11): regrouping menjadi
- * Dashboard (×3), Pra-Tanam, Block & Map, Aktivitas Kebun, Agri-Input, Field
- * Survey, Keberlanjutan, Akuntansi, Report, Approval (+ Pengaturan).
+ * Dashboard (×3), Pra-Tanam, Aktivitas Kebun, Agri-Input, Keberlanjutan,
+ * Akuntansi, Report (+ Pengaturan). Inbox Approval berada di Topbar.
  *
  * Sifat:
  *   - grup bisa dilipat (accordion) — status per-grup di state klien;
@@ -96,6 +96,7 @@ const GROUPS: Group[] = [
       { href: "/operasional/pruning", key: "nav.pruning", icon: Scissors, ready: true },
       { href: "/aktivitas/spraying", key: "nav.spraying", icon: SprayCan, ready: true },
       { href: "/aktivitas/panen", key: "nav.harvesting", icon: Wheat, ready: true },
+      { href: "/survei", key: "nav.survey", icon: ClipboardList, ready: true },
     ],
   },
   {
@@ -112,6 +113,7 @@ const GROUPS: Group[] = [
       { href: "/keberlanjutan/sertifikasi", key: "nav.certification", icon: BadgeCheck, ready: true },
       { href: "/keberlanjutan/traceability", key: "nav.traceability", icon: GitBranch, ready: true },
       { href: "/keberlanjutan/deforestation", key: "nav.deforestation", icon: TreePine, ready: false },
+      { href: "/operasional/blok", key: "nav.blocks", icon: Map, ready: true },
     ],
   },
   {
@@ -142,10 +144,6 @@ const GROUPS: Group[] = [
       { href: "/pengguna", key: "nav.users", icon: Users, ready: true, roles: SUPER_ADMIN_APPROVER },
     ],
   },
-  // Dipindah ke paling bawah (docs/11 refinement) agar nav lebih rapih.
-  { key: null, items: [{ href: "/operasional/blok", key: "nav.blocks", icon: Map, ready: true }] },
-  { key: null, items: [{ href: "/survei", key: "nav.survey", icon: ClipboardList, ready: true }] },
-  { key: null, items: [{ href: "/approval", key: "nav.approval.inbox", icon: CheckSquare, ready: true }] },
 ];
 
 export function Sidebar({

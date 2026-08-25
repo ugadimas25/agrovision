@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, ClipboardList, FileBarChart2, CheckSquare, Menu } from "lucide-react";
+import { LayoutDashboard, ClipboardList, FileBarChart2, Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getDict, type Locale } from "@/lib/i18n";
 
@@ -16,9 +16,9 @@ import { getDict, type Locale } from "@/lib/i18n";
  * `roles` dan cara memfilternya dibuat identik supaya pintasan mobile tidak
  * pernah membuka tujuan yang sudah disembunyikan dari drawer.
  *
- * Keempat tujuan di bawah terbuka untuk KEEMPAT peran, jadi belum ada yang
- * ber-`roles`: /dashboard, /survei, /laporan dipakai semua peran, dan /approval
- * memang boleh dibuka creator (QA A-04) — tombol keputusannya yang digate.
+ * Ketiga tujuan di bawah terbuka untuk KEEMPAT peran, jadi belum ada yang
+ * ber-`roles`: /dashboard, /survei, dan /laporan dipakai semua peran. Approval
+ * tidak menjadi item navigasi; pintasannya berada di Topbar.
  * Bila nanti satu tujuan dibatasi, isi `roles` di SINI dan di Sidebar sekaligus.
  */
 type BottomItem = { href: string; key: string; icon: typeof LayoutDashboard; roles?: string[] };
@@ -27,7 +27,6 @@ const ITEMS: BottomItem[] = [
   { href: "/dashboard", key: "nav.bottom.dashboard", icon: LayoutDashboard },
   { href: "/survei", key: "nav.bottom.survey", icon: ClipboardList },
   { href: "/laporan", key: "nav.bottom.report", icon: FileBarChart2 },
-  { href: "/approval", key: "nav.bottom.approval", icon: CheckSquare },
 ];
 
 export function BottomNav({ role, locale, onMenu }: { role: string; locale: Locale; onMenu: () => void }) {
