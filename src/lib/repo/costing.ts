@@ -765,6 +765,15 @@ export type PendingItem = {
   evidenceId: string | null;
 };
 
+/** Jumlah item inbox yang belum mendapat keputusan, untuk badge Topbar. */
+export async function countAllPending(ctx: RlsContext): Promise<number> {
+  const rows = await rlsQuery<{ n: string }>(
+    ctx,
+    `SELECT count(*) AS n FROM app.v_pending_approvals`,
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 export async function listAllPending(
   ctx: RlsContext,
   opts: { page?: number; pageSize?: number } = {},

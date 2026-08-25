@@ -96,6 +96,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "chrome.allEntities": "Semua entitas saya",
     "chrome.noEntity": "Tanpa entitas",
     "chrome.language": "Bahasa",
+    "chrome.approvalPending": "belum ditindaklanjuti",
     // PWA
     "common.close": "Tutup",
     "pwa.install.button": "Pasang App",
@@ -222,6 +223,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "chrome.allEntities": "All my entities",
     "chrome.noEntity": "No entity",
     "chrome.language": "Language",
+    "chrome.approvalPending": "awaiting action",
     // PWA
     "common.close": "Close",
     "pwa.install.button": "Install App",

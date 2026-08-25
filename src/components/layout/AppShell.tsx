@@ -14,7 +14,7 @@ import type { CompanyOption } from "@/lib/session";
  * dengan focus-trap sederhana.
  */
 export function AppShell({
-  role, locale, fullName, email, activeCompanyId, companies, children,
+  role, locale, fullName, email, activeCompanyId, companies, pendingApprovalCount, children,
 }: {
   role: string;
   locale: Locale;
@@ -22,6 +22,7 @@ export function AppShell({
   email: string;
   activeCompanyId: string | null;
   companies: CompanyOption[];
+  pendingApprovalCount: number;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -78,6 +79,7 @@ export function AppShell({
           activeCompanyId={activeCompanyId}
           companies={companies}
           locale={locale}
+          pendingApprovalCount={pendingApprovalCount}
           onMenu={() => setOpen(true)}
         />
         <main className="flex-1 overflow-y-auto p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-6 md:pb-6">

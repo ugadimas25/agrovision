@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession, getSessionCompanies } from "@/lib/session";
 import { getLocale } from "@/lib/i18n-server";
+import { countAllPending } from "@/lib/repo/costing";
 import { AppShell } from "./AppShell";
 
 /**
@@ -15,8 +16,15 @@ export async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const companies = await getSessionCompanies(session.userId);
-  const locale = await getLocale();
+  const [companies, locale, pendingApprovalCount] = await Promise.all([
+    getSessionCompanies(session.userId),
+    getLocale(),
+    countAllPending({
+      userId: session.userId,
+      role: session.role,
+      companyId: session.companyId,
+    }),
+  ]);
 
   return (
     <AppShell
@@ -26,6 +34,7 @@ export async function AppLayout({ children }: { children: React.ReactNode }) {
       email={session.email}
       activeCompanyId={session.companyId}
       companies={companies}
+      pendingApprovalCount={pendingApprovalCount}
     >
       {children}
     </AppShell>
