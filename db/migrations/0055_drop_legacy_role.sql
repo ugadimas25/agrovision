@@ -1,0 +1,26 @@
+-- 0055_drop_legacy_role.sql
+-- B-10: kolom app.users.role (enum lama 8 nilai, 0002_core.sql) ditandai
+-- DEPRECATED sejak 0014_core_fix.sql:64, tapi tak pernah di-DROP -- hidup
+-- berdampingan dengan app_role yang kanonik (4 nilai, dipakai seluruh RLS
+-- dan app.current_role_name()).
+--
+-- Bukan sekadar duplikasi kosmetik: isinya SALING BERTENTANGAN di data
+-- sungguhan (mis. role='viewer' padahal app_role='super_admin'). Query yang
+-- salah baca kolom bisa memperlakukan super_admin sebagai viewer.
+--
+-- Diverifikasi sebelum drop: pg_depend nol baris, nol policy, nol function
+-- di app.* yang membaca u.role/users.role. Satu-satunya pemakai di kode
+-- adalah db/seed-dev.mjs (diperbaiki terpisah dari migrasi ini, bukan
+-- bagian skema).
+--
+-- TIPE app.user_role SENGAJA TIDAK ikut di-DROP di sini, beda dari rencana
+-- awal tiket. Percobaan pertama migrasi ini gagal: app.approval_steps
+-- (tabel mati 0 baris, subjek B-11) punya kolom required_role yang masih
+-- memakai tipe ini. approval_steps ada di luar cakupan B-10 -- nasibnya
+-- (drop vs dihidupkan untuk riwayat approval berjenjang) belum diputuskan,
+-- dan B-11 eksplisit meminta arahnya JANGAN dipilih sendiri. Bahaya yang
+-- sebenarnya dilaporkan B-10 (nilai role vs app_role saling bertentangan)
+-- ada di KOLOM users.role, bukan di tipenya -- men-drop kolom ini sudah
+-- menghilangkan bahaya itu. Pembersihan tipe menyusul saat B-11 selesai.
+
+ALTER TABLE app.users DROP COLUMN role;

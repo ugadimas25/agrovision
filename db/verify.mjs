@@ -49,10 +49,10 @@ async function setup() {
 
   await c.query(`INSERT INTO app.companies (id,code,name) VALUES ($1,'A','PT A'),($2,'B','PT B')`, [C1, C2])
   await c.query(`INSERT INTO app.estates (id,company_id,code,name) VALUES ($1,$3,'E1','Estate 1'),($2,$4,'E2','Estate 2')`, [E1, E2, C1, C1])
-  await c.query(`INSERT INTO app.users (id,company_id,external_id,email,full_name,role,app_role)
-                 VALUES ($1,$4,'idp|c','c@x.co','Creator','surveyor','creator'),
-                        ($2,$4,'idp|a','a@x.co','Approver','approver','approver'),
-                        ($3,$4,'idp|s','s@x.co','Super','manager','super_admin')`,
+  await c.query(`INSERT INTO app.users (id,company_id,external_id,email,full_name,app_role)
+                 VALUES ($1,$4,'idp|c','c@x.co','Creator','creator'),
+                        ($2,$4,'idp|a','a@x.co','Approver','approver'),
+                        ($3,$4,'idp|s','s@x.co','Super','super_admin')`,
                 [U_CREATOR, U_APPROVER, U_ADMIN, C1])
   // creator hanya boleh Estate 1
   await c.query(`INSERT INTO app.user_estate_access VALUES ($1,$2)`, [U_CREATOR, E1])

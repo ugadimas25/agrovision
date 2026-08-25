@@ -72,12 +72,12 @@ async function setup() {
 
   await q(`INSERT INTO app.companies (id,code,name) VALUES ($1,'CA','Tenant A'),($2,'CB','Tenant B')`, [CA, CB])
   await q(`INSERT INTO app.estates (id,company_id,code,name) VALUES ($1,$3,'EA','Estate A'),($2,$4,'EB','Estate B')`, [EA, EB, CA, CB])
-  await q(`INSERT INTO app.users (id,company_id,external_id,email,full_name,role,app_role) VALUES
-      ($1,$6,'idp|cr','cr@a.co','Creator A','surveyor','creator'),
-      ($2,$6,'idp|ap','ap@a.co','Approver A','approver','approver'),
-      ($3,$6,'idp|vw','vw@a.co','Viewer A','manager','viewer'),
-      ($4,$6,'idp|ad','ad@a.co','Admin A','admin','super_admin'),
-      ($5,$7,'idp|tb','tb@b.co','User B','surveyor','creator')`,
+  await q(`INSERT INTO app.users (id,company_id,external_id,email,full_name,app_role) VALUES
+      ($1,$6,'idp|cr','cr@a.co','Creator A','creator'),
+      ($2,$6,'idp|ap','ap@a.co','Approver A','approver'),
+      ($3,$6,'idp|vw','vw@a.co','Viewer A','viewer'),
+      ($4,$6,'idp|ad','ad@a.co','Admin A','super_admin'),
+      ($5,$7,'idp|tb','tb@b.co','User B','creator')`,
     [U_CREATOR, U_APPROVER, U_VIEWER, U_ADMIN, U_TENANT_B, CA, CB])
   await q(`INSERT INTO app.user_company_access (user_id,company_id) VALUES ($1,$5),($2,$5),($3,$5),($4,$5),($6,$7) ON CONFLICT DO NOTHING`,
     [U_CREATOR, U_APPROVER, U_VIEWER, U_ADMIN, CA, U_TENANT_B, CB])
@@ -248,8 +248,8 @@ async function run() {
   // Penjaganya bukan "super_admin tidak bisa disentuh": dengan dua super_admin
   // aktif, satu boleh dinonaktifkan. Tanpa cek ini, trigger yang menolak SEMUA
   // perubahan akan lolos uji di atas tanpa memberi tahu bahwa fiturnya mati.
-  await c.query(`INSERT INTO app.users (company_id, external_id, email, full_name, role, app_role, is_active)
-                 VALUES ($1,'adv-sa2','adv-sa2@uji.invalid','Adv SA2','admin','super_admin',true)`, [CA])
+  await c.query(`INSERT INTO app.users (company_id, external_id, email, full_name, app_role, is_active)
+                 VALUES ($1,'adv-sa2','adv-sa2@uji.invalid','Adv SA2','super_admin',true)`, [CA])
   await c.query(`UPDATE app.users SET is_active=false WHERE company_id=$1 AND external_id='adv-sa2'`, [CA])
   ok('dengan dua super_admin aktif, satu boleh dinonaktifkan', true)
   // Riwayat melindungi dirinya sendiri: pengguna yang pernah mencatat tidak bisa
@@ -272,8 +272,8 @@ async function run() {
     `DELETE FROM app.users WHERE id=$1`, [U_CREATOR], /foreign key/)
   // Dan pengguna yang belum meninggalkan jejak apa pun MEMANG boleh dihapus --
   // kalau tidak, tombol "Hapus" di /pengguna tidak akan pernah berguna.
-  await c.query(`INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
-                 VALUES ('4d4d4d4d-0000-0000-0000-00000000000e',$1,'adv-baru','baru@uji.invalid','Belum Berjejak','manager','viewer')`, [CA])
+  await c.query(`INSERT INTO app.users (id, company_id, external_id, email, full_name, app_role)
+                 VALUES ('4d4d4d4d-0000-0000-0000-00000000000e',$1,'adv-baru','baru@uji.invalid','Belum Berjejak','viewer')`, [CA])
   await c.query(`DELETE FROM app.users WHERE id='4d4d4d4d-0000-0000-0000-00000000000e'`)
   ok('pengguna tanpa riwayat memang bisa dihapus', true)
 

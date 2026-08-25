@@ -233,8 +233,8 @@ async function seed() {
   ]
   for (const [id, sub, email, name, role] of users) {
     await c.query(
-      `INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
-       VALUES ($1,$2,$3,$4,$5,'viewer',$6)
+      `INSERT INTO app.users (id, company_id, external_id, email, full_name, app_role)
+       VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (id) DO UPDATE SET app_role = EXCLUDED.app_role`, [id, CO, sub, email, name, role])
     await c.query(
       `INSERT INTO app.user_company_access (user_id, company_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
@@ -1100,8 +1100,8 @@ async function seed() {
   // tidak diubah.
   const U_ADMIN_MULTI = '00000000-0000-4000-8000-0000000000e6'
   await c.query(
-    `INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
-     VALUES ($1,$2,'demo|admin-multi','admin.multi@demo.invalid','Sari Admin (Dua Entitas)','viewer','super_admin')
+    `INSERT INTO app.users (id, company_id, external_id, email, full_name, app_role)
+     VALUES ($1,$2,'demo|admin-multi','admin.multi@demo.invalid','Sari Admin (Dua Entitas)','super_admin')
      ON CONFLICT (id) DO UPDATE SET app_role = EXCLUDED.app_role`, [U_ADMIN_MULTI, CO])
   for (const co of [CO, CO2]) {
     await c.query(
@@ -1113,8 +1113,8 @@ async function seed() {
   // sebaliknya: tidak boleh melihat data 'DEMO'.
   const U_VIEWER_B = '00000000-0000-4000-8000-0000000000e5'
   await c.query(
-    `INSERT INTO app.users (id, company_id, external_id, email, full_name, role, app_role)
-     VALUES ($1,$2,'demo|viewer-b','direktur.mamuju@demo.invalid','Rina Direktur Mamuju','viewer','viewer')
+    `INSERT INTO app.users (id, company_id, external_id, email, full_name, app_role)
+     VALUES ($1,$2,'demo|viewer-b','direktur.mamuju@demo.invalid','Rina Direktur Mamuju','viewer')
      ON CONFLICT (id) DO UPDATE SET app_role = EXCLUDED.app_role`, [U_VIEWER_B, CO2])
   await c.query(
     `INSERT INTO app.user_company_access (user_id, company_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
