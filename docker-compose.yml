@@ -19,5 +19,26 @@ services:
       timeout: 3s
       retries: 20
 
+  # B-19: replika lokal terisolasi -- dev DB (di atas) tidak disentuh.
+  # Dipakai membuktikan migrasi berisiko (B-22, B-10, B-11) aman dari kosong
+  # sebelum menyentuh Cloud SQL sungguhan. Volume & port terpisah total dari
+  # `db`, jadi purge/drop/rebuild di sini tidak pernah memengaruhi dev.
+  db-staging:
+    image: postgis/postgis:16-3.4
+    container_name: agrovision-db-staging
+    environment:
+      POSTGRES_PASSWORD: staging
+      POSTGRES_DB: agrovision
+    ports:
+      - "127.0.0.1:55434:5432"
+    volumes:
+      - agrovision-pgdata-staging:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agrovision"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
 volumes:
   agrovision-pgdata:
+  agrovision-pgdata-staging:
