@@ -16,9 +16,10 @@ import {
   listSeedDistributions,
 } from "@/lib/repo/operational";
 import { searchBlockOptions } from "@/lib/repo/blocks";
-import { createNurseryInspectionAction, createSeedDistributionAction } from "@/lib/actions/operational";
+import { createNurseryInspectionAction, createSeedDistributionAction, updateOpRecordAction } from "@/lib/actions/operational";
 import { formatNumber, formatPct, formatDate, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import type { Field } from "@/components/ui/OpRecordForm";
 
 export const metadata = { title: "Bibit & Nursery — AgroVision" };
 
@@ -36,6 +37,19 @@ export default async function Page() {
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   // Distribusi butuh batch DAN blok tujuan; tanpa keduanya formnya tak berguna.
   const distReady = canWrite && Boolean(ctx.companyId) && batches.length > 0 && blockOptions.length > 0;
+  const inspFields: Field[] = [
+    {
+      kind: "select", name: "seedBatchId", label: "Batch bibit", options: batches, required: true,
+      hint: "Jenis/varietas bibit dirujuk dari Master Data (K-05) — di sini hanya memilih, bukan membuat.",
+    },
+    { kind: "text", name: "inspectedOn", label: "Tanggal inspeksi", type: "date", required: true },
+    {
+      kind: "text", name: "qtyAlive", label: "Jumlah hidup", type: "number", step: "1", min: "0", required: true,
+      hint: "Angka inilah yang menggerakkan survival rate setelah inspeksi disetujui.",
+    },
+    { kind: "text", name: "qtyDead", label: "Jumlah mati", type: "number", step: "1", min: "0" },
+    { kind: "text", name: "qtyDamaged", label: "Jumlah rusak", type: "number", step: "1", min: "0" },
+  ];
 
   return (
     <div>
@@ -44,23 +58,7 @@ export default async function Page() {
       {canWrite && ctx.companyId && (
         batches.length > 0 ? (
           <div className="mb-5">
-            <OpRecordForm
-              title="Catat inspeksi bibit"
-              action={createNurseryInspectionAction}
-              fields={[
-                {
-                  kind: "select", name: "seedBatchId", label: "Batch bibit", options: batches, required: true,
-                  hint: "Jenis/varietas bibit dirujuk dari Master Data (K-05) — di sini hanya memilih, bukan membuat.",
-                },
-                { kind: "text", name: "inspectedOn", label: "Tanggal inspeksi", type: "date", required: true },
-                {
-                  kind: "text", name: "qtyAlive", label: "Jumlah hidup", type: "number", step: "1", min: "0", required: true,
-                  hint: "Angka inilah yang menggerakkan survival rate setelah inspeksi disetujui.",
-                },
-                { kind: "text", name: "qtyDead", label: "Jumlah mati", type: "number", step: "1", min: "0" },
-                { kind: "text", name: "qtyDamaged", label: "Jumlah rusak", type: "number", step: "1", min: "0" },
-              ]}
-            />
+            <OpRecordForm title="Catat inspeksi bibit" action={createNurseryInspectionAction} fields={inspFields} />
           </div>
         ) : (
           <div className="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -129,6 +127,8 @@ export default async function Page() {
         emptyIcon={ClipboardCheck}
         emptyTitle="Belum ada inspeksi bibit"
         canWrite={canWrite}
+        editFields={inspFields}
+        updateAction={updateOpRecordAction}
       />
 
 {/* --- Distribusi bibit (AI-50): pencatatan langsung, tanpa approval --- */}

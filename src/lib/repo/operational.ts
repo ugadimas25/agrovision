@@ -21,6 +21,13 @@ export type OpRecord = {
   /** null = tidak ada rincian yang bisa dirakit; dirender EMPTY, bukan string kosong. */
   detail: string | null;
   createdByName: string | null;
+  /**
+   * Kolom mentah (bukan string tampilan) untuk mengisi ulang OpRecordEditor
+   * (B-21) — alias sama dengan nama field di halaman masing-masing modul.
+   * Hanya diisi bila baris ini bisa diedit pemiliknya (draft/rejected); untuk
+   * baris lain berupa objek kosong supaya query tidak sia-sia.
+   */
+  editValues: Record<string, string | number | null>;
 };
 
 type OpTable = {
@@ -39,6 +46,11 @@ type OpTable = {
   buildDetail?: (r: Record<string, unknown>) => string | null;
   /** join tambahan (mis. ke fertilizer_types) */
   join?: string;
+  /**
+   * B-21: alias (nama field di form) -> ekspresi SQL kolom mentah UNTUK EDIT —
+   * nilai asli (bukan ::text tampilan), dipakai mengisi ulang OpRecordEditor.
+   */
+  editCols: Record<string, string>;
 };
 
 /** Gabung bagian rincian yang ada; null bila tidak ada satu pun (jangan "" ). */
@@ -57,6 +69,12 @@ const TABLES: Record<string, OpTable> = {
     detailExpr: "ft.name || ' — ' || t.total_quantity || ' ' || COALESCE(uom.name,'')",
     join: `JOIN app.fertilizer_types ft ON ft.id = t.fertilizer_type_id
            LEFT JOIN app.master_items uom ON uom.id = t.uom_item_id`,
+    editCols: {
+      blockId: "t.block_id::text", fertilizerTypeId: "t.fertilizer_type_id::text",
+      cropCode: "t.crop_code", growthPhase: "t.growth_phase::text", appliedOn: "t.applied_on::text",
+      totalQuantity: "t.total_quantity", uomItemId: "t.uom_item_id::text", treeCount: "t.tree_count",
+      note: "t.note",
+    },
   },
   land_preparations: {
     table: "land_preparations",
@@ -75,6 +93,11 @@ const TABLES: Record<string, OpTable> = {
         txt(r.hole_count) ? `${txt(r.hole_count)} lubang` : null,
         labelOf(PREP_STATUS, txt(r.prep_status)),
       ]),
+    editCols: {
+      blockId: "t.block_id::text", checkedAt: "t.checked_at::date::text", soilPh: "t.soil_ph",
+      holeCount: "t.planting_hole_count", effectiveAreaHa: "t.effective_area_ha",
+      status: "t.status::text", note: "t.note", plantingLayoutItemId: "t.planting_layout_item_id::text",
+    },
   },
   land_suitability_assessments: {
     table: "land_suitability_assessments",
@@ -82,12 +105,20 @@ const TABLES: Record<string, OpTable> = {
     ownerCol: "created_by",
     detailExpr:
       "'Durian ' || COALESCE(t.score_durian::text,'—') || ' · Kelapa ' || COALESCE(t.score_coconut::text,'—')",
+    editCols: {
+      blockId: "t.block_id::text", assessedAt: "t.assessed_at::date::text", slopePct: "t.slope_pct",
+      elevationM: "t.elevation_m", rainfallMmYear: "t.rainfall_mm_year",
+      scoreDurian: "t.score_durian", scoreCoconut: "t.score_coconut", note: "t.note",
+    },
   },
   pruning_records: {
     table: "pruning_records",
     dateCol: "pruned_on",
     ownerCol: "created_by",
     detailExpr: "COALESCE(t.tree_count::text || ' pohon','Pruning')",
+    editCols: {
+      blockId: "t.block_id::text", prunedOn: "t.pruned_on::date::text", treeCount: "t.tree_count", note: "t.note",
+    },
   },
   weeding_records: {
     table: "weeding_records",
@@ -100,6 +131,10 @@ const TABLES: Record<string, OpTable> = {
         labelOf(WEEDING_METHOD, txt(r.method)),
         txt(r.area_ha) ? `${txt(r.area_ha)} ha` : null,
       ]),
+    editCols: {
+      blockId: "t.block_id::text", weededOn: "t.weeded_on::date::text", method: "t.method",
+      areaHa: "t.area_ha", laborCount: "t.labor_count", note: "t.note",
+    },
   },
   spraying_records: {
     table: "spraying_records",
@@ -107,6 +142,10 @@ const TABLES: Record<string, OpTable> = {
     ownerCol: "created_by",
     detailExpr: "COALESCE(ch.name,'Semprot') || COALESCE(' · ' || t.target,'')",
     join: "LEFT JOIN app.agri_input_chemicals ch ON ch.id = t.chemical_id",
+    editCols: {
+      blockId: "t.block_id::text", sprayedOn: "t.sprayed_on::date::text", chemicalId: "t.chemical_id::text",
+      target: "t.target", dosePerHa: "t.dose_per_ha", totalVolume: "t.total_volume", unit: "t.unit", note: "t.note",
+    },
   },
   harvest_records: {
     table: "harvest_records",
@@ -124,6 +163,10 @@ const TABLES: Record<string, OpTable> = {
         txt(r.quantity_ton) ? `${txt(r.quantity_ton)} ton` : null,
         txt(r.grade) ? `Grade ${txt(r.grade)}` : null,
       ]),
+    editCols: {
+      blockId: "t.block_id::text", harvestedOn: "t.harvested_on::date::text", cropCode: "t.crop_code",
+      quantityTon: "t.quantity_ton", grade: "t.grade", note: "t.note",
+    },
   },
   dbh_measurements: {
     table: "dbh_measurements",
@@ -135,6 +178,10 @@ const TABLES: Record<string, OpTable> = {
       crop_name: "c.name",
       dbh_cm: "t.dbh_cm::text",
       height_m: "t.height_m::text",
+    },
+    editCols: {
+      blockId: "t.block_id::text", cropId: "t.crop_id::text", measuredAt: "t.measured_at::date::text",
+      dbhCm: "t.dbh_cm", heightM: "t.height_m",
     },
     buildDetail: (r) =>
       joinParts([
@@ -160,16 +207,21 @@ export async function listOpRecords(
     const total = await client.query<{ n: string }>(
       `SELECT count(*) AS n FROM app.${t.table} t`,
     );
-    // Alias & ekspresi extraCols didefinisikan di TABLES (konstanta di berkas ini),
-    // bukan dari input pengguna — tidak ada jalur injeksi di sini.
+    // Alias & ekspresi extraCols/editCols didefinisikan di TABLES (konstanta di
+    // berkas ini), bukan dari input pengguna — tidak ada jalur injeksi di sini.
     const extra = Object.entries(t.extraCols ?? {})
       .map(([alias, expr]) => `, (${expr}) AS ${alias}`)
+      .join("");
+    // Prefiks edit__ supaya alias editCols tidak pernah bentrok dengan extraCols
+    // (mis. keduanya sama-sama punya "note" di beberapa modul).
+    const editSel = Object.entries(t.editCols)
+      .map(([alias, expr]) => `, (${expr}) AS "edit__${alias}"`)
       .join("");
     const rows = await client.query(
       `SELECT t.id, b.code AS block_code, t.approval_status, t.rejection_reason,
               t.${t.dateCol}::date AS event_date,
               ${t.detailExpr ? `(${t.detailExpr})` : "NULL"} AS detail,
-              u.full_name AS created_by_name${extra}
+              u.full_name AS created_by_name${extra}${editSel}
          FROM app.${t.table} t
          JOIN app.blocks b ON b.id = t.block_id
          LEFT JOIN app.users u ON u.id = t.${t.ownerCol}
@@ -178,18 +230,27 @@ export async function listOpRecords(
         LIMIT $1 OFFSET $2`,
       [pageSize, offset],
     );
+    const editKeys = Object.keys(t.editCols);
     return {
-      rows: rows.rows.map((r) => ({
-        id: String(r.id),
-        blockCode: (r.block_code as string) ?? null,
-        approvalStatus: String(r.approval_status),
-        rejectionReason: (r.rejection_reason as string) ?? null,
-        // event_date sudah ::date di SQL → string 'YYYY-MM-DD' (lihat parser di src/lib/db.ts).
-        eventDate: (r.event_date as string) ?? null,
-        // buildDetail menang; null dipertahankan supaya UI merender EMPTY, bukan "".
-        detail: t.buildDetail ? t.buildDetail(r as Record<string, unknown>) : txt(r.detail),
-        createdByName: (r.created_by_name as string) ?? null,
-      })),
+      rows: rows.rows.map((r) => {
+        const editValues: Record<string, string | number | null> = {};
+        for (const k of editKeys) {
+          const v = (r as Record<string, unknown>)[`edit__${k}`];
+          editValues[k] = v === null || v === undefined ? null : typeof v === "number" ? v : String(v);
+        }
+        return {
+          id: String(r.id),
+          blockCode: (r.block_code as string) ?? null,
+          approvalStatus: String(r.approval_status),
+          rejectionReason: (r.rejection_reason as string) ?? null,
+          // event_date sudah ::date di SQL → string 'YYYY-MM-DD' (lihat parser di src/lib/db.ts).
+          eventDate: (r.event_date as string) ?? null,
+          // buildDetail menang; null dipertahankan supaya UI merender EMPTY, bukan "".
+          detail: t.buildDetail ? t.buildDetail(r as Record<string, unknown>) : txt(r.detail),
+          createdByName: (r.created_by_name as string) ?? null,
+          editValues,
+        };
+      }),
       total: Number(total.rows[0].n),
       page,
       pageSize,
@@ -215,6 +276,178 @@ export async function submitOpRecord(
       [id],
     );
     return res.rowCount ?? 0;
+  });
+}
+
+/**
+ * B-21: perbaiki record draft/rejected milik sendiri, generik 9 modul
+ * operasional. Pola persis updateExpenditure (src/lib/repo/costing.ts):
+ * approval_status DIKEMBALIKAN ke 'draft' (bukan gaya, tapi tuntutan policy
+ * <table>_role_split — USING menguji baris LAMA, WITH CHECK baris BARU, dan
+ * WITH CHECK hanya meloloskan draft/submitted, bukan rejected). WHERE di sini
+ * hanya mengulang syarat status supaya pemanggil dapat rowCount 0 yang bisa
+ * dijelaskan; batas kepemilikan sudah ditegakkan RLS (role_split + B-23).
+ *
+ * rejection_reason TIDAK dihapus di sini — tetap terbaca sampai benar-benar
+ * diajukan ulang lewat submitOpRecord, sama seperti pengeluaran.
+ */
+export type UpdateOpInput = {
+  fertilizer_applications: {
+    blockId: string; fertilizerTypeId: string; cropCode: string | null; growthPhase: string; appliedOn: string;
+    totalQuantity: number; uomItemId: string | null; treeCount: number | null; note: string | null;
+  };
+  land_preparations: {
+    blockId: string; checkedAt: string; soilPh: number | null; holeCount: number | null;
+    effectiveAreaHa: number | null; status: string; note: string | null; plantingLayoutItemId: string | null;
+  };
+  land_suitability_assessments: {
+    blockId: string; assessedAt: string; slopePct: number | null; elevationM: number | null;
+    rainfallMmYear: number | null; scoreDurian: number | null; scoreCoconut: number | null; note: string | null;
+  };
+  pruning_records: { blockId: string; prunedOn: string; treeCount: number | null; note: string | null };
+  weeding_records: {
+    blockId: string; weededOn: string; method: string; areaHa: number | null;
+    laborCount: number | null; note: string | null;
+  };
+  spraying_records: {
+    blockId: string; sprayedOn: string; chemicalId: string | null; target: string | null;
+    dosePerHa: number | null; totalVolume: number; unit: string; note: string | null;
+  };
+  harvest_records: {
+    blockId: string; harvestedOn: string; cropCode: string; quantityTon: number;
+    grade: string | null; note: string | null;
+  };
+  nursery_inspections: { seedBatchId: string; inspectedOn: string; qtyAlive: number; qtyDead: number; qtyDamaged: number };
+  dbh_measurements: { blockId: string; cropId: string; measuredAt: string; dbhCm: number; heightM: number | null };
+};
+export type OpModule = keyof UpdateOpInput;
+
+export async function updateOpRecord<M extends OpModule>(
+  ctx: RlsContext,
+  module: M,
+  id: string,
+  input: UpdateOpInput[M],
+): Promise<number> {
+  return withRls(ctx, async (client) => {
+    let res;
+    switch (module) {
+      case "fertilizer_applications": {
+        const i = input as UpdateOpInput["fertilizer_applications"];
+        res = await client.query(
+          `UPDATE app.fertilizer_applications
+              SET block_id = $2, fertilizer_type_id = $3, crop_code = $4, growth_phase = $5::app.growth_phase,
+                  applied_on = $6, total_quantity = $7, uom_item_id = $8, tree_count = $9, note = $10,
+                  approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.fertilizerTypeId, i.cropCode, i.growthPhase, i.appliedOn,
+           i.totalQuantity, i.uomItemId, i.treeCount, i.note],
+        );
+        break;
+      }
+      case "land_preparations": {
+        const i = input as UpdateOpInput["land_preparations"];
+        res = await client.query(
+          `UPDATE app.land_preparations
+              SET block_id = $2, checked_at = $3, soil_ph = $4, planting_hole_count = $5,
+                  effective_area_ha = $6, status = $7::app.prep_status, note = $8,
+                  planting_layout_item_id = $9, approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.checkedAt, i.soilPh, i.holeCount, i.effectiveAreaHa,
+           i.status, i.note, i.plantingLayoutItemId],
+        );
+        break;
+      }
+      case "land_suitability_assessments": {
+        const i = input as UpdateOpInput["land_suitability_assessments"];
+        res = await client.query(
+          `UPDATE app.land_suitability_assessments
+              SET block_id = $2, assessed_at = $3, slope_pct = $4, elevation_m = $5,
+                  rainfall_mm_year = $6, score_durian = $7, score_coconut = $8, note = $9,
+                  approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.assessedAt, i.slopePct, i.elevationM, i.rainfallMmYear,
+           i.scoreDurian, i.scoreCoconut, i.note],
+        );
+        break;
+      }
+      case "pruning_records": {
+        const i = input as UpdateOpInput["pruning_records"];
+        res = await client.query(
+          `UPDATE app.pruning_records
+              SET block_id = $2, pruned_on = $3, tree_count = $4, note = $5, approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.prunedOn, i.treeCount, i.note],
+        );
+        break;
+      }
+      case "weeding_records": {
+        const i = input as UpdateOpInput["weeding_records"];
+        res = await client.query(
+          `UPDATE app.weeding_records
+              SET block_id = $2, weeded_on = $3, method = $4, area_ha = $5, labor_count = $6,
+                  note = $7, approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.weededOn, i.method, i.areaHa, i.laborCount, i.note],
+        );
+        break;
+      }
+      case "spraying_records": {
+        const i = input as UpdateOpInput["spraying_records"];
+        res = await client.query(
+          `UPDATE app.spraying_records
+              SET block_id = $2, sprayed_on = $3, chemical_id = $4, target = $5, dose_per_ha = $6,
+                  total_volume = $7, unit = $8, note = $9, approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.sprayedOn, i.chemicalId, i.target, i.dosePerHa, i.totalVolume, i.unit, i.note],
+        );
+        break;
+      }
+      case "harvest_records": {
+        const i = input as UpdateOpInput["harvest_records"];
+        res = await client.query(
+          `UPDATE app.harvest_records
+              SET block_id = $2, harvested_on = $3, crop_code = $4, quantity_ton = $5, grade = $6,
+                  note = $7, approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.harvestedOn, i.cropCode, i.quantityTon, i.grade, i.note],
+        );
+        break;
+      }
+      case "nursery_inspections": {
+        const i = input as UpdateOpInput["nursery_inspections"];
+        const sum = i.qtyAlive + i.qtyDead + i.qtyDamaged;
+        const batch = await client.query<{ qty_initial: number }>(
+          `SELECT qty_initial FROM app.seed_batches WHERE id = $1 AND archived_at IS NULL`,
+          [i.seedBatchId],
+        );
+        if (!batch.rows[0]) throw new Error("Batch tidak ditemukan atau di luar akses Anda.");
+        if (sum > Number(batch.rows[0].qty_initial)) {
+          throw new Error(
+            `Hidup + mati + rusak (${sum}) melebihi jumlah awal batch (${batch.rows[0].qty_initial}) — survival rate akan menyesatkan. Periksa lagi hitungannya.`,
+          );
+        }
+        res = await client.query(
+          `UPDATE app.nursery_inspections
+              SET seed_batch_id = $2, inspected_at = $3::date, qty_alive = $4, qty_dead = $5, qty_damaged = $6,
+                  approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.seedBatchId, i.inspectedOn, i.qtyAlive, i.qtyDead, i.qtyDamaged],
+        );
+        break;
+      }
+      case "dbh_measurements": {
+        const i = input as UpdateOpInput["dbh_measurements"];
+        res = await client.query(
+          `UPDATE app.dbh_measurements
+              SET block_id = $2, crop_id = $3, measured_at = $4::timestamptz, dbh_cm = $5, height_m = $6,
+                  approval_status = 'draft'
+            WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+          [id, i.blockId, i.cropId, i.measuredAt, i.dbhCm, i.heightM],
+        );
+        break;
+      }
+    }
+    return res?.rowCount ?? 0;
   });
 }
 
@@ -524,7 +757,9 @@ export async function listNurseryInspections(
       `SELECT ni.id, sb.code AS batch_code, ni.approval_status, ni.rejection_reason,
               ni.inspected_at::date::text AS event_date,
               'Hidup ' || ni.qty_alive || ' · mati ' || ni.qty_dead || ' · rusak ' || ni.qty_damaged AS detail,
-              u.full_name AS created_by_name
+              u.full_name AS created_by_name,
+              ni.seed_batch_id::text AS "edit__seedBatchId", ni.inspected_at::date::text AS "edit__inspectedOn",
+              ni.qty_alive AS "edit__qtyAlive", ni.qty_dead AS "edit__qtyDead", ni.qty_damaged AS "edit__qtyDamaged"
          FROM app.nursery_inspections ni
          JOIN app.seed_batches sb ON sb.id = ni.seed_batch_id
          LEFT JOIN app.users u ON u.id = ni.inspector_id
@@ -541,6 +776,13 @@ export async function listNurseryInspections(
         eventDate: (r.event_date as string) ?? null,
         detail: txt(r.detail),
         createdByName: (r.created_by_name as string) ?? null,
+        editValues: {
+          seedBatchId: (r.edit__seedBatchId as string) ?? null,
+          inspectedOn: (r.edit__inspectedOn as string) ?? null,
+          qtyAlive: r.edit__qtyAlive as number,
+          qtyDead: r.edit__qtyDead as number,
+          qtyDamaged: r.edit__qtyDamaged as number,
+        },
       })),
       total: Number(total.rows[0].n),
       page,
@@ -774,6 +1016,51 @@ export async function submitSurvey(
   });
 }
 
+/**
+ * B-21: perbaiki hasil survei ditolak lalu ajukan ulang -- satu langkah,
+ * bukan draft lalu Ajukan terpisah, karena submitSurvey() sendiri tidak
+ * pernah mengenal status draft (langsung 'submitted' saat dibuat). Kepemilikan
+ * ditegakkan RLS (survey_submissions_role_split memakai submitted_by, 0025),
+ * WHERE di sini hanya mengulang syarat status untuk error yang bisa dijelaskan.
+ *
+ * submission_values tidak punya unique constraint per (submission_id, field_id)
+ * yang memungkinkan UPSERT langsung -- hapus semua nilai lama, tulis ulang.
+ */
+export async function updateSurveySubmission(
+  ctx: RlsContext,
+  id: string,
+  input: {
+    blockId: string | null;
+    values: { fieldId: string; fieldType: string; value: string }[];
+  },
+): Promise<number> {
+  return withRls(ctx, async (client) => {
+    const res = await client.query(
+      `UPDATE app.survey_submissions
+          SET block_id = $2, submitted_at = now(), approval_status = 'submitted', rejection_reason = NULL
+        WHERE id = $1 AND approval_status IN ('draft','rejected')`,
+      [id, input.blockId],
+    );
+    if (res.rowCount === 0) return 0;
+
+    await client.query(`DELETE FROM app.submission_values WHERE submission_id = $1`, [id]);
+    for (const v of input.values) {
+      if (v.value === "" || v.value == null) continue;
+      const cols = { text: "value_text", num: "value_num", bool: "value_bool", date: "value_date" };
+      let col = cols.text;
+      let val: string | number | boolean = v.value;
+      if (v.fieldType === "number") { col = cols.num; val = Number(v.value); if (Number.isNaN(val)) continue; }
+      else if (v.fieldType === "date") { col = cols.date; }
+      else if (v.fieldType === "yes_no") { col = cols.bool; val = v.value === "true" || v.value === "Ya"; }
+      await client.query(
+        `INSERT INTO app.submission_values (submission_id, field_id, ${col}) VALUES ($1,$2,$3)`,
+        [id, v.fieldId, val],
+      );
+    }
+    return res.rowCount ?? 0;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Jadwal penyiangan (migrasi 0051)
 // ---------------------------------------------------------------------------
@@ -840,6 +1127,8 @@ export async function setWeedingSchedule(
  */
 export type SurveyAnswer = {
   fieldId: string;
+  /** Kode field (nama input di SurveyForm) -- dipakai mengisi ulang saat edit (B-21). */
+  code: string;
   section: string | null;
   label: string;
   fieldType: string;
@@ -849,9 +1138,12 @@ export type SurveyAnswer = {
 
 export type SurveySubmissionDetail = {
   id: string;
+  /** forms.id -- dipakai membangun tautan edit /survei/[formId]?editId=... (B-21). */
+  formId: string;
   formName: string;
   formModule: string;
   formVersion: number;
+  blockId: string | null;
   blockCode: string | null;
   estateName: string | null;
   submittedAt: string | null;
@@ -871,8 +1163,8 @@ export async function surveySubmissionDetail(
 ): Promise<SurveySubmissionDetail | null> {
   return withRls(ctx, async (client) => {
     const head = await client.query(
-      `SELECT ss.id, f.name AS form_name, f.module AS form_module, fv.version,
-              b.code AS block_code, e.name AS estate_name,
+      `SELECT ss.id, f.id AS form_id, f.name AS form_name, f.module AS form_module, fv.version,
+              ss.block_id::text AS block_id, b.code AS block_code, e.name AS estate_name,
               (ss.submitted_at AT TIME ZONE 'Asia/Jakarta')::date::text AS submitted_at,
               u.full_name AS submitted_by_name, ss.approval_status, ss.rejection_reason,
               ss.device_id,
@@ -896,7 +1188,7 @@ export async function surveySubmissionDetail(
     // nilai, pertanyaan kosong hilang dari layar dan hasil survei setengah
     // terisi terlihat seperti hasil yang lengkap.
     const vals = await client.query(
-      `SELECT ff.id AS field_id, ff.section_name, ff.label, ff.field_type::text AS field_type,
+      `SELECT ff.id AS field_id, ff.code, ff.section_name, ff.label, ff.field_type::text AS field_type,
               sv.value_text, sv.value_num, sv.value_bool, sv.value_date::text AS value_date,
               sv.value_json,
               CASE WHEN sv.value_geom IS NULL THEN NULL
@@ -936,6 +1228,7 @@ export async function surveySubmissionDetail(
       const value = kandidat.find((v) => v !== null && v !== "") ?? null;
       return {
         fieldId: String(r.field_id),
+        code: String(r.code),
         section: (r.section_name as string) ?? null,
         label: String(r.label),
         fieldType: String(r.field_type),
@@ -945,9 +1238,11 @@ export async function surveySubmissionDetail(
 
     return {
       id: String(h.id),
+      formId: String(h.form_id),
       formName: String(h.form_name),
       formModule: String(h.form_module),
       formVersion: Number(h.version),
+      blockId: (h.block_id as string) ?? null,
       blockCode: (h.block_code as string) ?? null,
       estateName: (h.estate_name as string) ?? null,
       submittedAt: (h.submitted_at as string) ?? null,

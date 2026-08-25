@@ -52,6 +52,7 @@ export default async function KesesuaianLahanPage() {
       subclass: r.subclass,
       assessedAt: r.assessedAt,
       approvalStatus: r.approvalStatus,
+      rejectionReason: r.rejectionReason,
       limiting: r.limiting,
       perChar,
       isDemo: (r.note ?? "").toLowerCase().includes("contoh"),
@@ -100,7 +101,7 @@ export default async function KesesuaianLahanPage() {
         <h2 className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-800">
           Riwayat Penilaian <span className="font-normal text-slate-500">— klik baris untuk melihat parameter</span>
         </h2>
-        <AssessmentHistory rows={historyRows} />
+        <AssessmentHistory rows={historyRows} canWrite={canWrite} />
       </section>
     </div>
   );

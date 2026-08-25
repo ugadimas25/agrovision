@@ -3,22 +3,36 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import { Loader2, Send, CircleAlert, CircleCheck } from "lucide-react";
-import { submitSurveyAction, type SurveyState } from "@/lib/actions/survey";
+import { submitSurveyAction, updateSurveySubmissionAction, type SurveyState } from "@/lib/actions/survey";
 import type { SurveyForm as FormSchema, SurveyField } from "@/lib/repo/operational";
 import { cn } from "@/lib/utils";
 
 const initial: SurveyState = { ok: false, message: "" };
 
-export function SurveyForm({ form, blocks }: { form: FormSchema; blocks: { value: string; label: string }[] }) {
-  const [state, action, pending] = useActionState(submitSurveyAction, initial);
+export function SurveyForm({
+  form,
+  blocks,
+  editId,
+  initialBlockId,
+  initialValues,
+}: {
+  form: FormSchema;
+  blocks: { value: string; label: string }[];
+  /** B-21: bila terisi, form ini memperbaiki hasil survei ditolak, bukan mengisi baru. */
+  editId?: string;
+  initialBlockId?: string | null;
+  /** Nilai jawaban lama, keyed field code -- dari surveySubmissionDetail(). */
+  initialValues?: Record<string, string>;
+}) {
+  const [state, action, pending] = useActionState(editId ? updateSurveySubmissionAction : submitSurveyAction, initial);
 
   if (state.submitted) {
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-center">
         <CircleCheck className="mx-auto h-8 w-8 text-emerald-600" />
         <p className="mt-2 text-sm font-medium text-emerald-800">{state.message}</p>
-        <Link href="/survei" className="mt-3 inline-block rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-sm text-emerald-700 hover:bg-emerald-100">
-          Kembali ke Survei
+        <Link href={editId ? `/survei/hasil/${editId}` : "/survei"} className="mt-3 inline-block rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-sm text-emerald-700 hover:bg-emerald-100">
+          {editId ? "Lihat hasil" : "Kembali ke Survei"}
         </Link>
       </div>
     );
@@ -36,6 +50,7 @@ export function SurveyForm({ form, blocks }: { form: FormSchema; blocks: { value
   return (
     <form action={action} className="space-y-5">
       <input type="hidden" name="formId" value={form.formId} />
+      {editId && <input type="hidden" name="id" value={editId} />}
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <label htmlFor="blockId" className="mb-1.5 block text-xs font-medium text-slate-500">Blok / plot yang disurvei</label>
@@ -43,7 +58,7 @@ export function SurveyForm({ form, blocks }: { form: FormSchema; blocks: { value
           id="blockId"
           name="blockId"
           required
-          defaultValue=""
+          defaultValue={initialBlockId ?? ""}
           className={cn("min-h-11 w-full max-w-md rounded-md border bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/30", state.fieldErrors?.blockId ? "border-red-300" : "border-slate-200")}
         >
           <option value="" disabled>Pilih blok...</option>
@@ -57,7 +72,7 @@ export function SurveyForm({ form, blocks }: { form: FormSchema; blocks: { value
           <h2 className="border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-sm font-semibold text-slate-800">{s.name}</h2>
           <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
             {s.fields.map((f) => (
-              <Field key={f.id} field={f} error={state.fieldErrors?.[f.code]} />
+              <Field key={f.id} field={f} error={state.fieldErrors?.[f.code]} defaultValue={initialValues?.[f.code]} />
             ))}
           </div>
         </section>
@@ -70,7 +85,7 @@ export function SurveyForm({ form, blocks }: { form: FormSchema; blocks: { value
           className="flex min-h-11 items-center justify-center gap-1.5 rounded-md bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          Kirim survei
+          {editId ? "Simpan perbaikan & ajukan ulang" : "Kirim survei"}
         </button>
         {state.message && !state.submitted && (
           <span className="flex items-center gap-1.5 text-sm text-red-700"><CircleAlert className="h-4 w-4" />{state.message}</span>
@@ -80,7 +95,7 @@ export function SurveyForm({ form, blocks }: { form: FormSchema; blocks: { value
   );
 }
 
-function Field({ field, error }: { field: SurveyField; error?: string }) {
+function Field({ field, error, defaultValue }: { field: SurveyField; error?: string; defaultValue?: string }) {
   const label = (
     <label htmlFor={field.code} className="mb-1.5 block text-xs font-medium text-slate-500">
       {field.label}{field.required && <span className="text-red-500"> *</span>}
@@ -90,28 +105,29 @@ function Field({ field, error }: { field: SurveyField; error?: string }) {
   const isComment = field.code.endsWith("_comment") || field.fieldType === "text";
   const wide = isComment ? "md:col-span-2" : "";
 
+  const dv = defaultValue ?? "";
   let input: React.ReactNode;
   if (field.fieldType === "single_choice") {
     input = (
-      <select id={field.code} name={field.code} defaultValue="" required={field.required} className={cls}>
+      <select id={field.code} name={field.code} defaultValue={dv} required={field.required} className={cls}>
         <option value="" disabled={field.required}>{field.required ? "Pilih..." : "— tidak dinilai —"}</option>
         {field.choices.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
     );
   } else if (field.fieldType === "yes_no") {
     input = (
-      <select id={field.code} name={field.code} defaultValue="" required={field.required} className={cls}>
+      <select id={field.code} name={field.code} defaultValue={dv} required={field.required} className={cls}>
         <option value="" disabled={field.required}>Pilih...</option>
         <option value="Ya">Ya</option>
         <option value="Tidak">Tidak</option>
       </select>
     );
   } else if (field.fieldType === "date") {
-    input = <input id={field.code} name={field.code} type="date" required={field.required} className={cls} />;
+    input = <input id={field.code} name={field.code} type="date" defaultValue={dv} required={field.required} className={cls} />;
   } else if (field.fieldType === "number") {
-    input = <input id={field.code} name={field.code} type="number" inputMode="decimal" step="any" required={field.required} className={cls} />;
+    input = <input id={field.code} name={field.code} type="number" inputMode="decimal" step="any" defaultValue={dv} required={field.required} className={cls} />;
   } else {
-    input = <textarea id={field.code} name={field.code} rows={2} required={field.required} className={cls} placeholder="Catatan (opsional)" />;
+    input = <textarea id={field.code} name={field.code} rows={2} defaultValue={dv} required={field.required} className={cls} placeholder="Catatan (opsional)" />;
   }
 
   return (

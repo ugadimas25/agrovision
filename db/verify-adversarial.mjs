@@ -145,7 +145,7 @@ async function run() {
 
   await as(U_CREATOR, 'creator', CA)
   const wr = await c.query(
-    `INSERT INTO app.weeding_records (block_id, weeded_on, method, created_by) VALUES ($1, now(), 'manual', $2) RETURNING id`,
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by) VALUES ($1, now(), 'manual', 1.5, $2) RETURNING id`,
     [A_BLK1, U_CREATOR])
   const W_AUDIT_ID = wr.rows[0].id
   await c.query(`UPDATE app.weeding_records SET approval_status = 'submitted' WHERE id = $1`, [W_AUDIT_ID])
@@ -421,6 +421,85 @@ async function run() {
   ok('app.users tetap tertutup tanpa konteks', r.rows[0].n === 0)
   r = await c.query(`SELECT count(*)::int n FROM app.session_companies($1)`, [U_APPROVER])
   ok('session_companies bekerja tanpa konteks', r.rows[0].n === 1)
+
+  console.log('\n=== B-23: creator hanya SELECT baris miliknya sendiri ===')
+  r = await c.query(`SELECT * FROM app.check_creator_scope_coverage()`)
+  ok('cakupan creator-scope bersih (tiap tabel role_split punya restrictive SELECT per-pembuat)', r.rows.length === 0,
+    r.rows.map(x => `${x.table_name}: ${x.issue}`).join(' | ') || 'bersih')
+
+  await as(U_ADMIN, 'super_admin', CA)
+  const wrOwn = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by)
+     VALUES ($1, now(), 'manual', 1, $2) RETURNING id`, [A_BLK1, U_CREATOR])
+  const wrOther = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by)
+     VALUES ($1, now(), 'manual', 2, $2) RETURNING id`, [A_BLK1, U_ADMIN])
+  await as(U_CREATOR, 'creator', CA)
+  r = await c.query(`SELECT id FROM app.weeding_records WHERE id IN ($1,$2)`, [wrOwn.rows[0].id, wrOther.rows[0].id])
+  ok('creator hanya melihat baris miliknya sendiri (1 dari 2)',
+    r.rows.length === 1 && r.rows[0].id === wrOwn.rows[0].id, `${r.rows.length} baris terlihat`)
+  await as(U_APPROVER, 'approver', CA)
+  r = await c.query(`SELECT id FROM app.weeding_records WHERE id IN ($1,$2)`, [wrOwn.rows[0].id, wrOther.rows[0].id])
+  ok('approver melihat kedua baris (tidak dibatasi per-pembuat)', r.rows.length === 2, `${r.rows.length} baris terlihat`)
+
+  console.log('\n=== B-25: kolom driver biaya wajib NOT NULL di DB ===')
+  await as(U_CREATOR, 'creator', CA)
+  await mustFail(c, 'weeding_records.area_ha NULL DITOLAK',
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, created_by) VALUES ($1, now(), 'manual', $2)`,
+    [A_BLK1, U_CREATOR], /null value|violates not-null/i)
+  await mustFail(c, 'pruning_records.tree_count NULL DITOLAK',
+    `INSERT INTO app.pruning_records (block_id, pruned_on, created_by) VALUES ($1, now(), $2)`,
+    [A_BLK1, U_CREATOR], /null value|violates not-null/i)
+  await mustFail(c, 'spraying_records.total_volume NULL DITOLAK',
+    `INSERT INTO app.spraying_records (block_id, sprayed_on, unit, created_by) VALUES ($1, now(), 'liter', $2)`,
+    [A_BLK1, U_CREATOR], /null value|violates not-null/i)
+  await mustFail(c, 'spraying_records.unit NULL DITOLAK',
+    `INSERT INTO app.spraying_records (block_id, sprayed_on, total_volume, created_by) VALUES ($1, now(), 5, $2)`,
+    [A_BLK1, U_CREATOR], /null value|violates not-null/i)
+  // land_preparations BUKAN NOT NULL polos -- CHECK bersyarat (status = 'not_started'
+  // membolehkan NULL, status lain mewajibkan angka). Kedua sisinya harus diuji,
+  // bukan cuma sisi "harus gagal" -- versi pertama uji ini cuma menembak status
+  // in_progress dan tidak pernah membuktikan not_started tetap boleh NULL.
+  await mustFail(c, 'land_preparations.effective_area_ha NULL saat status in_progress DITOLAK',
+    `INSERT INTO app.land_preparations (block_id, checked_at, status, created_by) VALUES ($1, now(), 'in_progress', $2)`,
+    [A_BLK1, U_CREATOR], /land_preparations_area_required_unless_not_started/i)
+  await c.query(`SAVEPOINT sp_lsa_notstarted`)
+  await c.query(
+    `INSERT INTO app.land_preparations (block_id, checked_at, status, created_by) VALUES ($1, now(), 'not_started', $2)`,
+    [A_BLK1, U_CREATOR])
+  ok('land_preparations.effective_area_ha NULL diizinkan saat status not_started', true)
+  await c.query(`ROLLBACK TO SAVEPOINT sp_lsa_notstarted`)
+
+  console.log('\n=== B-21: creator memperbaiki record ditolak miliknya sendiri, bukan milik orang lain ===')
+  await as(U_CREATOR, 'creator', CA)
+  const wrFix = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by)
+     VALUES ($1, now(), 'manual', 1, $2) RETURNING id`, [A_BLK1, U_CREATOR])
+  const WR_FIX_ID = wrFix.rows[0].id
+  await c.query(`UPDATE app.weeding_records SET approval_status = 'submitted' WHERE id = $1`, [WR_FIX_ID])
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(`SELECT app.decide_record('weeding_record', $1, 'rejected', 'perlu perbaikan')`, [WR_FIX_ID])
+
+  // Pola persis updateOpRecord: WHERE hanya mengulang syarat status; RLS
+  // (role_split + B-23) yang menegakkan kepemilikan sesungguhnya.
+  await as(U_CREATOR, 'creator', CA)
+  const editOwn = await c.query(
+    `UPDATE app.weeding_records SET area_ha = 9, approval_status = 'draft'
+      WHERE id = $1 AND approval_status IN ('draft','rejected')`, [WR_FIX_ID])
+  ok('creator bisa perbaiki record ditolak miliknya sendiri', editOwn.rowCount === 1, `${editOwn.rowCount} baris`)
+  r = await c.query(`SELECT area_ha, approval_status FROM app.weeding_records WHERE id = $1`, [WR_FIX_ID])
+  ok('nilai baru tersimpan dan status kembali draft',
+    Number(r.rows[0].area_ha) === 9 && r.rows[0].approval_status === 'draft')
+
+  await as(U_ADMIN, 'super_admin', CA)
+  const wrOther2 = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, approval_status, rejection_reason, created_by)
+     VALUES ($1, now(), 'manual', 1, 'rejected', 'x', $2) RETURNING id`, [A_BLK1, U_ADMIN])
+  await as(U_CREATOR, 'creator', CA)
+  const editOther = await c.query(
+    `UPDATE app.weeding_records SET area_ha = 99, approval_status = 'draft'
+      WHERE id = $1 AND approval_status IN ('draft','rejected')`, [wrOther2.rows[0].id])
+  ok('creator TIDAK bisa mengedit record ditolak milik orang lain', editOther.rowCount === 0, `${editOther.rowCount} baris`)
 
   await c.query('ROLLBACK')
   await c.end()

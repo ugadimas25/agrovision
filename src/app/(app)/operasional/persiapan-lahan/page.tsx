@@ -9,8 +9,9 @@ import { OpRecordTable } from "@/components/ui/OpRecordTable";
 import { searchBlockOptions } from "@/lib/repo/blocks";
 import { listOptions } from "@/lib/repo/master";
 import { listOpRecords } from "@/lib/repo/operational";
-import { createLandPrepAction } from "@/lib/actions/operational";
+import { createLandPrepAction, updateOpRecordAction } from "@/lib/actions/operational";
 import { PREP_STATUS } from "@/lib/labels";
+import type { Field } from "@/components/ui/OpRecordForm";
 
 export const metadata = { title: "Persiapan Lahan — AgroVision" };
 
@@ -33,29 +34,30 @@ export default async function Page() {
   ]);
   const canWrite = ["creator", "approver", "super_admin"].includes(ctx.session.role);
   const ready = canWrite && ctx.companyId && blocks.length > 0;
+  const fields: Field[] = [
+    { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
+    { kind: "text", name: "checkedAt", label: "Tanggal cek", type: "date", required: true },
+    { kind: "text", name: "soilPh", label: "pH tanah", type: "number", step: "0.1", min: "0", max: "14" },
+    { kind: "text", name: "holeCount", label: "Jumlah lubang tanam", type: "number", min: "0" },
+    { kind: "text", name: "effectiveAreaHa", label: "Area efektif (ha)", type: "number", step: "0.01", min: "0" },
+    { kind: "select", name: "plantingLayoutItemId", label: "Layout tanam", options: layouts },
+    { kind: "select", name: "status", label: "Status", options: STATUS, required: true },
+    { kind: "textarea", name: "note", label: "Catatan (opsional)" },
+  ];
 
   return (
     <div>
       <PageHeader title={t("nav.landprep")} subtitle={t("sub.landprep")} />
       {ready && (
         <div className="mb-5">
-          <OpRecordForm
-            title="Catat persiapan lahan"
-            action={createLandPrepAction}
-            fields={[
-              { kind: "select", name: "blockId", label: "Blok", options: blocks, required: true },
-              { kind: "text", name: "checkedAt", label: "Tanggal cek", type: "date", required: true },
-              { kind: "text", name: "soilPh", label: "pH tanah", type: "number", step: "0.1", min: "0", max: "14" },
-              { kind: "text", name: "holeCount", label: "Jumlah lubang tanam", type: "number", min: "0" },
-              { kind: "text", name: "effectiveAreaHa", label: "Area efektif (ha)", type: "number", step: "0.01", min: "0" },
-              { kind: "select", name: "plantingLayoutItemId", label: "Layout tanam", options: layouts },
-              { kind: "select", name: "status", label: "Status", options: STATUS, required: true },
-              { kind: "textarea", name: "note", label: "Catatan (opsional)" },
-            ]}
-          />
+          <OpRecordForm title="Catat persiapan lahan" action={createLandPrepAction} fields={fields} />
         </div>
       )}
-      <OpRecordTable rows={rows.rows} moduleKey="land_preparations" emptyIcon={Shovel} emptyTitle="Belum ada checklist persiapan lahan" canWrite={canWrite} />
+      <OpRecordTable
+        rows={rows.rows} moduleKey="land_preparations" emptyIcon={Shovel}
+        emptyTitle="Belum ada checklist persiapan lahan" canWrite={canWrite}
+        editFields={fields} updateAction={updateOpRecordAction}
+      />
     </div>
   );
 }
