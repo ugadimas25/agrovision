@@ -69,18 +69,61 @@ const newPassword = () => randomBytes(15).toString('base64url')
 // ---------------------------------------------------------------------------
 console.log(`\nIdentity Platform · proyek ${PROJECT} · mode ${APPLY ? 'APPLY' : 'DRY-RUN'}`)
 
+step(0, 'Koneksi ke Cloud SQL produksi')
+{
+  // Diperiksa PALING AWAL. Versi pertama skrip ini baru menyentuh database di
+  // langkah 4 -- setelah API diaktifkan dan API key dibuat -- sehingga proxy
+  // yang belum jalan muncul sebagai stack trace ECONNREFUSED di tengah jalan,
+  // dengan separuh pekerjaan sudah terlanjur dikerjakan.
+  const probe = new pg.Client({ connectionString: DB, connectionTimeoutMillis: 5000 })
+  try {
+    await probe.connect(); await probe.query('SELECT 1'); await probe.end()
+    console.log('   tersambung')
+  } catch (e) {
+    console.error(`   TIDAK tersambung: ${e.message}`)
+    console.error('   Jalankan cloud-sql-proxy lebih dulu di terminal lain:')
+    console.error(`     cloud-sql-proxy --port 55435 ${PROJECT}:asia-southeast2:agrovision-db`)
+    console.error('   Belum punya binernya? brew install cloud-sql-proxy')
+    process.exit(1)
+  }
+}
+
 step(1, 'API identitytoolkit')
 const enabled = gcloud('services', 'list', '--enabled', `--project=${PROJECT}`,
   '--filter=config.name:identitytoolkit', '--format=value(config.name)')
 if (enabled) console.log('   sudah aktif')
 else if (!APPLY) plan('gcloud services enable identitytoolkit.googleapis.com')
-else { gcloud('services', 'enable', 'identitytoolkit.googleapis.com', `--project=${PROJECT}`); console.log('   diaktifkan') }
+else {
+  gcloud('services', 'enable', 'identitytoolkit.googleapis.com', `--project=${PROJECT}`)
+  console.log('   diaktifkan')
+  // API yang baru diaktifkan belum langsung melayani: panggilan berikutnya
+  // menjawab 403 "has not been used in project ... before or it is disabled"
+  // selama propagasi. Ditunggu di sini, bukan dibiarkan jadi kegagalan palsu.
+  process.stdout.write('   menunggu propagasi')
+  for (let i = 0; i < 24; i++) {
+    const probe = await api('GET', `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config`)
+    if (probe.status !== 403) { console.log(' — siap'); break }
+    process.stdout.write('.')
+    await new Promise(r => setTimeout(r, 5000))
+  }
+}
 
 step(2, 'Inisialisasi Identity Platform + provider email/password')
 let cfg = await api('GET', `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config`)
-if (cfg.status === 404 || (!cfg.ok && /not.*initialized/i.test(JSON.stringify(cfg.json)))) {
+const notInitialized = cfg.status === 404 || /CONFIGURATION_NOT_FOUND/.test(JSON.stringify(cfg.json))
+if (notInitialized) {
   if (!APPLY) plan('initializeAuth (Identity Platform belum pernah dinyalakan)')
-  else { await api('POST', `https://identitytoolkit.googleapis.com/v2/projects/${PROJECT}/identityPlatform:initializeAuth`, {}); console.log('   diinisialisasi') }
+  else {
+    const init = await api('POST', `https://identitytoolkit.googleapis.com/v2/projects/${PROJECT}/identityPlatform:initializeAuth`, {})
+    // Hasilnya DIPERIKSA. Versi pertama mencetak "diinisialisasi" tanpa melihat
+    // balasan, jadi kegagalan 403 terbaca sebagai sukses -- dan barulah
+    // ketahuan jauh di belakang saat akun tidak bisa dibuat.
+    if (!init.ok && !/ALREADY_EXISTS/i.test(JSON.stringify(init.json))) {
+      console.error('   GAGAL initializeAuth:', JSON.stringify(init.json).slice(0, 300)); process.exit(1)
+    }
+    console.log('   diinisialisasi')
+    cfg = await api('GET', `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config`)
+  }
 } else if (!cfg.ok) {
   console.error('   gagal membaca config:', JSON.stringify(cfg.json).slice(0, 300)); process.exit(1)
 }
@@ -88,10 +131,16 @@ const emailOn = cfg.json?.signIn?.email?.enabled === true
 if (emailOn) console.log('   provider email/password sudah aktif')
 else if (!APPLY) plan('aktifkan signIn.email (passwordRequired = true)')
 else {
-  const r = await api('PATCH',
-    `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config?updateMask=signIn.email`,
-    { signIn: { email: { enabled: true, passwordRequired: true } } })
-  console.log(r.ok ? '   provider email/password diaktifkan' : `   GAGAL: ${JSON.stringify(r.json).slice(0,200)}`)
+  let done = false
+  for (let i = 0; i < 6 && !done; i++) {
+    const r = await api('PATCH',
+      `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config?updateMask=signIn.email`,
+      { signIn: { email: { enabled: true, passwordRequired: true } } })
+    if (r.ok) { done = true; break }
+    if (i === 5) { console.error('   GAGAL:', JSON.stringify(r.json).slice(0, 300)); process.exit(1) }
+    await new Promise(res => setTimeout(res, 5000))
+  }
+  console.log('   provider email/password diaktifkan')
 }
 
 step(3, 'Web API key (dikirim ke peramban -- publik menurut desain)')
