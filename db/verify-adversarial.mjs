@@ -21,6 +21,7 @@ const U_APPROVER = '33333333-0000-0000-0000-000000000002'
 const U_VIEWER = '33333333-0000-0000-0000-000000000003'
 const U_ADMIN = '33333333-0000-0000-0000-000000000004'
 const U_TENANT_B = '33333333-0000-0000-0000-000000000005'
+const U_AGRO = '33333333-0000-0000-0000-000000000006'   // 0058: penyusun RAB, BUKAN pencatat realisasi
 
 let pass = 0, fail = 0
 const ok = (n, c, extra = '') => { c ? (pass++, console.log(`  PASS  ${n}${extra ? ' — ' + extra : ''}`)) : (fail++, console.log(`  FAIL  ${n}${extra ? ' — ' + extra : ''}`)) }
@@ -105,10 +106,11 @@ async function setup() {
       ($2,$6,'idp|ap','ap@a.co','Approver A','approver'),
       ($3,$6,'idp|vw','vw@a.co','Viewer A','viewer'),
       ($4,$6,'idp|ad','ad@a.co','Admin A','super_admin'),
-      ($5,$7,'idp|tb','tb@b.co','User B','creator')`,
-    [U_CREATOR, U_APPROVER, U_VIEWER, U_ADMIN, U_TENANT_B, CA, CB])
-  await q(`INSERT INTO app.user_company_access (user_id,company_id) VALUES ($1,$5),($2,$5),($3,$5),($4,$5),($6,$7) ON CONFLICT DO NOTHING`,
-    [U_CREATOR, U_APPROVER, U_VIEWER, U_ADMIN, CA, U_TENANT_B, CB])
+      ($5,$7,'idp|tb','tb@b.co','User B','creator'),
+      ($8,$6,'idp|ag','ag@a.co','Agronomis A','agronomist')`,
+    [U_CREATOR, U_APPROVER, U_VIEWER, U_ADMIN, U_TENANT_B, CA, CB, U_AGRO])
+  await q(`INSERT INTO app.user_company_access (user_id,company_id) VALUES ($1,$5),($2,$5),($3,$5),($4,$5),($6,$7),($8,$5) ON CONFLICT DO NOTHING`,
+    [U_CREATOR, U_APPROVER, U_VIEWER, U_ADMIN, CA, U_TENANT_B, CB, U_AGRO])
   await q(`INSERT INTO app.user_estate_access VALUES ($1,$2)`, [U_CREATOR, EA])
 
   const g = (lon, lat) => `ST_Multi(ST_GeomFromText('POLYGON((${lon} ${lat},${lon + 0.009} ${lat},${lon + 0.009} ${lat - 0.009},${lon} ${lat - 0.009},${lon} ${lat}))',4326))`
@@ -194,8 +196,8 @@ async function run() {
   await as(U_APPROVER, 'approver', CA)
   r = await c.query(`SELECT count(*)::int n FROM app.blocks WHERE company_id=$1`, [CB])
   ok('blok tenant B tak terlihat', r.rows[0].n === 0)
-  r = await c.query(`SELECT count(*)::int n FROM app.users`)
-  ok('user tenant B tak terlihat', r.rows[0].n === 4, `${r.rows[0].n} user (4 milik A)`)
+  r = await c.query(`SELECT count(*)::int n FROM app.users WHERE company_id = $1`, [CB])
+  ok('user tenant B tak terlihat', r.rows[0].n === 0, `${r.rows[0].n} user tenant B bocor`)
   r = await c.query(`SELECT count(*)::int n FROM app.companies`)
   ok('company tenant B tak terlihat', r.rows[0].n === 1)
 
@@ -608,6 +610,68 @@ async function run() {
   r = await c.query(`SELECT item FROM app.check_production_readiness() WHERE blocking AND item LIKE 'login stub%'`)
   ok('gerbang produksi bersih dari penghalang login saat saklar mati',
     r.rows.length === 0, r.rows.map(x => x.item).join(' | ') || 'bersih')
+
+  // =========================================================================
+  // 0058/0059: role `agronomist` menyusun RAB, TIDAK mencatat realisasi
+  //
+  // Policy *_viewer_readonly dulu berbunyi "siapa pun KECUALI viewer boleh
+  // menulis" -- daftar larangan, bukan daftar izin. Artinya setiap role baru
+  // otomatis dapat hak tulis ke seluruh tabel operasional begitu ditambahkan
+  // ke enum. Bagian ini membuktikan lubang itu tertutup untuk agronomist, dan
+  // -- sama pentingnya -- membuktikan ia tidak jadi buta.
+  // =========================================================================
+  console.log('\n=== 0058/0059: agronomist hanya membaca di luar RAB ===')
+  await as(U_AGRO, 'agronomist', CA)
+
+  await mustFail(c, 'agronomist TIDAK bisa mencatat penyiangan',
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by)
+     VALUES ($1, now(), 'manual', 1, $2)`, [A_BLK1, U_AGRO], /row-level security|permission denied/i)
+
+  await mustFail(c, 'agronomist TIDAK bisa mengajukan pengeluaran',
+    `INSERT INTO app.cost_transactions (company_id, block_id, cost_category_id, cost_center_id,
+       fiscal_period_id, transaction_date, amount_idr, created_by)
+     VALUES ($1,$2,$3,$4,$5, now(), 1000, $6)`,
+    [CA, A_BLK1, CAT, CC, PER, U_AGRO], /row-level security|permission denied/i)
+
+  await mustFail(c, 'agronomist TIDAK bisa mengubah master data',
+    `UPDATE app.master_items SET name = 'diubah agronomis' WHERE id = $1`, [CAT],
+    /row-level security|permission denied/i)
+
+  await mustFail(c, 'agronomist TIDAK bisa membuat blok',
+    `INSERT INTO app.blocks (company_id, estate_id, code, boundary_source)
+     VALUES ($1,$2,'AGRO-BLK','gps_survey')`, [CA, EA], /row-level security|permission denied/i)
+
+  // decide_record() tidak melempar untuk role yang tidak berhak: policy
+  // RESTRICTIVE role_split membuat barisnya TIDAK TERLIHAT untuk UPDATE, jadi
+  // hasilnya nol baris -- pola yang sama dengan "creator tidak bisa mengubah
+  // uang yang sudah disetujui". Yang diuji karena itu bukan exception-nya,
+  // melainkan bahwa tidak ada yang berubah.
+  const wrSebelum = await c.query(`SELECT approval_status FROM app.weeding_records WHERE id = $1`, [WR_FIX_ID])
+  const putusan = await c.query(`SELECT app.decide_record('weeding_record', $1, 'approved', NULL) AS n`, [WR_FIX_ID])
+  const wrSesudah = await c.query(`SELECT approval_status FROM app.weeding_records WHERE id = $1`, [WR_FIX_ID])
+  ok('agronomist TIDAK bisa memutuskan approval (nol baris, status tak berubah)',
+    putusan.rows[0].n === 0 && wrSesudah.rows[0].approval_status === wrSebelum.rows[0].approval_status,
+    `n=${putusan.rows[0].n}, status ${wrSebelum.rows[0].approval_status} -> ${wrSesudah.rows[0].approval_status}`)
+
+  // Arah sebaliknya: pembatasan tidak boleh kebablasan jadi kebutaan. Agronomis
+  // menyusun RAB dari kondisi kebun -- ia HARUS bisa membaca blok & kategori.
+  r = await c.query(`SELECT count(*)::int n FROM app.blocks WHERE company_id = $1`, [CA])
+  ok('agronomist TETAP bisa membaca blok entitasnya', r.rows[0].n > 0, `${r.rows[0].n} blok`)
+  r = await c.query(`SELECT count(*)::int n FROM app.master_items WHERE id = $1`, [CAT])
+  ok('agronomist TETAP bisa membaca kategori biaya', r.rows[0].n === 1)
+
+  // Role yang memang menulis tidak boleh ikut terkunci oleh predikat baru.
+  await as(U_CREATOR, 'creator', CA)
+  const wrAfter = await c.query(
+    `INSERT INTO app.weeding_records (block_id, weeded_on, method, area_ha, created_by)
+     VALUES ($1, now(), 'manual', 2, $2) RETURNING id`, [A_BLK1, U_CREATOR])
+  ok('creator TETAP bisa menulis setelah predikat policy diganti', wrAfter.rowCount === 1)
+
+  r = await c.query(`SELECT app.role_may_write_records() AS boleh`)
+  ok('role_may_write_records() memakai daftar IZIN, bukan daftar larangan', r.rows[0].boleh === true)
+  await as(U_VIEWER, 'viewer', CA)
+  r = await c.query(`SELECT app.role_may_write_records() AS boleh`)
+  ok('viewer tetap ditolak oleh fungsi yang sama', r.rows[0].boleh === false)
 
   await c.query('ROLLBACK')
   await c.end()

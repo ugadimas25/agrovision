@@ -60,7 +60,9 @@ if (process.env.NODE_ENV !== "production") globalThis.__agrovisionPool = pool;
 
 export type RlsContext = {
   userId: string;
-  /** Nilai app_role: creator | approver | super_admin | viewer */
+  /** Nilai app_role: creator | approver | super_admin | viewer | agronomist.
+   *  agronomist menyusun RAB dan HANYA MEMBACA tabel operasional -- ditegakkan
+   *  app.role_may_write_records() (migrasi 0059), bukan oleh lapisan ini. */
   role: string;
   /** Entitas yang sedang dipilih. null = mode "semua entitas saya". */
   companyId: string | null;
