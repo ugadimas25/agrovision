@@ -33,7 +33,13 @@ Keluaran: tabel hasil uji terisi penuh + daftar bug yang langsung bisa dikerjaka
 https://agrovision-393569486275.asia-southeast2.run.app
 ```
 
-**Akun uji** — login tanpa password, cukup ketik email:
+**Akun uji** — sejak B-27, login **butuh kata sandi**. Akunnya ada di Identity
+Platform; kata sandinya dikirim terpisah oleh Dimas (lewat password manager /
+pesan langsung) dan **tidak pernah ditulis di repo ini**.
+
+Alamat `@demo.invalid` sengaja tidak bisa menerima email, jadi **tidak ada tombol
+"lupa kata sandi"** — kalau kata sandinya hilang, akunnya dibuat ulang. Minta ke
+Dimas, jangan mencoba reset sendiri.
 
 | Email | Nama | Role |
 |---|---|---|
