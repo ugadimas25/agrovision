@@ -47,15 +47,23 @@ const initial: ActionState = { ok: false, message: "" };
  * sort_order sembarangan akan tetap tergabung benar dengan cara ini.
  */
 function groupHierarchical(items: Item[]): { parent: Item; children: Item[] }[] {
-  const topLevel = items.filter((it) => it.parentId === null);
+  const visible = new Set(items.map((it) => it.id));
+  // Yatim -- parentId menunjuk baris yang TIDAK ikut terlihat (mis. induknya
+  // milik entitas lain; parent_id tidak dibatasi satu entitas di 0015_master)
+  // -- diangkat jadi baris tingkat atas, BUKAN dibuang. Baris yang hilang dari
+  // layar ini tidak bisa diedit/dinonaktifkan lagi, dan hilangnya terbaca
+  // sebagai "belum ada data".
+  const isTop = (it: Item) => it.parentId === null || !visible.has(it.parentId);
+
   const byParent = new Map<string, Item[]>();
   for (const it of items) {
-    if (it.parentId === null) continue;
-    const list = byParent.get(it.parentId) ?? [];
+    const pid = it.parentId;
+    if (pid === null || !visible.has(pid)) continue;
+    const list = byParent.get(pid) ?? [];
     list.push(it);
-    byParent.set(it.parentId, list);
+    byParent.set(pid, list);
   }
-  return topLevel.map((parent) => ({ parent, children: byParent.get(parent.id) ?? [] }));
+  return items.filter(isTop).map((parent) => ({ parent, children: byParent.get(parent.id) ?? [] }));
 }
 
 export function MasterDataManager({
