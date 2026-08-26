@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useRef } from "react";
 import { Check, X, Loader2, CircleAlert } from "lucide-react";
 import { decideExpenditureAction, type ActionState } from "@/lib/actions/costing";
 import { cn } from "@/lib/utils";
@@ -19,17 +19,26 @@ const initial: ActionState = { ok: false, message: "" };
  * bukan lagi <details> inline. "Setujui" TETAP tombol langsung tanpa modal --
  * tidak ada field yang perlu diisi, jadi menambah pop-up di situ hanya klik
  * ekstra tanpa manfaat.
+ *
+ * SATU `state` (satu useActionState) dipakai BERSAMA oleh form Setujui dan
+ * Tolak -- review @dimasperceka-se di PR #44 menemukan dua akibatnya:
+ *
+ * 1. TIDAK ADA lagi efek yang membuka modal otomatis saat state berubah.
+ *    Efek lama membuka "Tolak pengajuan" untuk SETIAP galat, termasuk galat
+ *    dari percobaan Setujui (race: dua approver, satu sudah memutuskan lebih
+ *    dulu) -- pop-up Tolak yang muncul sendiri setelah percobaan SETUJU
+ *    mengundang salah klik ke arah berlawanan. Efeknya juga tidak
+ *    diperlukan: modal yang sedang terbuka tidak tertutup oleh submit
+ *    Server Action (tidak ada `method="dialog"`), jadi setelah penolakan
+ *    yang gagal modalnya memang masih terbuka apa adanya.
+ * 2. Galat non-field (mis. baris sudah diputuskan orang lain) ditampilkan
+ *    di footer modal juga, bukan cuma di baris tabel -- baris tabel
+ *    tertutup backdrop selama modal terbuka, jadi tanpa ini pengguna
+ *    melihat modal diam tanpa penjelasan.
  */
 export function DecisionForm({ moduleKey, id }: { moduleKey: string; id: string }) {
   const [state, formAction, pending] = useActionState(decideExpenditureAction, initial);
   const dialogRef = useRef<HTMLDialogElement>(null);
-
-  // Galat (termasuk dari percobaan Tolak yang gagal) tetap membuka modal
-  // otomatis lagi, sama seperti <details open> sebelumnya -- pesannya
-  // menempel pada form yang gagal, bukan melayang tak jelas milik siapa.
-  useEffect(() => {
-    if (state.message && !state.ok) dialogRef.current?.showModal();
-  }, [state.message, state.ok]);
 
   if (state.ok) {
     return (
@@ -121,6 +130,16 @@ export function DecisionForm({ moduleKey, id }: { moduleKey: string; id: string 
             </label>
 
             <div className="mt-2 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+              {/* Galat non-field (mis. baris sudah diputuskan orang lain) --
+                  baris tabel yang biasanya menampilkan state.message tertutup
+                  backdrop selama modal ini terbuka, jadi ditampilkan juga di
+                  sini. Pola sama dengan #40/#41/#43. */}
+              {state.message && !state.ok && !state.fieldErrors?.reason && (
+                <p role="status" className="mr-auto flex items-center gap-1 text-xs leading-snug text-red-600">
+                  <CircleAlert className="h-3.5 w-3.5 shrink-0" />
+                  {state.message}
+                </p>
+              )}
               <button
                 type="button"
                 onClick={() => dialogRef.current?.close()}
