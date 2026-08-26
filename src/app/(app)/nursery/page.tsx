@@ -40,7 +40,7 @@ export default async function Page() {
   const inspFields: Field[] = [
     {
       kind: "select", name: "seedBatchId", label: "Batch bibit", options: batches, required: true,
-      hint: "Jenis/varietas bibit dirujuk dari Master Data (K-05) — di sini hanya memilih, bukan membuat.",
+      hint: "Jenis/varietas bibit dirujuk dari Konfigurasi (K-05) — di sini hanya memilih, bukan membuat.",
     },
     { kind: "text", name: "inspectedOn", label: "Tanggal inspeksi", type: "date", required: true },
     {
@@ -65,13 +65,13 @@ export default async function Page() {
             <EmptyState
               icon={Sprout}
               title="Belum ada batch bibit terdaftar"
-              description="Sesuai keputusan K-05, jenis/varietas bibit dikelola super_admin lewat Master Data — form inspeksi hanya memilih batch yang sudah ada, tidak membuat jenis bibit baru. Hubungi super_admin untuk mendaftarkan batch."
+              description="Sesuai keputusan K-05, jenis/varietas bibit dikelola super_admin lewat Konfigurasi — form inspeksi hanya memilih batch yang sudah ada, tidak membuat jenis bibit baru. Hubungi super_admin untuk mendaftarkan batch."
               action={
                 <Link
                   href="/pengaturan/master-data"
                   className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
                 >
-                  Buka Pengaturan › Master Data
+                  Buka Pengaturan › Konfigurasi
                 </Link>
               }
             />

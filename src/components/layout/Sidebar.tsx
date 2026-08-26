@@ -86,6 +86,10 @@ const GROUPS: Group[] = [
       { href: "/operasional/kesesuaian-lahan", key: "nav.suitability", icon: Compass, ready: true },
       { href: "/operasional/persiapan-lahan", key: "nav.landprep", icon: Shovel, ready: true },
       { href: "/nursery", key: "nav.nursery", icon: Sprout, ready: true },
+      // Rapat Fadli 26 Agu 2026: aktivitas TANAM belum pernah ter-record
+      // padahal ada biayanya (tenaga kerja + transport bibit ke lahan).
+      // Urutannya sengaja setelah Pembibitan: bibit disemai dulu, baru ditanam.
+      { href: "/operasional/penanaman", key: "nav.planting", icon: Sprout, ready: false },
     ],
   },
   {
@@ -97,13 +101,6 @@ const GROUPS: Group[] = [
       { href: "/aktivitas/spraying", key: "nav.spraying", icon: SprayCan, ready: true },
       { href: "/aktivitas/panen", key: "nav.harvesting", icon: Wheat, ready: true },
       { href: "/survei", key: "nav.survey", icon: ClipboardList, ready: true },
-    ],
-  },
-  {
-    key: "nav.group.agriinput",
-    items: [
-      { href: "/agri-input/chemical", key: "nav.chemical", icon: FlaskConical, ready: true },
-      { href: "/agri-input/equipment", key: "nav.equipment", icon: Wrench, ready: true },
     ],
   },
   {
@@ -119,6 +116,12 @@ const GROUPS: Group[] = [
   {
     key: "nav.group.accounting",
     items: [
+      // Rapat Fadli 26 Agu 2026: RAB disusun agronomis SEBELUM anggaran ada.
+      // Ditaruh paling atas karena urutannya memang mendahului yang lain --
+      // rencana → master anggaran → realisasi. `ready: false` sampai modulnya
+      // ada; menu yang menjanjikan halaman yang belum jadi lebih buruk
+      // daripada menu yang mengaku belum jadi.
+      { href: "/costing/rencana-anggaran", key: "nav.budgetplan", icon: ClipboardList, ready: false },
       { href: "/costing/refleksi", key: "nav.reflection", icon: Calculator, ready: true },
       { href: "/costing/pengeluaran", key: "nav.expenditure", icon: Wallet, ready: true },
       { href: "/costing/pendapatan", key: "nav.revenue", icon: TrendingUp, ready: true },
@@ -137,9 +140,17 @@ const GROUPS: Group[] = [
   {
     key: "nav.group.settings",
     items: [
-      // QA A-05 (lulus): Master Data khusus super_admin. Sama dengan gate route
-      // di src/app/(app)/pengaturan/master-data/page.tsx.
+      // QA A-05 (lulus): halaman ini khusus super_admin. Sama dengan gate route
+      // di src/app/(app)/pengaturan/master-data/page.tsx. Labelnya berubah jadi
+      // "Konfigurasi" (rapat Fadli 26 Agu 2026); ROUTE-nya sengaja tidak ikut
+      // diganti -- tautan yang sudah beredar dan scripts/at-verify.mjs memakai
+      // /pengaturan/master-data, dan mengganti alamat bukan bagian dari
+      // keputusan rapat itu.
       { href: "/pengaturan/master-data", key: "nav.masterdata", icon: Database, ready: true, roles: SUPER_ADMIN_SAJA },
+      // Agri-Input tidak lagi jadi grup sendiri: isinya katalog (jenis pupuk,
+      // ukuran, alat), bukan aktivitas harian, jadi tempatnya di Pengaturan.
+      { href: "/agri-input/chemical", key: "nav.chemical", icon: FlaskConical, ready: true },
+      { href: "/agri-input/equipment", key: "nav.equipment", icon: Wrench, ready: true },
       // Mengikuti gate route di src/app/(app)/pengguna/page.tsx.
       { href: "/pengguna", key: "nav.users", icon: Users, ready: true, roles: SUPER_ADMIN_APPROVER },
     ],
