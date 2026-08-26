@@ -5,8 +5,8 @@
 | **Assignee** | Ridwan Nulloh (`ridwannulloh`) |
 | **Reviewer** | @ugadimas25 |
 | **Direfine** | 24 Agustus 2026, tiket baru (B-28–B-33, Sprint 3B) ditambah 25 Agustus — seluruh status di bawah **diverifikasi langsung ke kode & database**, bukan disalin dari transkrip meeting |
-| **Progres Sprint 3B** | 26 Agustus 2026 00:30 WIB — **kode selesai untuk keenam tiket** (B-28–B-33). PR #37 (B-28, milik Dimas) sudah **merged**; 6 PR lain (#39–#44) masih terbuka menunggu review @ugadimas25. Detail nomor PR, tautan, dan datetime per tiket ada di bagian [B-28](#b-28)–[B-33](#b-33) di bawah dan tabel [Ringkasan](#ringkasan) |
-| **Total estimasi tersisa** | ± 16,5 hari kerja (naik dari ± 12,5 — Sprint 3B baru dari walkthrough client; lihat [Ringkasan](#ringkasan)) |
+| **Progres keseluruhan** | 26 Agustus 2026, ~11:15 WIB — **Sprint A ✅ selesai** (4/4 tiket merged). **Sprint 3 setengah selesai** (2/4 tiket; B-11/B-12 belum dikerjakan, B-9 milik Dimas). **Sprint 3B kode selesai** (6/6 tiket): B-28 sudah merged + fix-nya disetujui, lima tiket lain (B-29–B-33) sudah direview Dimas & semua perbaikannya sudah didorong, menunggu review ulang/merge. **Sprint 4 belum disentuh sama sekali.** Progres per sprint ada di bawah tiap header `# SPRINT ...`, detail per tiket di [Ringkasan](#ringkasan) |
+| **Total estimasi tersisa** | **± 6 hari kerja** yang genuinely belum dikerjakan: **B-11** (1 hari), **B-12** (0,5 hari, ditunda), **Sprint 4 penuh** (± 4 hari), **B-26** (0,5 hari). Sprint A & Sprint 3B (± 8,5 hari di estimasi awal) **sudah dikerjakan** — kode selesai/merged, tinggal menunggu merge PR terakhir; rincian di [Ringkasan](#ringkasan) |
 | **Aturan** | Satu tiket = satu branch = satu PR, wajib approval @ugadimas25 sebelum merge |
 
 Fokus: perbaikan alur approval, konsistensi angka, ketahanan data, kebersihan skema, dan kesiapan operasional.
@@ -148,6 +148,8 @@ Ringkas saja, supaya kamu tidak membuka tiket yang sudah tutup. Kalau perlu deta
 
 # SPRINT A · Sisa perbaikan alur approval (± 4,5 hari) — PRIORITAS TERTINGGI
 
+> **Progres (26 Agustus 2026):** ✅ **Sprint ini selesai** — keempat tiket sudah merged ke `main`. B-21 + B-23 + B-25 lewat satu migrasi `0053` sesuai rencana ([PR #33](https://github.com/ugadimas25/agrovision/pull/33), merged 25 Agustus 2026 11:47 WIB); B-22 menyusul ([PR #36](https://github.com/ugadimas25/agrovision/pull/36), merged 25 Agustus 2026 22:59 WIB). Body tiket di bawah ini masih menuliskan kondisi **SEBELUM** dikerjakan — sengaja dibiarkan sebagai riwayat/rujukan pola implementasi, checklist "Selesai bila" per tiket belum dicentang balik satu per satu. Anggap statusnya sudah tercermin di baris ini dan di tabel [Ringkasan](#ringkasan).
+
 B-20 sudah selesai, jadi akar masalah angka sudah tertutup. Yang tersisa di sprint ini soal **hak akses, kelengkapan data, dan akuntabilitas** — dan dua di antaranya masih menahan QA.
 
 <a id="b-21"></a>
@@ -267,6 +269,14 @@ Ini penting karena biaya operasional dihitung **volume × tarif**: volume kosong
 ---
 
 # SPRINT 3 · Kelengkapan jejak & kebersihan skema (± 3,5 hari)
+
+> **Progres (26 Agustus 2026):** 2 dari 4 tiket aktif sudah selesai, 2 belum dikerjakan.
+> - ✅ **B-8** (jejak audit) — [PR #32](https://github.com/ugadimas25/agrovision/pull/32), merged 24 Agustus 2026 19:23 WIB.
+> - ✅ **B-10** (drop kolom `users.role`) — [PR #35](https://github.com/ugadimas25/agrovision/pull/35), merged 25 Agustus 2026 22:30 WIB.
+> - 🟡 **B-19** (database/schema bersih untuk pengujian) — separuh: replika lokal (`db-staging`, [PR #34](https://github.com/ugadimas25/agrovision/pull/34)) sudah ada; bagian cloud/staging environment menyatu dengan **B-18** (Sprint 4, belum dikerjakan).
+> - ⬜ **B-11** (tabel approval berjenjang mati) — **belum dikerjakan**. `approval_requests`/`approval_steps` masih ada di skema (dikonfirmasi langsung ke database 26 Agustus 2026). Sebelumnya menunggu B-22 merge — **B-22 sudah merge** (lihat Sprint A di atas), jadi tiket ini sekarang tidak lagi diblokir apa pun.
+> - ⬜ **B-12** (status yang tak pernah dipakai) — ditunda, tidak diprioritaskan.
+> - ➡️ **B-9** — dipindah ke Dimas (AI-51), bukan bagian pekerjaanmu.
 
 <a id="b-8"></a>
 ## B-8 · Jejak audit belum menyeluruh
@@ -397,20 +407,20 @@ Kalau dibuka: buang dari enum & label, **atau** implementasikan alurnya. Jangan 
 
 Temuan dari walkthrough dengan client (25 Agustus), plus audit menyeluruh (`grep -rl "<details" src/`) yang menyusul setelahnya untuk menangkap tempat lain dengan pola yang sama. Sebagian besar tiket di sini mengikuti pola yang sudah terbukti di B-21: editor `<details>` inline yang lama (baris tabel melar ke bawah saat diklik) diganti pop-up modal (`src/components/ui/OpRecordEditor.tsx` — dialog native, `m-auto` untuk penengahan karena preflight Tailwind menghapus margin bawaan browser, sudah dipakai 9 modul operasional). Setelah B-32, `OpRecordEditor.tsx` jadi **standar tunggal** aplikasi ini untuk "edit baris existing" — editor baru berikutnya rujuk ke situ, bukan bikin pola `<details>` baru.
 
-> **Progres (26 Agustus 2026 00:30 WIB):** kode utuh untuk keenam tiket sudah selesai dan lolos verifikasi (`lint` 0 error, `tsc --noEmit` bersih, `build` sukses, `at:verify` 149/0 di baseline bersih untuk tiap PR). PR #37 (B-28, milik Dimas) sudah **merged**; **6 PR lain (#39–#44) masih menunggu review** @ugadimas25. Status & tautan PR per tiket ada di bawah masing-masing judul.
+> **Progres (26 Agustus 2026, ~11:15 WIB):** kode utuh untuk keenam tiket selesai dan lolos verifikasi. PR #37 (B-28, milik Dimas) sudah **merged**; PR #39 (fix gating B-28) sudah **disetujui** setelah satu putaran review. PR #40/#41/#43/#44 masing-masing dapat review dari Dimas (isinya di bawah judul tiket masing-masing) — perbaikannya sudah didorong dan **review ulang sudah diminta**. PR #42 juga sudah direview & diperbaiki (satu temuan langsung diterapkan reviewer lewat suggestion-commit, satu lagi diperbaiki manual). Belum ada yang di-merge selain #37/#39.
 >
 > B-28 berbeda dari lima lainnya: implementasinya **tabrakan dengan pekerjaan Dimas** yang merge duluan (PR #37) sambil dikerjakan paralel — lihat detail di bawah judul B-28.
 
 ### Ringkas status 6 tiket
 
-| Tiket | Cabang | PR | Status | Dibuka (WIB) |
-|---|---|---|---|---|
-| [B-28](#b-28) — Badge Inbox Approval | `feat/inbox-badge` → ditutup, digantikan Dimas | [#37](https://github.com/ugadimas25/agrovision/pull/37) (Dimas) + [#39](https://github.com/ugadimas25/agrovision/pull/39) (fix gating) | ✅ #37 merged · 🟡 #39 menunggu review | #37: 25 Agu 22:44 (merged 23:15) · #39: 25 Agu 23:47 |
-| [B-32](#b-32) — ExpenditureEditor & OrganicTracker → modal | `fix/row-editor-modal-remaining` | [#40](https://github.com/ugadimas25/agrovision/pull/40) | 🟡 Menunggu review | 25 Agu 23:57 |
-| [B-29](#b-29) — Master Data → modal + border Nonaktifkan | `fix/master-data-editor-modal` | [#41](https://github.com/ugadimas25/agrovision/pull/41) | 🟡 Menunggu review | 26 Agu 00:02 |
-| [B-30](#b-30) — Kategori Biaya, pengelompokan induk/turunan | `fix/cost-category-hierarchy-display` | [#42](https://github.com/ugadimas25/agrovision/pull/42) | 🟡 Menunggu review — ⚠️ konflik dangkal dgn #41 | 26 Agu 00:09 |
-| [B-31](#b-31) — Costing Price List → modal | `fix/price-list-editor-modal` | [#43](https://github.com/ugadimas25/agrovision/pull/43) | 🟡 Menunggu review | 26 Agu 00:20 |
-| [B-33](#b-33) — Alasan Tolak → modal | `fix/decision-reject-modal` | [#44](https://github.com/ugadimas25/agrovision/pull/44) | 🟡 Menunggu review — menutup Sprint 3B | 26 Agu 00:26 |
+| Tiket | Cabang | PR | Status |
+|---|---|---|---|
+| [B-28](#b-28) — Badge Inbox Approval | `feat/inbox-badge` → ditutup, digantikan Dimas | [#37](https://github.com/ugadimas25/agrovision/pull/37) (Dimas) + [#39](https://github.com/ugadimas25/agrovision/pull/39) (fix gating) | ✅ #37 merged · ✅ #39 disetujui (belum merge) |
+| [B-32](#b-32) — ExpenditureEditor & OrganicTracker → modal | `fix/row-editor-modal-remaining` | [#40](https://github.com/ugadimas25/agrovision/pull/40) | 🟡 Direview, menunggu merge |
+| [B-29](#b-29) — Master Data → modal + border Nonaktifkan | `fix/master-data-editor-modal` | [#41](https://github.com/ugadimas25/agrovision/pull/41) | 🟡 Direview, menunggu merge |
+| [B-30](#b-30) — Kategori Biaya, pengelompokan induk/turunan | `fix/cost-category-hierarchy-display` | [#42](https://github.com/ugadimas25/agrovision/pull/42) | 🟡 2 temuan review sudah diperbaiki, menunggu review ulang — ⚠️ konflik dangkal dgn #41 |
+| [B-31](#b-31) — Costing Price List → modal | `fix/price-list-editor-modal` | [#43](https://github.com/ugadimas25/agrovision/pull/43) | 🟡 2 temuan review sudah diperbaiki, menunggu review ulang |
+| [B-33](#b-33) — Alasan Tolak → modal | `fix/decision-reject-modal` | [#44](https://github.com/ugadimas25/agrovision/pull/44) | 🟡 Perubahan diminta sudah diperbaiki, menunggu review ulang — menutup Sprint 3B |
 
 <a id="b-28"></a>
 ## B-28 · Badge notifikasi Inbox Approval di Topbar
@@ -418,7 +428,9 @@ Temuan dari walkthrough dengan client (25 Agustus), plus audit menyeluruh (`grep
 
 **Status (26 Agustus 2026):** ✅ Dikerjakan — tapi bukan lewat branch di atas. Sementara ini disiapkan, **Dimas mengerjakan tiket yang sama secara paralel** dan merge duluan: **[PR #37](https://github.com/ugadimas25/agrovision/pull/37)** (dibuka 25 Agustus 2026 22:44 WIB, **merged** 25 Agustus 2026 23:15 WIB) — cakupannya lebih luas dari tiket ini (juga merapikan Sidebar/BottomNav). Branch `feat/inbox-badge` milik tiket ini ditutup sebagai duplikat: **[PR #38](https://github.com/ugadimas25/agrovision/pull/38)** (dibuka 25 Agustus 2026 23:42 WIB, **closed**, tidak di-merge).
 
-Audit PR #37 menemukan gap terhadap kriteria "Selesai bila" #2 di bawah: `countAllPending()` dipanggil **tanpa gating role**, jadi creator/viewer ikut melihat badge (dengan angka ajuan mereka sendiri, bukan "menunggu keputusan mereka" — apalagi setelah B-23 men-scope SELECT per-creator). Diperbaiki lewat **[PR #39](https://github.com/ugadimas25/agrovision/pull/39)** (dibuka 25 Agustus 2026 23:47 WIB, 🟡 **menunggu review**) — menggating `pendingApprovalCount` ke `number | null`, hanya dihitung untuk `approver`/`super_admin`.
+Audit PR #37 menemukan gap terhadap kriteria "Selesai bila" #2 di bawah: `countAllPending()` dipanggil **tanpa gating role**, jadi creator/viewer ikut melihat badge (dengan angka ajuan mereka sendiri, bukan "menunggu keputusan mereka" — apalagi setelah B-23 men-scope SELECT per-creator). Diperbaiki lewat **[PR #39](https://github.com/ugadimas25/agrovision/pull/39)** (dibuka 25 Agustus 2026 23:47 WIB) — menggating `pendingApprovalCount` ke `number | null`, hanya dihitung untuk `approver`/`super_admin`.
+
+Review Dimas atas PR #39 menemukan gap KEDUA: gating dipindah ke seluruh `<Link>`, bukan cuma badge-nya — padahal sejak PR #37, Topbar adalah satu-satunya jalan ke `/approval` (dan ke `/approval/riwayat` B-22 di dalamnya), dan halaman itu sengaja tetap terbuka untuk creator/viewer (cuma tombol Setujui/Tolak yang digate). Diperbaiki: gate dipindah ke `<span>` badge-nya saja, `<Link>` selalu dirender. **PR #39 sudah disetujui** setelah perbaikan ini — ✅ **menunggu merge**, bukan lagi menunggu review.
 
 **Terverifikasi belum ada.** Tidak ada pola badge/counter di aplikasi ini untuk direplikasi — `ready: false` di `GROUPS` (`Sidebar.tsx`) adalah flag statis nonaktif, bukan angka hidup.
 
@@ -440,7 +452,7 @@ Diminta: ikon amplop di dekat avatar pengguna (`src/components/layout/Topbar.tsx
 ## B-29 · Master Data: editor masih pola lama, dan aksi Nonaktifkan tidak konsisten
 `fix/master-data-editor-modal` · **0,5–1 hari** *(naik dari 0,5 — ada temuan kedua)* · 🟡 Medium
 
-**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #41](https://github.com/ugadimas25/agrovision/pull/41)** (dibuka 26 Agustus 2026 00:02 WIB), 🟡 **menunggu review** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0. ⚠️ Berkas `MasterDataManager.tsx` juga disentuh PR #42 (B-30) — konflik dangkal saat salah satu di-rebase, lihat catatan di PR #42.
+**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #41](https://github.com/ugadimas25/agrovision/pull/41)** (dibuka 26 Agustus 2026 00:02 WIB), 🟡 **direview, menunggu merge** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0. ⚠️ Berkas `MasterDataManager.tsx` juga disentuh PR #42 (B-30) — konflik dangkal saat salah satu di-rebase, lihat catatan di PR #42.
 
 **Terverifikasi, dua masalah berbeda di berkas yang sama** (`MasterDataManager.tsx`, `src/app/(app)/pengaturan/master-data/`):
 
@@ -465,7 +477,9 @@ Diminta: ikon amplop di dekat avatar pengguna (`src/components/layout/Topbar.tsx
 ## B-30 · Master Biaya (Kategori Biaya): baris induk membingungkan
 `fix/cost-category-hierarchy-display` · **0,5–1 hari** · 🟡 Medium
 
-**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #42](https://github.com/ugadimas25/agrovision/pull/42)** (dibuka 26 Agustus 2026 00:09 WIB), 🟡 **menunggu review** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0. ⚠️ **Konflik dangkal dengan PR #41 (B-29)** — keduanya menyentuh `ItemRow` di `MasterDataManager.tsx`, props/JSX berdampingan bukan logika yang sama. Disarankan merge #41 dulu baru rebase PR ini.
+**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #42](https://github.com/ugadimas25/agrovision/pull/42)** (dibuka 26 Agustus 2026 00:09 WIB). ⚠️ **Konflik dangkal dengan PR #41 (B-29)** — keduanya menyentuh `ItemRow` di `MasterDataManager.tsx`, props/JSX berdampingan bukan logika yang sama. Disarankan merge #41 dulu baru rebase PR ini.
+
+Direview Dimas, dua temuan: (1) `groupHierarchical()` membuang baris yatim (parent-nya tidak terlihat lewat RLS) tanpa suara — **diperbaiki langsung oleh reviewer** lewat suggestion-commit; (2) di kartu mobile (<768px) identitas induk hilang total karena `.rt-cards tr{background:#fff}` mengalahkan `bg-slate-50/60` — **diperbaiki**: sel "Induk" khusus mobile (`md:hidden`) dikembalikan untuk baris turunan. Diverifikasi manual di viewport sempit. 🟡 **Menunggu review ulang** @ugadimas25.
 
 **Terverifikasi di `/pengaturan/master-data?tipe=cost_category`.** Kategori berjenjang (mis. kode `SEEDLING`, nama "Pengadaan Bibit") ditampilkan sebagai barisnya sendiri di tabel datar (kolom Induk = "—"), lalu turunannya (`SEEDLING-01` "Bibit Durian", dst.) tampil sebagai baris terpisah dengan kolom Induk = "Pengadaan Bibit". Nama induk jadi muncul dua kali — sekali sebagai baris utuh, sekali lagi berulang di kolom Induk tiap turunannya. Pola yang sama berlaku untuk `LANDPREP`/"Persiapan Lahan", `FERTILIZER`/"Pengadaan Pupuk", dst.
 
@@ -485,7 +499,9 @@ Diminta: ikon amplop di dekat avatar pengguna (`src/components/layout/Topbar.tsx
 ## B-31 · Costing Price List: editor masih pola lama
 `fix/price-list-editor-modal` · **0,5 hari** · 🟡 Medium
 
-**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #43](https://github.com/ugadimas25/agrovision/pull/43)** (dibuka 26 Agustus 2026 00:20 WIB), 🟡 **menunggu review** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0 (baseline bersih setelah `db:purge:demo`+`db:seed:demo` — dua percobaan awal sempat gagal di tes yang sama sekali tak berhubungan, ternyata drift data kumulatif dari `at:verify` berulang di sesi yang sama, bukan regresi PR ini).
+**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #43](https://github.com/ugadimas25/agrovision/pull/43)** (dibuka 26 Agustus 2026 00:20 WIB). `at:verify` 149/0 (baseline bersih setelah `db:purge:demo`+`db:seed:demo` — dua percobaan awal sempat gagal di tes yang sama sekali tak berhubungan, ternyata drift data kumulatif dari `at:verify` berulang di sesi yang sama, bukan regresi PR ini).
+
+Direview Dimas: komentar header `PriceRateEditor.tsx` keliru menyatakan tarif "tetap bisa diterbitkan tanpa JavaScript" — **diperbaiki**, komentar sekarang jujur soal `showModal()` yang butuh JS. Nit `max-h-[85vh] overflow-y-auto` yang belum ada di editor ini — **ditambahkan**. Nit ketiga (konfirmasi eksplisit alih-alih modal yang hilang sendiri saat sukses) **dicoba tapi dibatalkan** setelah diverifikasi: `setPriceRateAction` memanggil `revalidatePath`, yang me-remount seluruh komponen begitu sukses, jadi konfirmasi apa pun di dalam modal itu tidak akan pernah sempat terlihat pengguna — dijelaskan di komentar berkas & balasan PR. 🟡 **Menunggu review ulang** @ugadimas25.
 
 **Terverifikasi.** `PriceMetaEditor.tsx` (label/kategori akuntansi/catatan) dan `PriceRateEditor.tsx` (terbitkan tarif baru) di `src/app/(app)/costing/refleksi/` sama-sama masih pola `<details>` inline.
 
@@ -506,7 +522,7 @@ Diminta: ikon amplop di dekat avatar pengguna (`src/components/layout/Topbar.tsx
 ## B-32 · Editor baris ditolak/lampiran — dua tempat lain terlewat B-21
 `fix/row-editor-modal-remaining` · **0,5–1 hari** · 🟡 Medium
 
-**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #40](https://github.com/ugadimas25/agrovision/pull/40)** (dibuka 25 Agustus 2026 23:57 WIB), 🟡 **menunggu review** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0.
+**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #40](https://github.com/ugadimas25/agrovision/pull/40)** (dibuka 25 Agustus 2026 23:57 WIB), 🟡 **direview, menunggu merge** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0.
 
 **Ditemukan lewat audit menyeluruh** (`grep -rl "<details" src/`) setelah B-29/B-31: dua tempat lain masih memakai persis pola `<details>` inline yang B-21 ganti di modul operasional, dan **keduanya terlewat** karena B-21 hanya menyentuh 9 modul operasional lewat `OpRecordEditor.tsx`, bukan berkas editor lain yang berdiri sendiri.
 
@@ -529,7 +545,9 @@ Diminta: ikon amplop di dekat avatar pengguna (`src/components/layout/Topbar.tsx
 ## B-33 · Alasan penolakan di Inbox Approval masih inline
 `fix/decision-reject-modal` · **0,5 hari** · 🟡 Medium
 
-**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #44](https://github.com/ugadimas25/agrovision/pull/44)** (dibuka 26 Agustus 2026 00:26 WIB), 🟡 **menunggu review** @ugadimas25. `lint`/`tsc`/`build` bersih, `at:verify` 149/0. Diuji end-to-end manual (klik Tolak → modal → isi alasan → Kirim → baris hilang dari Inbox, badge Topbar ikut turun). Tiket terakhir di Sprint 3B — setelah ini disetujui, seluruh Sprint 3B selesai.
+**Status (26 Agustus 2026):** ✅ Kode selesai — **[PR #44](https://github.com/ugadimas25/agrovision/pull/44)** (dibuka 26 Agustus 2026 00:26 WIB). Diuji end-to-end manual (klik Tolak → modal → isi alasan → Kirim → baris hilang dari Inbox, badge Topbar ikut turun).
+
+Dimas **meminta perubahan** (`CHANGES_REQUESTED`): satu `useActionState` dipakai bersama form Setujui & Tolak, jadi galat dari percobaan Setujui (mis. race condition — record sudah diputuskan orang lain) salah memicu modal "Tolak pengajuan" terbuka sendiri. **Diperbaiki**: efek auto-open dihapus (tidak diperlukan — dialog yang terbuka tidak tertutup oleh submit Server Action), dan galat non-field ditambahkan ke footer modal supaya tetap terlihat saat modal terbuka. Diverifikasi ulang dengan race condition sungguhan (dua tab). 🟡 **Menunggu review ulang** @ugadimas25 — tiket terakhir di Sprint 3B, setelah ini disetujui & di-merge, seluruh Sprint 3B selesai.
 
 **Terverifikasi.** `DecisionForm.tsx` (`src/app/(app)/approval/`, dipakai `PendingTable.tsx` untuk Setujui/Tolak lintas SEMUA modul di Inbox) — tombol "Tolak" adalah `<summary>` yang membuka `<details>` berisi input alasan + tombol "Kirim penolakan" **inline di dalam baris tabel**, sama seperti pola yang diganti B-21.
 
@@ -674,12 +692,12 @@ Yang **sudah** benar dan tidak akan berubah oleh tiket ini: mekanisme sesinya se
 | 1 · Jaring pengaman | B-5, B-3, B-2 | ✅ Selesai |
 | 2 · Ketahanan data | B-1, B-13 | ✅ Selesai |
 | Akar angka | B-20, B-24 | ✅ Selesai |
-| **A · Sisa alur approval** | **B-21 ✅, B-22 (PR #36, nunggu review), B-23 ✅, B-25 ✅** | **± 4,5 hari** |
-| 3 · Jejak & skema | B-8 ✅, B-10 ✅, B-11 (nunggu B-22 merge), B-19 (separuh — lokal ✅, cloud/branch = B-18) · B-9 → Dimas · B-12 ditunda | ± 3,5 hari |
-| **3B · Konsistensi UI (baru, dari walkthrough 25 Agu + audit lanjutan)** | **B-28 (PR #37 milik Dimas ✅ merged + fix PR #39 nunggu review), B-29 (PR #41 nunggu review), B-30 (PR #42 nunggu review), B-31 (PR #43 nunggu review), B-32 (PR #40 nunggu review), B-33 (PR #44 nunggu review) — sebelum Sprint 4** | **± 4 hari** *(kode selesai 26 Agu 00:30 WIB, 6 PR menunggu review)* |
-| 4 · Kesiapan produksi | B-15 (sisa), B-16, B-17 (sisa), B-18 | ± 4 hari |
-| Baru | B-26 | ± 0,5 hari |
-| | **Total tersisa** | **± 16,5 hari kerja** |
+| **A · Sisa alur approval** | ✅ **Selesai (4/4)** — B-21+B-23+B-25 [PR #33](https://github.com/ugadimas25/agrovision/pull/33) merged, B-22 [PR #36](https://github.com/ugadimas25/agrovision/pull/36) merged | **± 4,5 hari** (sudah dikerjakan) |
+| 3 · Jejak & skema | 🟡 **2/4 selesai** — B-8 [PR #32](https://github.com/ugadimas25/agrovision/pull/32) ✅, B-10 [PR #35](https://github.com/ugadimas25/agrovision/pull/35) ✅, B-19 separuh (lokal ✅, cloud/branch = B-18), **B-11 belum dikerjakan** (tidak lagi diblokir — B-22 sudah merge), B-12 ditunda, B-9 → Dimas | ± 3,5 hari |
+| **3B · Konsistensi UI (baru, dari walkthrough 25 Agu + audit lanjutan)** | 🟡 **Kode selesai (6/6), direview** — B-28 [PR #37](https://github.com/ugadimas25/agrovision/pull/37) milik Dimas ✅ merged + fix [PR #39](https://github.com/ugadimas25/agrovision/pull/39) ✅ disetujui; B-29 [#41](https://github.com/ugadimas25/agrovision/pull/41), B-32 [#40](https://github.com/ugadimas25/agrovision/pull/40) direview & menunggu merge; B-30 [#42](https://github.com/ugadimas25/agrovision/pull/42), B-31 [#43](https://github.com/ugadimas25/agrovision/pull/43), B-33 [#44](https://github.com/ugadimas25/agrovision/pull/44) sudah diperbaiki sesuai review, menunggu review ulang — sebelum Sprint 4 | **± 4 hari** (sudah dikerjakan, menunggu merge) |
+| 4 · Kesiapan produksi | ⬜ **Belum disentuh** — B-15 (sisa), B-16, B-17 (sisa), B-18 | ± 4 hari |
+| Baru | ⬜ B-26 belum dikerjakan (perlu keputusan arah bareng Dimas) | ± 0,5 hari |
+| | **Total tersisa (genuinely belum dikerjakan)** | **± 6 hari kerja** — B-11 (1 hari) + B-12 (0,5 hari, ditunda) + Sprint 4 penuh (± 4 hari, sudah mencakup sisa cloud B-19 lewat B-18) + B-26 (0,5 hari). *(Angka lama ± 16,5 hari termasuk Sprint A & 3B yang sekarang sudah dikerjakan — dipertahankan di baris estimasi masing-masing sebagai catatan historis, bukan dihapus.)* |
 | Milik Dimas — **jangan dikerjakan** | B-9 (AI-51) · **B-27** stub login | — |
 
 ## Lima hal yang menentukan urutan
