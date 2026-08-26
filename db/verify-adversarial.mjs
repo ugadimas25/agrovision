@@ -39,10 +39,38 @@ async function mustFail(c, name, sql, params = [], matcher = null) {
   }
 }
 
+/**
+ * B-27: keadaan saklar login stub sebelum suite ini mengubahnya.
+ *
+ * Suite ini menguji keadaan PRODUKSI (saklar mati), tapi berbagi database
+ * dengan lingkungan pengembangan yang justru butuh saklar itu menyala --
+ * scripts/at-verify.mjs masuk lewat login stub. Mematikannya tanpa memulihkan
+ * akan membuat suite HTTP mati setelahnya, dengan gejala "email tidak
+ * terdaftar" yang menyesatkan.
+ */
+let stubSwitchBefore = false
+
+async function restoreStubSwitch() {
+  const c = new pg.Client({ connectionString: SUPER })
+  await c.connect()
+  try {
+    await c.query(`UPDATE app.auth_settings SET stub_login_enabled = $1, updated_at = now() WHERE singleton`,
+      [stubSwitchBefore])
+  } finally {
+    await c.end()
+  }
+}
+
 async function setup() {
   const c = new pg.Client({ connectionString: SUPER })
   await c.connect()
   const q = (s, p) => c.query(s, p)
+
+  // Saklar login stub dimatikan lebih dulu: seluruh bagian B-27 di bawah
+  // menguji perilaku produksi. Nilai sebelumnya dipulihkan di akhir run().
+  stubSwitchBefore = (await q(`SELECT stub_login_enabled FROM app.auth_settings WHERE singleton`))
+    .rows[0]?.stub_login_enabled === true
+  await q(`UPDATE app.auth_settings SET stub_login_enabled = false WHERE singleton`)
 
   // Idempoten: fixture run sebelumnya dibersihkan lebih dulu, dalam urutan FK.
   // Uji utama berjalan di dalam transaksi yang di-ROLLBACK, tapi setup ini tidak.
@@ -541,9 +569,57 @@ async function run() {
   ok('record yang sudah diputuskan TIDAK lagi muncul di Inbox (v_pending_approvals) -- perilaku default tak berubah',
     r.rows.length === 0, `${r.rows.length} baris tersisa di Inbox`)
 
+  // =========================================================================
+  // B-27: gerbang login stub
+  //
+  // setup() sudah mematikan saklarnya (app.auth_settings.stub_login_enabled =
+  // false) lewat koneksi superuser, karena itulah keadaan produksi. Yang diuji
+  // di sini: dalam keadaan itu, bisakah aplikasi (app_rw) menyalakannya sendiri,
+  // dan bisakah ia tetap memakai login tanpa kredensial.
+  // =========================================================================
+  console.log('\n=== B-27: login stub tidak bisa dinyalakan atau dipakai dari aplikasi ===')
+  await as(U_ADMIN, 'super_admin', CA)
+
+  await mustFail(c, 'super_admin TIDAK bisa menyalakan login stub (UPDATE auth_settings)',
+    `UPDATE app.auth_settings SET stub_login_enabled = true WHERE singleton`, [], /permission denied/i)
+  await mustFail(c, 'app_rw TIDAK bisa menyisipkan baris auth_settings kedua',
+    `INSERT INTO app.auth_settings (singleton, stub_login_enabled) VALUES (true, true)`, [], /permission denied/i)
+  await mustFail(c, 'app_rw TIDAK bisa menghapus baris auth_settings',
+    `DELETE FROM app.auth_settings WHERE singleton`, [], /permission denied/i)
+
+  await mustFail(c, 'saklar mati: app.lookup_login_stub DITOLAK (login tanpa kredensial mustahil)',
+    `SELECT external_id FROM app.lookup_login_stub($1)`, ['ad@a.co'], /login stub dimatikan/i)
+
+  await mustFail(c, 'fungsi warisan app.lookup_login_email sudah TIDAK ADA',
+    `SELECT external_id FROM app.lookup_login_email($1)`, ['ad@a.co'], /does not exist/i)
+
+  // Saklar harus tetap BISA DIBACA aplikasi -- kalau tidak, halaman login mati
+  // total dan kegagalannya akan terlihat seperti "email salah".
+  r = await c.query(`SELECT stub_login_enabled FROM app.auth_settings WHERE singleton`)
+  ok('app_rw tetap boleh MEMBACA saklar (read-only, bukan buta)',
+    r.rows.length === 1 && r.rows[0].stub_login_enabled === false, JSON.stringify(r.rows[0]))
+
+  // Jalur produksi tidak lewat stub sama sekali: klaim `sub` dari ID token yang
+  // sudah diverifikasi -> resolve_session. Harus tetap jalan saat saklar mati.
+  r = await c.query(`SELECT user_id FROM app.resolve_session($1)`, ['idp|ad'])
+  ok('jalur produksi (resolve_session dari klaim sub) tetap jalan saat saklar mati',
+    r.rows[0]?.user_id === U_ADMIN)
+
+  r = await c.query(`SELECT item FROM app.check_production_readiness() WHERE blocking AND item LIKE 'login stub%'`)
+  ok('gerbang produksi bersih dari penghalang login saat saklar mati',
+    r.rows.length === 0, r.rows.map(x => x.item).join(' | ') || 'bersih')
+
   await c.query('ROLLBACK')
   await c.end()
+  await restoreStubSwitch()
   console.log(`\n${'='.repeat(56)}\nADVERSARIAL:  PASS ${pass}   FAIL ${fail}`)
   process.exit(fail === 0 ? 0 : 1)
 }
-run().catch(e => { console.error('ERROR:', e.message); process.exit(1) })
+run().catch(async e => {
+  console.error('ERROR:', e.message)
+  // Saklar login stub dikembalikan juga saat suite mati di tengah jalan --
+  // kalau tidak, kegagalan di sini akan menular ke at:verify sebagai
+  // "email tidak terdaftar".
+  await restoreStubSwitch().catch(() => {})
+  process.exit(1)
+})

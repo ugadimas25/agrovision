@@ -53,7 +53,7 @@ Akibatnya nyata: kalau kamu bilang *"B-13 sudah selesai"* di meeting, separuh ru
 | B-25 field wajib | **AI-03** (wajibkan field volume driver biaya) | **Kamu** — AI-03 adalah bagian dari B-25 |
 | B-20 materialisasi biaya | AI-01 | ✅ Sudah selesai |
 | — | AI-42 (perluas `at-verify.mjs` ke semua modul approval) | **Dimas**, tapi kamu wajib menambah cek untuk tiketmu sendiri |
-| B-27 stub login | — | **Dimas**. Jangan sentuh `src/lib/session.ts` tanpa bicara |
+| B-27 stub login | — | **Dimas** — ✅ selesai 26 Agu 2026. `src/lib/session.ts` tetap jangan disentuh tanpa bicara |
 
 ---
 
@@ -77,14 +77,16 @@ Ini bukan formalitas. Jalankan **setiap kali selesai satu tiket**, bukan hanya d
 | `npx tsc --noEmit` | 0 error |
 | `npm run lint` | 0 error, 13 warning |
 | `npm run build` | sukses |
-| `npm run db:test` | 45 PASS / 0 FAIL |
-| `npm run db:test:adversarial` | 66 PASS / 0 FAIL — semuanya *harus* gagal ditolak |
-| `npm run at:verify` | 149 PASS / 0 FAIL (butuh `npm run dev` hidup) |
+| `npm run db:test` | 53 PASS / 0 FAIL |
+| `npm run db:test:adversarial` | 93 PASS / 0 FAIL — semuanya *harus* gagal ditolak |
+| `npm run at:verify` | 150 PASS / 0 FAIL (butuh `npm run dev` hidup **dengan `AUTH_MODE=stub`**) |
+| `npm run auth:verify` | 36 PASS / 0 FAIL — verifikasi ID token & matriks mode login (B-27) |
 | `npm run db:verify` | 0 drift |
 | `app.check_rls_coverage()` | 0 baris |
 | `app.check_privilege_revocations()` | 0 baris |
+| `app.check_production_readiness()` | 0 baris blocking di DB tanpa seed demo |
 
-> Angka di atas diverifikasi di `main` pada 24 Agustus 2026, **setelah** PR #29 & #30 di-merge. Kalau angkamu lebih rendah, `git pull origin main` dulu — jangan dianggap regresi sebelum memastikan branch-mu sudah mutakhir.
+> Angka di atas diperbarui 26 Agustus 2026, sudah termasuk B-27 (PR ini) di samping B-22 & B-23 yang sudah merged (sebelumnya 45 / 66 / 149 pada 24 Agustus). Kalau angkamu lebih rendah, `git pull origin main` dulu — jangan dianggap regresi sebelum memastikan branch-mu sudah mutakhir.
 
 **Tiap tiket yang menyentuh RLS, policy, atau privilege wajib menambah kasus baru di `db/verify-adversarial.mjs`** — kasus yang *harus gagal*. Tanpa itu tidak ada bukti gerbangnya bekerja.
 
@@ -95,7 +97,7 @@ Ini bukan formalitas. Jalankan **setiap kali selesai satu tiket**, bukan hanya d
 - **Next.js 16** (App Router, RSC + Server Actions) + **PostgreSQL 16 + PostGIS**
 - Produksi: **Cloud Run** + **Cloud SQL**, region `asia-southeast2`
 - Aplikasi konek DB sebagai `app_user` — **bukan** superuser. Ini bukan detail: append-only & RLS ditegakkan lewat REVOKE + policy, jadi menguji sebagai `postgres` membuat semua uji **lulus palsu**
-- Migrasi: ledger ber-checksum di `db/migrations/`, dijalankan `npm run db:migrate` — terakhir **0052**, berikutnya **0053**
+- Migrasi: ledger ber-checksum di `db/migrations/`, dijalankan `npm run db:migrate` — terakhir **0057**, berikutnya **0058**
 - **Prinsip data:** nilai kosong ditulis `—`, **tidak pernah** `0`. Angka fabrikasi di layar finansial dianggap kegagalan fatal
 - Rujukan utama: **`docs/technical-documentation.md`** (arsitektur, model keamanan, runbook). Baca bagian yang relevan sebelum menyentuh area itu
 
@@ -393,7 +395,7 @@ Kalau dibuka: buang dari enum & label, **atau** implementasikan alurnya. Jangan 
 - Pertahankan database existing sebagai development/staging sampai pembagian environment dikonfirmasi
 - Catat langkah reset/rebuild di `docs/technical-documentation.md` supaya bisa diulang siapa pun
 
-> Satu hal yang perlu kamu tahu sebelum mulai: **`npm run db:purge:demo` pernah rusak total** — FK violation, 16 tabel tidak ikut dihapus. Sudah diperbaiki, tapi uji ulang di environment barumu: purge → seed → `npm run db:check` harus nol baris `blocking` selain stub login dan dua tenant demo.
+> Satu hal yang perlu kamu tahu sebelum mulai: **`npm run db:purge:demo` pernah rusak total** — FK violation, 16 tabel tidak ikut dihapus. Sudah diperbaiki, tapi uji ulang di environment barumu: purge → seed → `npm run db:check` harus nol baris `blocking` selain saklar login stub (dinyalakan seed) dan dua tenant demo.
 
 **Selesai bila**
 - [ ] Aplikasi environment pengujian terhubung ke database/schema bersih
@@ -634,7 +636,7 @@ Backup yang belum pernah diuji restore belum bisa disebut backup.
 
 # Tiket baru dari temuan 22–24 Agustus
 
-Satu untukmu (B-26), satu untuk Dimas (B-27) — yang kedua ditulis di sini supaya kamu tahu apa yang menahan produksi, bukan untuk dikerjakan.
+Satu untukmu (B-26), satu untuk Dimas (B-27). Yang kedua **sudah selesai** — tetap ditulis di sini karena mengubah cara kamu menjalankan aplikasi secara lokal.
 
 <a id="b-26"></a>
 ## B-26 · `notFound()` menjawab HTTP 200, bukan 404
@@ -663,24 +665,22 @@ Ada **13 berkas `loading.tsx`**: `dashboard`, `costing`, `laporan`, `survei`, `p
 
 ---
 
-## B-27 · Stub login masih aktif — **milik Dimas, jangan dikerjakan**
-~~`feat/identity-platform-verify`~~ · **0 hari untukmu** · 🔴 Critical
+## B-27 · Stub login — ✅ **SELESAI (Dimas, 26 Agu 2026)**
+`feat/identity-platform-verify` · migrasi **0057** · 🔴 Critical
 
-**Pemiliknya sudah diputuskan: Dimas.** Dicatat di sini bukan untuk kamu kerjakan, tapi supaya kamu tahu apa yang sedang menahan produksi — dan supaya kamu tidak menyentuh `resolveLogin()` tanpa bicara.
+Dikerjakan Dimas. Ditulis di sini supaya kamu tahu **apa yang berubah di bawah kakimu**, bukan untuk dikerjakan.
 
-`resolveLogin()` di `src/lib/session.ts` **mencocokkan email ke user aktif tanpa verifikasi kredensial apa pun**. Siapa pun yang tahu sebuah email terdaftar bisa masuk sebagai orang itu. `app.check_production_readiness()` menandainya **blocking**:
+Dulu: `resolveLogin()` mencocokkan email ke user aktif tanpa kredensial apa pun. Sekarang `resolveLoginWithIdToken()` memverifikasi ID token Identity Platform (tanda tangan RS256 terhadap kunci publik Google, `iss`/`aud`/`exp`/`iat`) sebelum cookie apa pun diterbitkan, lalu klaim `sub`-nya masuk ke `app.resolve_session()` — pintu yang sudah ada sejak 0018 dan tidak berubah.
 
-```
-login stub masih aktif | blocking | app.lookup_login_email masih ada;
-                                    verifikasi ID token Identity Platform belum terpasang
-```
+**Tiga hal yang menyentuh pekerjaanmu:**
 
-**Dua konsekuensi praktis untukmu:**
+1. **`npm run dev` sekarang butuh `AUTH_MODE=stub` di `.env.local`.** Tanpa itu halaman login menolak melayani dan menyebut variabel mana yang kurang — dan `at:verify` mati dengan pesan yang menjelaskan hal ini di baris pertama, bukan 149 kegagalan "Form tidak ditemukan". Salin dari `.env.example`.
+2. **Login stub juga punya saklar di database:** `app.auth_settings.stub_login_enabled`, default `false`, dinyalakan `db:seed:dev`/`db:seed:demo`. Kalau kamu memigrasi database lokal lalu tidak menyeed ulang, login akan ditolak dengan "login stub dimatikan". Jalankan seed-nya. `app_rw` sengaja tidak punya hak tulis di tabel itu — jangan coba `UPDATE` dari aplikasi, itu memang ditolak.
+3. **`app.lookup_login_email` sudah DIHAPUS**, diganti `app.lookup_login_stub`. Kalau ada skrip lamamu yang memanggilnya, ia akan gagal dengan "does not exist".
 
-1. **Jangan pakai stub ini sebagai alasan menunda tiketmu.** B-23 (lingkup creator) dan B-22 (riwayat approval) tetap harus benar walau login-nya belum aman — keduanya tentang *apa yang boleh dilihat* setelah masuk, bukan *bagaimana masuknya*.
-2. **Jangan menyentuh `src/lib/session.ts` tanpa bicara dengan Dimas.** Kalau tiketmu butuh sesuatu dari sesi (mis. `ctx.session.userId` untuk policy per-pembuat di B-23), itu sudah tersedia dan tidak perlu diubah.
+`app.check_production_readiness()` sekarang membaca saklarnya, bukan keberadaan fungsi — jadi di database yang belum diseed demo, **baris blocking = 0**. Sisanya urusan operasional (mengaktifkan Identity Platform, memasang `external_id`), ada di `docs/12-deploy-gcp.md` §9.
 
-Yang **sudah** benar dan tidak akan berubah oleh tiket ini: mekanisme sesinya sendiri — cookie httpOnly bertanda HMAC, 12 jam, **diverifikasi ulang ke database setiap request** (jadi menonaktifkan pengguna langsung berlaku), dan menyimpan `externalId`, bukan uuid internal. Yang hilang **hanya** verifikasi ID token.
+Yang **tidak** berubah: mekanisme sesinya — cookie httpOnly bertanda HMAC, 12 jam, diverifikasi ulang ke database setiap request, menyimpan `externalId` bukan uuid internal. `ctx.session.userId` tetap tersedia seperti sebelumnya, dan **`src/lib/session.ts` tetap jangan disentuh tanpa bicara dengan Dimas.**
 
 ---
 
@@ -698,7 +698,7 @@ Yang **sudah** benar dan tidak akan berubah oleh tiket ini: mekanisme sesinya se
 | 4 · Kesiapan produksi | ⬜ **Belum disentuh** — B-15 (sisa), B-16, B-17 (sisa), B-18 | ± 4 hari |
 | Baru | ⬜ B-26 belum dikerjakan (perlu keputusan arah bareng Dimas) | ± 0,5 hari |
 | | **Total tersisa (genuinely belum dikerjakan)** | **± 6 hari kerja** — B-11 (1 hari) + B-12 (0,5 hari, ditunda) + Sprint 4 penuh (± 4 hari, sudah mencakup sisa cloud B-19 lewat B-18) + B-26 (0,5 hari). *(Angka lama ± 16,5 hari termasuk Sprint A & 3B yang sekarang sudah dikerjakan — dipertahankan di baris estimasi masing-masing sebagai catatan historis, bukan dihapus.)* |
-| Milik Dimas — **jangan dikerjakan** | B-9 (AI-51) · **B-27** stub login | — |
+| Milik Dimas — **jangan dikerjakan** | B-9 (AI-51) · ~~**B-27** stub login~~ ✅ **selesai 26 Agu 2026** (migrasi 0057) | — |
 
 ## Lima hal yang menentukan urutan
 
@@ -727,4 +727,4 @@ Reviewer-nya satu orang dan waktunya terbatas. Yang membuat review cepat:
 - **`docs/13-action-item-perbaikan-20260822.md`** adalah daftar tiket Dimas (50+ item `AI-*`). Baca §10b/§10c untuk melihat apa yang sudah selesai, dan **bicara dulu** sebelum mengambil apa pun dari sana.
 - **`docs/15-serah-terima-20260823.md`** §3 memuat sembilan jebakan yang sudah ditemukan — baca supaya tidak menemukannya lagi.
 - **PR #29 dan #30 sudah di-merge** (24 Agustus). Keduanya menyentuh `src/lib/report/*`, `src/components/dashboard/*`, `src/app/(app)/pengguna/`, `src/app/(app)/survei/`, `src/app/(app)/keberlanjutan/sertifikasi/`, dan menambah migrasi **`0052`**. Jadi `main` sudah memuat semuanya — cukup `git pull origin main` sebelum mulai.
-- Tiga baris `blocking` di `app.check_production_readiness()` yang **memang diketahui**: stub login (B-27, milik Dimas) dan dua tenant demo `DEMO`/`DEMO2` (hilang setelah `db:purge:demo`). Kalau muncul baris blocking keempat, itu temuan baru — laporkan.
+- Baris `blocking` di `app.check_production_readiness()` yang **memang diketahui**: saklar login stub (`app.auth_settings.stub_login_enabled`, dinyalakan `db:seed:dev`/`db:seed:demo`, dimatikan `db:purge:demo`) dan dua tenant demo `DEMO`/`DEMO2`. Di database yang baru dimigrasi tanpa seed, jumlahnya **nol** — itu yang B-27 ubah. Kalau muncul baris blocking lain, itu temuan baru — laporkan.

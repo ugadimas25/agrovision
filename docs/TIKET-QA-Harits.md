@@ -33,7 +33,13 @@ Keluaran: tabel hasil uji terisi penuh + daftar bug yang langsung bisa dikerjaka
 https://agrovision-393569486275.asia-southeast2.run.app
 ```
 
-**Akun uji** — login tanpa password, cukup ketik email:
+**Akun uji** — sejak B-27, login **butuh kata sandi**. Akunnya ada di Identity
+Platform; kata sandinya dikirim terpisah oleh Dimas (lewat password manager /
+pesan langsung) dan **tidak pernah ditulis di repo ini**.
+
+Alamat `@demo.invalid` sengaja tidak bisa menerima email, jadi **tidak ada tombol
+"lupa kata sandi"** — kalau kata sandinya hilang, akunnya dibuat ulang. Minta ke
+Dimas, jangan mencoba reset sendiri.
 
 | Email | Nama | Role |
 |---|---|---|
@@ -135,4 +141,6 @@ Lampiran   : screenshot / rekaman layar
 
 ## Catatan penting
 
-> **Autentikasi masih stub.** Login belum memverifikasi kredensial apa pun — cukup email terdaftar untuk masuk, termasuk sebagai Super Admin. Selama QA ini tidak masalah karena datanya demo, tapi **jangan pernah memasukkan data sungguhan** ke aplikasi sampai integrasi autentikasi selesai.
+> **Autentikasi (per 26 Agu 2026).** Verifikasi ID token Identity Platform sudah terpasang di kode (B-27), dan build produksi **tidak akan lagi melayani login tanpa kata sandi**. Selama instance QA di atas belum dipasangi Identity Platform (mengaktifkan penyedia email/kata sandi + memasang `external_id` tiap akun demo — `docs/12-deploy-gcp.md` §9), **login akan menolak** dengan pesan "Login belum dikonfigurasi …". Itu bukan bug untuk dilaporkan: tanyakan ke Dimas apakah instance QA sudah disiapkan sebelum memulai sesi QA.
+>
+> Selama datanya masih dataset demo, **jangan memasukkan data sungguhan** ke aplikasi.

@@ -203,8 +203,18 @@ async function purge() {
     `DELETE FROM app.estates WHERE company_id = ANY($1)`,
     `DELETE FROM app.companies WHERE id = ANY($1)`,
   ]) await c.query(t, [ids])
+
+  // Akun demo (tanpa kredensial) sudah hilang bersama entitasnya, jadi login
+  // stub ikut dimatikan -- purge ada justru untuk membereskan penghalang
+  // app.check_production_readiness(), dan sejak B-27 saklar ini salah satunya.
+  await c.query(
+    `UPDATE app.auth_settings
+        SET stub_login_enabled = false, updated_at = now(),
+            note = 'dimatikan db/seed-demo.mjs --purge'
+      WHERE singleton`)
+
   await c.query('COMMIT')
-  console.log('Data demo dihapus.')
+  console.log('Data demo dihapus. Login stub dimatikan (auth_settings.stub_login_enabled = false).')
 }
 
 async function seed() {
@@ -1218,6 +1228,19 @@ async function seed() {
     txCountB++
   }
 
+  // Login stub (B-27, migrasi 0057). Akun demo tidak punya kredensial di
+  // Identity Platform, jadi tanpa saklar ini dataset demo tidak bisa dipakai
+  // masuk sama sekali. Dinyalakan di seed -- bukan di migrasi -- supaya
+  // `db:migrate` yang juga jalan ke produksi lewat Cloud Build tidak pernah
+  // menyalakan login tanpa kata sandi. Sejalan dengan tanda is_demo pada
+  // entitasnya: keduanya dilaporkan check_production_readiness() sebagai
+  // penghalang, dan keduanya dibereskan `npm run db:purge:demo`.
+  await c.query(
+    `UPDATE app.auth_settings
+        SET stub_login_enabled = true, updated_at = now(),
+            note = 'dinyalakan db/seed-demo.mjs -- akun demo tanpa kredensial'
+      WHERE singleton`)
+
   await c.query('COMMIT')
 
   console.log('\nData DEMO ditambahkan.\n')
@@ -1245,6 +1268,8 @@ async function seed() {
   console.log(`  price list         ${priceRows.length} tarif (refleksi biaya docs/11 §4)`)
   console.log(`  agri-input         ${chemRows.length} chemical · ${equipRows.length} equipment`)
   console.log(`  farm activities    3 weeding · 2 spraying · ${harvestRows.length} harvest (2 approved → revenue)`)
+  console.log('\nLogin stub DINYALAKAN (app.auth_settings.stub_login_enabled = true).')
+  console.log('Aplikasi juga perlu AUTH_MODE=stub di .env.local -- lihat .env.example.')
   console.log('\nLogin demo (tanpa password):')
   for (const [, , email, name, role] of users) console.log(`  ${role.padEnd(12)} ${email.padEnd(26)} ${name}`)
   console.log(`  ${'viewer'.padEnd(12)} ${'direktur.mamuju@demo.invalid'} Rina Direktur Mamuju (entitas DEMO2)`)

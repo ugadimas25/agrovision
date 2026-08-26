@@ -16,6 +16,7 @@
     "db:seed:dev": "node --env-file=.env.local db/seed-dev.mjs",
     "db:check": "node --env-file=.env.local db/check-readiness.mjs",
     "at:verify": "node scripts/at-verify.mjs",
+    "auth:verify": "node scripts/verify-idtoken.mjs",
     "db:seed:demo": "node --env-file=.env.local db/seed-demo.mjs",
     "db:purge:demo": "node --env-file=.env.local db/seed-demo.mjs --purge",
     "db:import:pilot": "node --env-file=.env.local db/import-pilot.mjs",

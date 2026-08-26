@@ -36,13 +36,14 @@ npm run db:check                 # gate: app.check_production_readiness(), baris
 # Uji
 npm run db:test                  # happy-path RLS (~21 cek)
 npm run db:test:adversarial      # RLS adversarial (~36 cek, semua harus GAGAL)
+npm run auth:verify              # verifikasi ID token + matriks AUTH_MODE (tanpa DB/jaringan)
 node --env-file=.env.local db/verify-suitability.mjs   # classifier kesesuaian lahan (tanpa npm script)
 npm run at:verify                # acceptance test lewat HTTP; butuh `npm run dev` hidup + DB Docker
 ```
 
 Tidak ada framework unit test (no Jest/Vitest). Semua "test" adalah skrip `.mjs` mandiri; untuk menjalankan satu cek saja, edit/komentari di skripnya atau jalankan skrip itu sendiri lewat `node --env-file=.env.local <file>`.
 
-Loop lokal biasa: `docker compose up -d db` → `db:migrate` → `db:bootstrap` → `db:seed:demo` → `db:test` + `db:test:adversarial` → `npm run dev` → `at:verify`.
+Loop lokal biasa: `docker compose up -d db` → `db:migrate` → `db:bootstrap` → `db:seed:demo` → `db:test` + `db:test:adversarial` → `npm run dev` → `at:verify`. Seed dev/demo juga yang menyalakan saklar login stub; tanpanya login lokal ditolak (lihat Autentikasi).
 
 ## Arsitektur
 
@@ -77,9 +78,13 @@ Aturan yang tidak boleh dilanggar (semuanya didokumentasikan di komentar file ma
 
 3 dashboard + 15 laporan modul dilayani **satu** route dinamis `src/app/(app)/laporan/[slug]/` (+ `/pdf` via `@react-pdf/renderer`, `/excel`). Registry: `src/lib/report/registry.ts` (slug → loader). Layar modul kaya dibangun `src/lib/report/screens.ts` (`buildReportScreen`); bila belum ada builder, fallback ke tampilan tabel `ModuleReportView`. Menambah laporan = tambah entry di registry + loader, bukan route baru.
 
-### Autentikasi — scaffold, jangan deploy publik
+### Autentikasi — dua mode, dipilih `AUTH_MODE` (B-27)
 
-`resolveLogin()` di `src/lib/session.ts` masih **mencocokkan email ke user aktif tanpa verifikasi kredensial** (TODO: verifikasi ID token Identity Platform). Mekanisme sesinya nyata (cookie httpOnly bertanda HMAC, 12 jam, diverifikasi ulang ke DB tiap request, menyimpan `externalId` bukan uuid internal). `check_production_readiness()` menandai stub ini sebagai blocking.
+Bawaan (dan satu-satunya yang dilayani build produksi) `identity-platform`: peramban menukar kata sandi langsung ke Identity Platform, server hanya menerima ID token, lalu `src/lib/auth/identity-platform.ts` memverifikasi tanda tangan RS256 + `iss`/`aud`/`exp`/`iat` sebelum klaim `sub` diserahkan ke `app.resolve_session()`. Kata sandi tidak pernah lewat server ini.
+
+`AUTH_MODE=stub` (login email tanpa kredensial) hanya untuk pengembangan & `at:verify`, dan butuh **tiga** gerbang sekaligus: env itu, `NODE_ENV != production`, dan saklar database `app.auth_settings.stub_login_enabled` (default false; dinyalakan `db:seed:dev`/`db:seed:demo`, dimatikan `db:purge:demo`). `app_rw` tidak punya hak tulis atas tabel saklarnya — aplikasi tidak bisa menyalakan stub-nya sendiri. Selama saklar menyala, `check_production_readiness()` menandainya blocking.
+
+Konsekuensi praktis: `npm run dev` untuk `at:verify` wajib `AUTH_MODE=stub` di `.env.local`. Bukti verifikasi token ada di `npm run auth:verify` (36 cek negatif: tanda tangan palsu, `alg:none`, kebingungan HS256, `aud`/`iss` salah, kedaluwarsa, matriks mode).
 
 ### Hal lain yang tidak jelas dari struktur file
 

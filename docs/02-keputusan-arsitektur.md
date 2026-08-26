@@ -56,6 +56,18 @@ Keputusan sebelumnya berlaku, tidak berubah oleh profil proyek yang baru:
 
 Skala baru (100.000 ha, ~3.300 blok) **tidak** mengubah pilihan ini. PostGIS tetap tepat; yang berubah hanya kebutuhan indeks spasial dan pagination server-side.
 
+### 2b. Login — verifikasi ID token, dan stub yang bergerbang tiga lapis (B-27, 26 Agu 2026)
+
+Kata sandi ditukar peramban **langsung** ke Identity Platform; server hanya menerima ID token, memverifikasi tanda tangannya, lalu memakai klaim `sub`. Tanpa dependensi baru — `node:crypto` sudah cukup, dan itu juga yang membuat modulnya bisa diuji langsung dari skrip `.mjs` (`npm run auth:verify`).
+
+Tiga keputusan yang bukan detail teknis:
+
+1. **Bawaan fail-closed.** `AUTH_MODE` yang tidak diset berarti `identity-platform`, bukan stub. Lupa memasang env di lingkungan baru harus berarti login mati, bukan login terbuka.
+2. **Saklar login stub adalah DATA di database** (`app.auth_settings.stub_login_enabled`, default false), bukan keberadaan sebuah fungsi. Alasannya konkret: gerbang lama menandai stub sebagai blocking selama fungsi `lookup_login_email` ADA, sehingga gerbang produksi tak pernah bisa hijau selama pengembangan lokal butuh fungsi itu. `app_rw` tidak punya hak tulis ke tabelnya, jadi aplikasi tidak bisa menyalakan stub-nya sendiri.
+3. **Penautan akun bukan bagian dari login.** Token sah milik orang yang `sub`-nya belum terpasang di `app.users.external_id` tetap ditolak; menautkannya adalah tindakan super_admin lewat koneksi superuser. Alternatifnya — menautkan otomatis lewat email terverifikasi saat login pertama — ditolak karena memindahkan keputusan "siapa boleh jadi siapa" dari admin ke penyedia identitas.
+
+Konsekuensi operasional: instance yang sudah jalan (Cloud Run) **tidak bisa dilogini** sampai Identity Platform diaktifkan dan `external_id` tiap akun dipasang — lihat [12-deploy-gcp.md](12-deploy-gcp.md) §9.
+
 ## 3. Emission factor & alometrik — IPCC
 
 Sumber referensi: **IPCC**.

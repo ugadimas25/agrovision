@@ -19,6 +19,7 @@ AgroVision is a dynamic, database-backed management platform for a mixed durian 
 AgroVision is intentionally built so that scaffolding is never disguised as finished product. The status of each area is summarized below and referenced throughout the document.
 
 **Production-live (real persistence, values computed from approved data):**
+- **Authentication** — Identity Platform ID tokens are verified server-side (signature, `iss`/`aud`, expiry) before a session cookie is issued (B-27). The old email-only login still exists for development, but a production build refuses to serve it and the database switch that enables it defaults to off.
 - Block & Map registry (PostGIS areas, GeoJSON APIs, MapLibre map)
 - Farm Activities — weeding, spraying, harvesting, fertilizing, pruning (full draft → submit → approve lifecycle)
 - Pre-Farming — Land Suitability classifier, Land Preparation, Nursery/seedling stock (read)
@@ -29,7 +30,6 @@ AgroVision is intentionally built so that scaffolding is never disguised as fini
 - Carbon accounting (computed in-DB) and Organic/Compliance registries; Traceability seed chain
 
 **Demo-scaffold / not production-ready (real mechanism, guarded so it cannot be mistaken for production):**
-- **Authentication** — the session mechanism is real, but `resolveLogin()` matches an email to an active user with **no credential verification**. Must not be deployed publicly as-is; flagged by `app.check_production_readiness()`.
 - **Estimate-only agronomy** — emission factors and allometric coefficients are IPCC Tier-1 estimates flagged `requires_validation`; `master_items` content is intentionally empty; demo tenants are flagged `is_demo` (a blocking production-readiness item).
 
 **Coming-soon (schema present, UI disabled or placeholder):**
@@ -186,7 +186,9 @@ Each action: (1) calls `requireRole(...)` / `requireContext()` from `src/lib/ses
 
 Roles are `creator | approver | super_admin | viewer`. `switchCompany()` lets a user change active entity without re-login (only to permitted entities); `null` company means "all my entities" mode.
 
-**Authentication is intentionally incomplete and must not be deployed publicly as-is.** The session mechanism is real, but `resolveLogin()` currently matches an email to an active user with **no credential verification** — the header comment documents the TODO to verify an Identity Platform ID token (signature, audience/issuer/expiry) and feed the `sub` claim into `app.resolve_session()`. This is a scaffold for developing the data flow, not production auth (see [Security §3](#3-session-layer)).
+**Authentication has two modes, selected by `AUTH_MODE` (B-27, migration 0057).** The default — and the only one a production build will serve — is `identity-platform`: the browser exchanges the password directly with Identity Platform, and only the resulting **ID token** reaches the server, where `src/lib/auth/identity-platform.ts` verifies its RS256 signature against Google's public certificates and checks `iss`/`aud`/`exp`/`iat` before `resolveLoginWithIdToken()` hands the `sub` claim to `app.resolve_session()`. The password never touches this server.
+
+The legacy email-only login survives as `resolveLoginWithEmailStub()` for development and for `scripts/at-verify.mjs`, behind **three** gates that must all be open: `AUTH_MODE=stub`, `NODE_ENV != production`, and the database switch `app.auth_settings.stub_login_enabled` (default `false`, flipped on only by `db:seed:dev` / `db:seed:demo`, and reported as **blocking** by `app.check_production_readiness()` while on). The application role `app_rw` has no write privilege on that table, so the app cannot enable its own stub — see [Security §3](#3-session-layer). Evidence: `npm run auth:verify` (36 checks: forged signatures, `alg:none`, HS256 key confusion, wrong `aud`/`iss`, expiry, and the mode matrix).
 
 ### Layout / request flow
 
@@ -355,7 +357,7 @@ erDiagram
 
 ### Notable honesty / scaffold flags
 
-- `master_items`, `emission_factors`, and `allometric_coefficients` are **structurally complete but value-empty or estimate-only** by design; `app.check_production_readiness()` surfaces unvalidated coefficients, uncited factors, undefined fiscal periods, demo companies (`companies.is_demo`), and an active login stub as production blockers.
+- `master_items`, `emission_factors`, and `allometric_coefficients` are **structurally complete but value-empty or estimate-only** by design; `app.check_production_readiness()` surfaces unvalidated coefficients, uncited factors, undefined fiscal periods, demo companies (`companies.is_demo`), and passwordless login left switched on (`app.auth_settings.stub_login_enabled`) as production blockers.
 - `fertilizer_schedules` is a "reference + schedule" table, not a rules engine (a phase-2 TODO). Custom report builder UI over `report_definitions`/`report_definition_fields` is likewise marked phase 2.
 - `price_list` is explicitly noted as a single point of failure lacking historical versioning ("versioning menyusul di technical meeting").
 
@@ -390,7 +392,11 @@ There is a deliberately conspicuously-named escape hatch, `queryWithoutRlsContex
 
 `requireRole(...allowed)` gates Server Actions in the app layer; its own comment notes that UI-level authorization is never sufficient because actions are POST-reachable, and that DB RLS is the second layer that holds even if the check is skipped.
 
-Note honestly: **authentication is a scaffold.** `resolveLogin()` carries a `TODO` and currently matches an email to an active user with *no credential verification* (via `app.lookup_login_email`). The code, comments, and `app.check_production_readiness()` all flag this as a blocking pre-production item; it must not be deployed publicly as-is.
+**Identity verification (B-27, migration 0057).** `resolveLoginWithIdToken()` verifies a Google Identity Platform ID token before any cookie is issued: `alg` must be `RS256` (rejecting both `alg:none` and the HS256 confusion attack, where the *public* certificate is used as an HMAC secret), the signature must verify against the `kid`'s certificate from Google's [x509 endpoint](https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com) (cached per its own `Cache-Control`, refreshed once on an unknown `kid` because Google rotates keys), `iss`/`aud` must both bind to the configured project (otherwise a valid token from *any* Firebase project would be accepted), and `exp`/`iat`/`auth_time` are checked with a 60-second clock skew. Claims are read only *after* the signature verifies. No new dependency: `node:crypto` only, which also lets `scripts/verify-idtoken.mjs` import the module directly and prove each rejection with self-minted keys.
+
+Provisioning is deliberately separate from authentication: a verified token whose `sub` matches no `app.users.external_id` is refused with "belum terhubung ke pengguna AgroVision". Linking a person to an Identity Platform account is a super_admin act (`docs/12-deploy-gcp.md` §9), not a side effect of logging in.
+
+**The stub login is gated in three places, one of which is the database.** `app.lookup_login_email` is dropped; its replacement `app.lookup_login_stub()` raises `42501` unless `app.auth_settings.stub_login_enabled` is true. That table is registered in `app.privilege_revocations` (`INSERT, UPDATE, DELETE` revoked from `app_rw`), so a compromised or careless application layer cannot switch passwordless login on — only a superuser connection (the dev/demo seeds) can. `app.check_production_readiness()` no longer keys on the *existence* of a function, but on that switch plus a belt-and-braces clause should the legacy function ever reappear.
 
 ### 4. Tenant isolation and the three-policy pattern
 
@@ -411,7 +417,7 @@ RLS coverage is data-driven. `0018 §1` enumerates every table and maps it to ho
 A bootstrap deadlock exists: `app.users` is RLS-closed, but you need a user context to read it. The resolution is a small set of narrow SECURITY DEFINER functions, each with `SET search_path = app, pg_catalog` (minimized to prevent search-path hijacking), `REVOKE ALL ... FROM PUBLIC`, and an explicit `GRANT EXECUTE ... TO app_rw`:
 
 - `app.resolve_session(external_id)` and `app.session_companies(user_id)` — the only doors into identity, keyed on the JWT subject.
-- `app.lookup_login_email(email)` — login-stub only, explicitly marked for deletion once real auth lands.
+- `app.lookup_login_stub(email)` — development only, and self-gating: raises `42501` unless `app.auth_settings.stub_login_enabled`. Replaced `app.lookup_login_email`, which migration 0057 dropped when ID-token verification landed (B-27).
 - `app.grant_company_access` / `app.revoke_company_access` (`0018 §2`) and `app.grant_estate_access` / `app.revoke_estate_access` (`0025 §4`) — the *only* way to write authorization data. Each **self-gates**: it raises unless `app.current_role_name() = 'super_admin'`, and `grant_company_access` additionally refuses to grant a company the caller cannot themselves access ("super_admin hanya boleh memberi akses ke entitas yang ia sendiri akses"). Direct `INSERT/UPDATE/DELETE` on `user_company_access`/`user_estate_access` is revoked from `app_rw`, because if the app could write those tables, every tenant policy (all derived from them) would collapse — this was finding #2/#6, CRITICAL.
 - `app.publish_emission_factor(...)` (`0018 §4`) — SECURITY DEFINER, self-gates to `approver`/`super_admin`, requires a session (`v_actor`), validates provenance/value/name, forbids backdating the validity timeline, and sets `approved_by` **from the session, not a caller parameter** (previously forgeable).
 
@@ -445,7 +451,7 @@ Three functions turn "forgot to secure X" from a silent hole into a visible, tes
 
 - `app.check_rls_coverage()` (`0020`) — returns any `app` table with RLS off and not exempt, any RLS-on table with no policy (which silently denies everything), and any view missing `security_invoker=true` (which would bypass the caller's RLS). Must return **zero rows**.
 - `app.check_privilege_revocations()` (`0019`) — returns any revocation from the ledger that `app_rw` still holds. Must return zero rows.
-- `app.check_production_readiness()` (`0021`, extended by `0024`) — aggregates blocking items (login stub still present, any RLS-coverage leak, any privilege leak, any `is_demo` company still loaded) and non-blocking ones (allometric coefficients pending expert validation, emission factors without citation, no fiscal periods defined). Rows with `blocking = true` must be zero before a public deploy.
+- `app.check_production_readiness()` (`0021`, extended by `0024`, rewritten by `0057`) — aggregates blocking items (`auth_settings.stub_login_enabled` still on, the legacy `lookup_login_email` function reappearing, any RLS-coverage leak, any privilege leak, any `is_demo` company still loaded) and non-blocking ones (allometric coefficients pending expert validation, emission factors without citation, no fiscal periods defined). Rows with `blocking = true` must be zero before a public deploy.
 
 The `security_invoker` requirement is not theoretical: `0035` is a one-line fix for a regression where `CREATE OR REPLACE VIEW v_pending_approvals` in `0034` dropped the option, making the cross-module approval inbox leak across tenants until re-set.
 
@@ -532,6 +538,7 @@ Repo `pricing.ts`, page `costing/refleksi`. No manual cost entry: reflected cost
 | `postgres://USER:PASS@/agrovision?host=/cloudsql/PROJECT:asia-southeast2:INSTANCE` | `.env.example` | Cloud Run → Cloud SQL over the built-in connector's **Unix socket**, region `asia-southeast2` (Jakarta). |
 | `GCS_BUCKET_EVIDENCE`, `storage_path text -- gs://...` | `.env.example`, `db/migrations/0010_evidence.sql` | Evidence files are meant to live in a Cloud Storage bucket; the DB stores the `gs://` key, sha256, size, MIME, and EXIF geometry. |
 | `SESSION_SECRET` (min 32 chars) | `.env.local`, `src/lib/session.ts` | HMAC session-signing secret; a Secret Manager entry in production. |
+| `AUTH_MODE`, `IDENTITY_PLATFORM_PROJECT_ID`, `IDENTITY_PLATFORM_API_KEY` | `.env.example`, `src/lib/auth/config.ts`, `cloudbuild.yaml` | Login mode (B-27). Unset = `identity-platform`, which needs both Identity Platform values; the API key is the project's public Web API key and is passed to the browser as a prop (deliberately **not** `NEXT_PUBLIC_*`, so one image serves every environment). `AUTH_MODE=stub` is refused when `NODE_ENV=production`. |
 | `postgis/postgis:16-3.4` | `docker-compose.yml` | Local parity with the Cloud SQL target: **PostgreSQL 16 + PostGIS 3.4** (extensions in `0001_extensions.sql`: `postgis`, `btree_gist`, `pg_trgm`, `citext`). |
 | `public/tiles/ortho/{z}/{x}/{y}.png` (6,061 tiles, z14–z19) + `public/overlays/polygon-block-real.geojson` | `public/` | A static XYZ **orthophoto tile pyramid** and a block-boundary overlay, currently served as Next static assets. (Note: `BlockMap.tsx` presently draws the EOX Sentinel-2 and OSM raster basemaps from external hosts; the local `ortho` pyramid is shipped but not yet referenced by the map component.) |
 
@@ -768,7 +775,7 @@ The doctrine originates in `docs/00-refinement-concept.md` (concept:38–40): *r
 
 **2. Demo rows flagged `is_demo`.** Migration `db/migrations/0024_cost_breakdown.sql` adds `app.companies.is_demo boolean NOT NULL DEFAULT false`, commented "Wajib nol di produksi" (must be zero in production). Existing dev entities (`DEV`, `DEMO`) are flagged true.
 
-**3. Production-readiness gate blocks go-live.** `app.check_production_readiness()` (defined in `db/migrations/0021_login_lookup.sql`, extended in `0024`) returns `(item, blocking, detail)` rows and is designed to run in a pipeline rather than live as an easily-missed doc note. **Blocking** rows (must be zero before public deploy): login stub still active, RLS coverage gaps, privilege-revocation leaks, and — added in 0024 — **any `is_demo` company still present** (detail instructs `npm run db:purge:demo`). **Non-blocking** notes: unvalidated allometric coefficients, emission factors without citation, and undefined fiscal periods. The function comment states plainly: "Baris dengan blocking = true harus nol sebelum deploy publik."
+**3. Production-readiness gate blocks go-live.** `app.check_production_readiness()` (defined in `db/migrations/0021_login_lookup.sql`, extended in `0024`) returns `(item, blocking, detail)` rows and is designed to run in a pipeline rather than live as an easily-missed doc note. **Blocking** rows (must be zero before public deploy): passwordless login still switched on (`app.auth_settings.stub_login_enabled`, since 0057 — before that, the *presence* of the stub function, which meant the gate could never go green while local development needed it), RLS coverage gaps, privilege-revocation leaks, and — added in 0024 — **any `is_demo` company still present** (detail instructs `npm run db:purge:demo`). **Non-blocking** notes: unvalidated allometric coefficients, emission factors without citation, and undefined fiscal periods. The function comment states plainly: "Baris dengan blocking = true harus nol sebelum deploy publik."
 
 **4. The synthetic kriging pilot dataset is clearly synthetic-for-demo.** `docs/pilot-data.geojson` is the *real* base grid: 567 point features carrying only geometry/grid metadata (`id`, `left/top/right/bottom`, `row_index`, `col_index`, `jenis` = durian/coconut, `layer`, `path`) — no measured agronomic values. `docs/pilot-data-filled.geojson` is the *derived* demo layer: the same 567 features expanded to 73 property keys with a full complement of interpolated agronomic values across three families — `ls_*` (14 land-suitability inputs: temperatur, curah_hujan, ktk, ph, drainase, tekstur, …), `tanah_*` (16 soil parameters mirroring docs/09 §2.1: ph_h2o, ph_kcl, c_organik, n_total, p_tersedia, k_dd, al_dd, cl, bobot_isi, …), and `daun_*` (12 leaf-tissue values: n, p, k, ca, mg, s, cl, b, cu, zn, mn, fe). Because the base grid held no such measurements, every value in the "-filled" file is a synthetic surface (kriging/IDW interpolation, per the technique named in docs/09 §8's "Peta status hara") produced to exercise the suitability and fertilizer engines in a demo — not field data. The `-filled` suffix and the empty base file make the synthetic-for-demo provenance explicit.
 
@@ -871,7 +878,13 @@ npm run db:test
 npm run db:test:adversarial
 ```
 
-**4. Suitability classifier (`db/verify-suitability.mjs`, ~4 checks).** Note: this one has **no npm script** — run it directly:
+**4. Auth / ID token (`auth:verify` → `scripts/verify-idtoken.mjs`, 36 checks).** No database, no network, no `.env.local`: it generates its own signing certificate with `openssl`, mints deliberately-broken tokens, and asserts each is rejected — forged signature, tampered payload, `alg:none`, HS256 key confusion, unknown/absent `kid`, wrong `aud`, wrong `iss`, expired, future `iat`/`auth_time`, empty or oversized `sub`. It then walks the `AUTH_MODE` matrix, including the one that matters most: `AUTH_MODE=stub` under `NODE_ENV=production` must resolve to `misconfigured`, never to `stub`. Requires Node ≥ 22.18 (it imports the `.ts` module directly).
+
+```bash
+npm run auth:verify
+```
+
+**5. Suitability classifier (`db/verify-suitability.mjs`, ~4 checks).** Note: this one has **no npm script** — run it directly:
 
 ```bash
 node --env-file=.env.local db/verify-suitability.mjs
@@ -891,8 +904,9 @@ docker compose up -d db
 npm run db:migrate && npm run db:bootstrap
 npm run db:seed:demo         # optional, for UI/demo work
 npm run db:test && npm run db:test:adversarial
+npm run auth:verify
 node --env-file=.env.local db/verify-suitability.mjs
-npm run dev                  # then, separately:
+npm run dev                  # needs AUTH_MODE=stub in .env.local; then, separately:
 npm run at:verify
 npm run db:check             # confirm production-readiness (demo tenant will block)
 ```

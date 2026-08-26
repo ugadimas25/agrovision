@@ -3,27 +3,30 @@ import { redirect } from "next/navigation";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { queryWithoutRlsContext } from "./db";
 import type { RlsContext } from "./db";
+import { getAuthConfig } from "./auth/config";
+import { verifyIdToken } from "./auth/identity-platform";
 
 /**
  * Sesi berbasis cookie bertanda tangan HMAC.
  *
- * STATUS AUTENTIKASI -- baca sebelum deploy:
+ * Mekanisme sesinya: cookie httpOnly, ditandatangani HMAC, ada masa berlaku,
+ * diverifikasi ulang ke database setiap request, dan menjadi satu-satunya
+ * sumber konteks RLS.
  *
- * Mekanisme sesinya NYATA: cookie httpOnly, ditandatangani HMAC, ada masa
- * berlaku, diverifikasi ulang ke database setiap request, dan menjadi satu-satunya
- * sumber konteks RLS. Yang BELUM nyata adalah verifikasi identitas -- lihat
- * `resolveLogin`.
- *
- * JANGAN deploy ke lingkungan yang bisa diakses publik sebelum TODO di
- * `resolveLogin` diisi.
+ * IDENTITASNYA (B-27): `resolveLoginWithIdToken` memverifikasi ID token
+ * Identity Platform sebelum menerbitkan cookie apa pun. Login stub lama --
+ * cocokkan email, tanpa kredensial -- masih ada sebagai
+ * `resolveLoginWithEmailStub`, tapi hanya hidup di lingkungan pengembangan dan
+ * hanya bila KETIGA gerbangnya terbuka (src/lib/auth/config.ts + saklar
+ * app.auth_settings di migrasi 0057).
  *
  * Catatan desain: cookie menyimpan `externalId` (subject Identity Platform),
  * BUKAN uuid internal. Dua alasan:
  *   1. Sejak migrasi 0018, app.users tertutup RLS -- tidak bisa dibaca tanpa
  *      konteks, dan konteks itu justru yang sedang dicari (deadlock bootstrap).
  *      Resolusinya lewat app.resolve_session(), satu-satunya pintu SECURITY DEFINER.
- *   2. externalId adalah identitas yang nanti dibawa JWT. Menyimpannya sekarang
- *      membuat peralihan ke Identity Platform tidak mengubah bentuk cookie.
+ *   2. externalId adalah klaim `sub` pada ID token. Karena bentuk cookienya
+ *      sudah begini sejak awal, B-27 tidak mengubah sesi yang sedang berjalan.
  */
 
 const COOKIE = "agrovision_session";
@@ -242,27 +245,21 @@ export async function switchCompany(companyId: string | null): Promise<void> {
 }
 
 /**
- * Resolusi login.
+ * Terbitkan sesi untuk sebuah subject yang identitasnya SUDAH dipastikan.
  *
- * TODO: verifikasi ID token Identity Platform di sini. Alur produksinya:
- *   1. Klien login ke Identity Platform, memperoleh ID token.
- *   2. Action mengirim token ke fungsi ini.
- *   3. Verifikasi tanda tangan token dengan kunci publik Google, periksa
- *      audience/issuer/expiry, ambil klaim `sub`.
- *   4. `sub` itulah yang dilempar ke app.resolve_session().
- *
- * Sampai itu terpasang, fungsi ini HANYA mencocokkan email ke user aktif --
- * tanpa verifikasi kredensial apa pun. Cukup untuk mengembangkan alur data,
- * TIDAK cukup untuk produksi.
+ * Satu-satunya tempat cookie sesi lahir dari sebuah login, dipakai kedua mode.
+ * Pemeriksaan "user aktif" dan "punya entitas" karena itu tidak bisa terlewat
+ * di salah satu jalur saja.
  */
-export async function resolveLogin(email: string): Promise<void> {
-  // Lewat app.lookup_login_email(): app.users tertutup RLS dan konteks belum ada.
-  const rows = await queryWithoutRlsContext<{ external_id: string; user_id: string }>(
-    `SELECT external_id, user_id FROM app.lookup_login_email($1)`,
-    [email.trim()],
+async function issueSessionForSubject(externalId: string, notFoundMessage: string): Promise<void> {
+  // app.resolve_session(): app.users tertutup RLS dan konteksnya justru belum
+  // ada. Fungsi ini juga yang menyaring is_active = false.
+  const rows = await queryWithoutRlsContext<{ user_id: string }>(
+    `SELECT user_id FROM app.resolve_session($1)`,
+    [externalId],
   );
   const user = rows[0];
-  if (!user) throw new Error("Email tidak terdaftar atau akun tidak aktif");
+  if (!user) throw new Error(notFoundMessage);
 
   const companies = await getSessionCompanies(user.user_id);
   if (companies.length === 0) {
@@ -270,5 +267,60 @@ export async function resolveLogin(email: string): Promise<void> {
   }
 
   // Satu entitas -> langsung dipilih. Lebih dari satu -> mode "semua entitas saya".
-  await issue(user.external_id, companies.length === 1 ? companies[0].companyId : null);
+  await issue(externalId, companies.length === 1 ? companies[0].companyId : null);
+}
+
+/**
+ * Resolusi login PRODUKSI (B-27).
+ *
+ * Kata sandi tidak pernah menyentuh server ini: klien menukarnya langsung ke
+ * Identity Platform dan hanya membawa ID token ke sini. Yang dipercaya dari
+ * token itu bukan isinya, melainkan tanda tangannya -- lihat
+ * src/lib/auth/identity-platform.ts.
+ *
+ * Cocok-tidaknya `sub` ke sebuah pengguna adalah urusan PENYEDIAAN AKUN, bukan
+ * autentikasi: super_admin memasang app.users.external_id = uid Identity
+ * Platform (docs/12-deploy-gcp.md §9). Token yang sah untuk orang yang belum
+ * terdaftar tetap tidak bisa masuk.
+ */
+export async function resolveLoginWithIdToken(idToken: string): Promise<void> {
+  const cfg = getAuthConfig();
+  if (cfg.mode !== "identity-platform") {
+    throw new Error("Mode login bukan identity-platform.");
+  }
+
+  const claims = await verifyIdToken(idToken, cfg.projectId);
+  await issueSessionForSubject(
+    claims.subject,
+    `Akun ${claims.email ?? "ini"} terverifikasi di Identity Platform, tetapi belum terhubung ke pengguna AgroVision mana pun. Hubungi super admin.`,
+  );
+}
+
+/**
+ * Resolusi login STUB -- pengembangan saja.
+ *
+ * Mencocokkan email ke user aktif tanpa verifikasi kredensial apa pun. Dua
+ * gerbang menjaganya di sini (AUTH_MODE=stub dan NODE_ENV != production, lihat
+ * getAuthConfig), dan gerbang ketiga ada di database: app.lookup_login_stub()
+ * melempar 42501 kecuali app.auth_settings.stub_login_enabled = true.
+ *
+ * Gerbang database itu yang menentukan, bukan yang di sini: env bisa salah
+ * pasang di lingkungan mana pun, sedangkan saklar DB hanya bisa dibalik
+ * superuser -- app_rw tidak punya hak tulis atas tabelnya (migrasi 0057).
+ */
+export async function resolveLoginWithEmailStub(email: string): Promise<void> {
+  if (getAuthConfig().mode !== "stub") {
+    throw new Error(
+      "Login stub dimatikan. Set AUTH_MODE=stub (hanya di lingkungan pengembangan) atau masuk lewat Identity Platform.",
+    );
+  }
+
+  const rows = await queryWithoutRlsContext<{ external_id: string }>(
+    `SELECT external_id FROM app.lookup_login_stub($1)`,
+    [email.trim()],
+  );
+  const user = rows[0];
+  if (!user) throw new Error("Email tidak terdaftar atau akun tidak aktif");
+
+  await issueSessionForSubject(user.external_id, "Email tidak terdaftar atau akun tidak aktif");
 }

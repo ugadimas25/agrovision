@@ -28,6 +28,12 @@ jobs:
 
       - run: npx tsc --noEmit
 
+      # Verifikasi ID token Identity Platform (B-27). Tanpa DB dan tanpa
+      # jaringan: skrip membuat sertifikat penandatangan sendiri lalu
+      # membuktikan token cacat DITOLAK. Ditaruh di job ini, bukan di db-verify,
+      # karena tidak menyentuh Postgres sama sekali.
+      - run: npm run auth:verify
+
       # DATABASE_URL/SESSION_SECRET di sini nilai dummy khusus build, sama seperti
       # Dockerfile -- next build meng-import halaman, dan koneksi DB dibuat saat
       # modul di-import, tapi build tidak konek DB sungguhan.
