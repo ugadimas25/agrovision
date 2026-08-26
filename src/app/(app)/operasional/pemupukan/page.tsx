@@ -114,7 +114,7 @@ export default async function Page() {
       {canWrite && ctx.companyId && ferts.length === 0 && (
         <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <p className="text-sm text-amber-900">Belum ada jenis pupuk. <Link href="/pengaturan/master-data" className="font-medium underline">Tambah di Master Data</Link> dulu.</p>
+          <p className="text-sm text-amber-900">Belum ada jenis pupuk. <Link href="/pengaturan/master-data" className="font-medium underline">Tambah di Konfigurasi</Link> dulu.</p>
         </div>
       )}
       {(() => {

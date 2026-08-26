@@ -7,7 +7,7 @@ import { getDict } from "@/lib/i18n";
 import { AksesDitolak } from "@/components/ui/AksesDitolak";
 import { MasterDataManager } from "./MasterDataManager";
 
-export const metadata = { title: "Master Data — AgroVision" };
+export const metadata = { title: "Konfigurasi — AgroVision" };
 
 /**
  * CRUD master data untuk super_admin.

@@ -90,7 +90,7 @@ export default async function AnggaranPage() {
                     {" "}
                     Kategori biaya belum ada —{" "}
                     <Link href="/pengaturan/master-data?tipe=cost_category" className="font-medium underline">
-                      buat di Master Data
+                      buat di Konfigurasi
                     </Link>
                     .
                   </>
