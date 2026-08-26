@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
-import { Loader2, Pencil, Save, CircleCheck, Paperclip, Upload, FileText } from "lucide-react";
+import { useActionState, useRef } from "react";
+import { Loader2, Pencil, Save, CircleCheck, Paperclip, Upload, FileText, X } from "lucide-react";
 import { setOrganicStatusAction, attachOrganicEvidenceAction, type OrganicState } from "@/lib/actions/organic";
 import type { OrganicItem } from "@/lib/repo/sustainability";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
@@ -44,16 +44,23 @@ export function OrganicTracker({
 }
 
 /**
- * Editor per baris dibuka dengan <details> native, BUKAN toggle useState.
+ * Editor per baris dibuka lewat pop-up modal (`<dialog>` native, B-32) --
+ * sebelumnya <details> inline, ditinggalkan karena melebarkan baris tabel.
+ * Dua form terpisah (status & unggah bukti) tetap ada di HTML sejak render
+ * pertama -- itu yang membuat uji berbasis HTTP (scripts/at-verify.mjs) tetap
+ * menemukannya. Tapi BUKAN berarti tetap jalan tanpa JavaScript: <dialog>
+ * tanpa atribut open adalah display:none dan hanya bisa dibuka showModal(),
+ * jadi tanpa JS modalnya tidak pernah terlihat. Itu harga yang dibayar untuk
+ * backdrop/Escape/focus trap -- sama seperti 9 modul lain sejak B-21.
  *
- * Dengan useState, formnya tidak ada di HTML server sampai tombolnya diklik —
- * jadi tanpa JavaScript tidak ada cara mengubah status maupun melampirkan bukti,
- * dan uji berbasis HTTP tidak bisa menemukan formnya sama sekali. Pola <details>
- * ini sama dengan form lain di aplikasi ini (mis. PriceRowForm, PriceMetaEditor).
+ * Tidak auto-close saat salah satu form berhasil (beda dari OpRecordEditor):
+ * pengguna sering mengubah status LALU melampirkan bukti dalam satu sesi --
+ * menutup modal begitu form pertama sukses akan memutus alur itu.
  */
 function Row({ item, variant, canEdit }: { item: OrganicItem; variant: "standard" | "evidence"; canEdit: boolean }) {
   const [state, action, pending] = useActionState(setOrganicStatusAction, initial);
   const [upState, upAction, upPending] = useActionState(attachOrganicEvidenceAction, initial);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const meta = ORGANIC_STATUS[item.status] ?? ORGANIC_STATUS.belum_mulai;
   // AI-21: status "Tersertifikasi" tanpa satu dokumen pun adalah klaim kepatuhan
   // tanpa bukti — dan hitungan "n/7 lengkap" memakainya untuk mengklaim
@@ -116,11 +123,34 @@ function Row({ item, variant, canEdit }: { item: OrganicItem; variant: "standard
       </tr>
       {canEdit && (
         <tr className="border-b border-slate-100 bg-slate-50/60">
-          <td colSpan={4} className="px-4 py-3">
-            <details>
-              <summary className="mb-2 inline-flex cursor-pointer list-none items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
-                <Pencil className="h-3 w-3" /> Ubah{variant === "evidence" ? " / lampirkan bukti" : ""}
-              </summary>
+          <td colSpan={4} className="px-4 py-3 text-right">
+            <button
+              type="button"
+              onClick={() => dialogRef.current?.showModal()}
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              <Pencil className="h-3 w-3" /> Ubah{variant === "evidence" ? " / lampirkan bukti" : ""}
+            </button>
+
+            <dialog
+              ref={dialogRef}
+              onClick={(e) => { if (e.target === dialogRef.current) dialogRef.current?.close(); }}
+              className="m-auto w-[min(92vw,32rem)] rounded-xl border border-slate-200 bg-white p-0 text-left shadow-xl backdrop:bg-slate-900/50"
+            >
+            <div className="max-h-[85vh] overflow-y-auto p-4">
+              <div className="mb-3 flex items-center justify-between border-b border-slate-100 pb-3">
+                <h2 className="text-sm font-semibold text-slate-800">
+                  Ubah{variant === "evidence" ? " / lampirkan bukti" : ""} -- {item.name}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => dialogRef.current?.close()}
+                  aria-label="Tutup"
+                  className="rounded p-1 text-slate-500 hover:bg-slate-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             <form action={action} className="flex flex-wrap items-end gap-2">
               <input type="hidden" name="itemCode" value={item.code} />
               <label className="flex flex-col gap-1 text-xs text-slate-500">
@@ -177,7 +207,8 @@ function Row({ item, variant, canEdit }: { item: OrganicItem; variant: "standard
                 </p>
               </form>
             )}
-            </details>
+            </div>
+            </dialog>
           </td>
         </tr>
       )}

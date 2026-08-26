@@ -7,16 +7,18 @@
  * tapi tidak ada cara memperbaikinya, jadi satu-satunya jalan adalah membuat
  * record baru dan meninggalkan yang lama menggantung.
  *
- * <details> native, BUKAN toggle useState: seluruh field editor harus ada di HTML
- * sejak render pertama supaya tetap bisa diisi dan disubmit ketika JavaScript
- * gagal dimuat — sama seperti ExpenditureForm dan DecisionForm.
+ * Pop-up modal (`<dialog>` native, B-32) -- ironisnya berkas ini justru rujukan
+ * asal saat OpRecordEditor.tsx (pola standar 9 modul operasional) ditulis,
+ * tapi tidak pernah diperbarui balik. Sekarang menyusul: m-auto untuk
+ * penengahan (preflight Tailwind menghapus margin bawaan dialog), backdrop
+ * + Escape + focus trap gratis dari elemen native, tanpa dependency modal baru.
  *
  * useActionState per baris (pola DecisionForm): pesan galat harus menempel pada
  * baris yang gagal, bukan melayang di atas tabel tanpa menyebut baris mana.
  */
 
-import { useActionState } from "react";
-import { Loader2, Pencil, Save, CircleAlert, CircleCheck, ChevronDown } from "lucide-react";
+import { useActionState, useEffect, useRef } from "react";
+import { Loader2, Pencil, Save, CircleAlert, X } from "lucide-react";
 import { updateExpenditureAction, type ActionState } from "@/lib/actions/costing";
 import { cn } from "@/lib/utils";
 
@@ -40,20 +42,46 @@ export function ExpenditureEditor({
   note: string | null;
 }) {
   const [state, formAction, saving] = useActionState(updateExpenditureAction, initial);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  // Tutup otomatis begitu perbaikan tersimpan -- sama seperti OpRecordEditor.
+  useEffect(() => {
+    if (state.ok) dialogRef.current?.close();
+  }, [state.ok]);
 
   const inputCls =
     "w-full rounded-md border bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/30";
   const err = (k: string) => state.fieldErrors?.[k];
 
   return (
-    <details className="group w-full text-left" open={state.message !== "" && !state.ok}>
-      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+    <>
+      <button
+        type="button"
+        onClick={() => dialogRef.current?.showModal()}
+        className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+      >
         <Pencil className="h-3 w-3" />
         Ubah
-        <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
-      </summary>
+      </button>
 
-      <form action={formAction} className="mt-2 w-full space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-3 sm:w-72">
+      <dialog
+        ref={dialogRef}
+        onClick={(e) => { if (e.target === dialogRef.current) dialogRef.current?.close(); }}
+        className="m-auto w-[min(92vw,28rem)] rounded-xl border border-slate-200 bg-white p-0 shadow-xl backdrop:bg-slate-900/50"
+      >
+      <form action={formAction} className="max-h-[85vh] w-full space-y-2 overflow-y-auto p-4">
+        <div className="mb-1 flex items-center justify-between border-b border-slate-100 pb-3">
+          <h2 className="text-sm font-semibold text-slate-800">Ubah pengeluaran</h2>
+          <button
+            type="button"
+            onClick={() => dialogRef.current?.close()}
+            aria-label="Tutup"
+            className="rounded p-1 text-slate-500 hover:bg-slate-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
         <input type="hidden" name="id" value={id} />
 
         <label className="block">
@@ -107,28 +135,31 @@ export function ExpenditureEditor({
           <input name="note" defaultValue={note ?? ""} maxLength={1000} className={cn(inputCls, "border-slate-200")} />
         </label>
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-        >
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : state.ok ? <CircleCheck className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-          Simpan perbaikan
-        </button>
-
-        {state.message && (
-          <p
-            role="status"
-            className={cn(
-              "flex items-start gap-1 text-xs leading-snug",
-              state.ok ? "text-emerald-700" : "text-red-600",
-            )}
+        <div className="mt-2 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+          {state.message && !state.ok && (
+            <p role="status" className="mr-auto flex items-center gap-1 text-xs leading-snug text-red-600">
+              <CircleAlert className="h-3.5 w-3.5 shrink-0" />
+              {state.message}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => dialogRef.current?.close()}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
           >
-            {!state.ok && <CircleAlert className="mt-0.5 h-3 w-3 shrink-0" />}
-            {state.message}
-          </p>
-        )}
+            Batal
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Simpan perbaikan
+          </button>
+        </div>
       </form>
-    </details>
+      </dialog>
+    </>
   );
 }

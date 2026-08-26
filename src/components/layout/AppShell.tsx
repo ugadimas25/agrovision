@@ -22,7 +22,8 @@ export function AppShell({
   email: string;
   activeCompanyId: string | null;
   companies: CompanyOption[];
-  pendingApprovalCount: number;
+  /** null = role bukan approver/super_admin, badge disembunyikan (bukan angka 0). */
+  pendingApprovalCount: number | null;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
