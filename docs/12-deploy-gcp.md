@@ -371,6 +371,43 @@ Proof that each rejection actually fires: `npm run auth:verify` (36 checks).
 
 ### One-time setup
 
+**Run it as a script, not as a checklist:** `scripts/setup-identity-platform.mjs`
+performs every step below, is safe to re-run, and changes nothing without `--apply`.
+
+```bash
+# 1. proxy to the production instance (separate terminal)
+cloud-sql-proxy --port 55435 PROJECT:asia-southeast2:agrovision-db
+
+# 2. superuser credentials, rewritten to go through the proxy
+export MIGRATION_DATABASE_URL="$(gcloud secrets versions access latest \
+  --secret=MIGRATION_DATABASE_URL --project=PROJECT \
+  | sed 's#@/agrovision?host=[^ ]*#@127.0.0.1:55435/agrovision#')"
+
+# 3. read the plan, then execute it
+node scripts/setup-identity-platform.mjs --project=PROJECT
+node scripts/setup-identity-platform.mjs --project=PROJECT --apply
+```
+
+It enables the API, initializes Identity Platform, turns on the email/password
+provider, creates a Web API key, creates one account per **active** row in
+`app.users` (reusing any that already exist, never resetting their password),
+writes each account's uid into `external_id`, then **proves the result**: it signs
+in with every new credential and checks that the resulting `sub` resolves through
+`app.resolve_session()`. It prints the passwords once (also to
+`identity-platform-credentials.txt`, chmod 600, gitignored).
+
+> ⚠️ **The env vars must live on the trigger, not on the service.** The deploy step
+> uses `--set-env-vars`, which *replaces* the service's entire environment. Setting
+> `IDENTITY_PLATFORM_*` directly on the Cloud Run service works right up until the
+> next deploy silently wipes it. The script therefore sets `_IDENTITY_PROJECT_ID`
+> and `_IDENTITY_API_KEY` on the `agrovision-deploy-v2` trigger.
+
+> ⚠️ Demo accounts use `@demo.invalid` / `@agrovision.local` addresses, which cannot
+> receive mail — **there is no password-reset path**. A lost password means
+> recreating the account. Create real users with real addresses, linked the same way.
+
+The manual equivalent, if you would rather click through the console:
+
 1. **Enable Identity Platform** in the console and add the sign-in providers you
    need (email/password is what the login form drives today).
 2. **Create an account per user.** Self-signup is not required and is safer left

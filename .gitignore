@@ -58,3 +58,6 @@ TIKET-*-INTERNAL.md
 # salinan data, bukan sumber kebenaran. Skema tetap dari db/migrations/, data
 # demo tetap dari db/seed-demo.mjs.
 /db/backups/
+
+# Kredensial hasil scripts/setup-identity-platform.mjs -- JANGAN pernah di-commit.
+identity-platform-credentials.txt
