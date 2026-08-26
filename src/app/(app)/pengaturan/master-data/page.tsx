@@ -69,6 +69,7 @@ export default async function MasterDataPage({
             id: i.id,
             code: i.code,
             name: i.name,
+            parentId: i.parentId,
             parentName: i.parentName,
             sortOrder: i.sortOrder,
             isActive: i.isActive,
