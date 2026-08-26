@@ -298,6 +298,17 @@ function ItemRow({
           </span>
         )}
       </td>
+      {variant !== "flat" && (
+        // Kartu mobile (<768px) jadi blok label-nilai lepas dari tabel --
+        // indentasi & bg pembeda baris induk (di atas) TIDAK bertahan di sana
+        // (.rt-cards tr{background:#fff} menang atas bg-slate-50/60), jadi
+        // satu-satunya sinyal yang tersisa cuma tebal/↳. Sel ini mengembalikan
+        // identitas induk secara eksplisit, khusus mobile (md:hidden) --
+        // review @dimasperceka-se di PR #42.
+        <td data-label="Induk" data-empty={!item.parentName} className="px-4 py-2.5 text-slate-500 md:hidden">
+          {item.parentName ?? "—"}
+        </td>
+      )}
       <td data-label="Urutan" className="px-4 py-2.5 text-right tabular-nums text-slate-500">
         {item.sortOrder}
       </td>
