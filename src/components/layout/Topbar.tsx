@@ -117,21 +117,32 @@ export function Topbar({
       <div className="flex items-center gap-2 md:gap-3">
         <InstallPrompt locale={locale} />
 
-        {pendingApprovalCount !== null && (
-          <Link
-            href="/approval"
-            aria-label={`${d("nav.approval.inbox")} — ${pendingApprovalCount} ${d("chrome.approvalPending", "belum ditindaklanjuti")}`}
-            title={d("nav.approval.inbox")}
-            className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-50 hover:text-emerald-700 md:h-9 md:w-9"
-          >
-            <Mail className="h-5 w-5" aria-hidden="true" />
-            {pendingApprovalCount > 0 && (
-              <span className="absolute right-0.5 top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white md:-right-0.5 md:-top-0.5">
-                {pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}
-              </span>
-            )}
-          </Link>
-        )}
+        {/* Link SELALU dirender untuk semua role -- sejak #37 ini satu-satunya
+            jalan ke /approval (Sidebar & BottomNav tidak punya entrinya lagi),
+            dan /approval sengaja tetap terbuka untuk creator/viewer (mereka
+            cuma tidak diberi tombol Setujui/Tolak, bukan digate dari
+            halamannya). Hanya BADGE ANGKA-nya yang digate per role --
+            creator/viewer tidak punya apa pun yang "menunggu keputusan
+            mereka", tapi mereka tetap perlu tautan ke /approval dan
+            /approval/riwayat (satu-satunya link ke situ ada di dalam
+            /approval). Review @dimasperceka-se di PR #39. */}
+        <Link
+          href="/approval"
+          aria-label={
+            pendingApprovalCount !== null
+              ? `${d("nav.approval.inbox")} — ${pendingApprovalCount} ${d("chrome.approvalPending", "belum ditindaklanjuti")}`
+              : d("nav.approval.inbox")
+          }
+          title={d("nav.approval.inbox")}
+          className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-50 hover:text-emerald-700 md:h-9 md:w-9"
+        >
+          <Mail className="h-5 w-5" aria-hidden="true" />
+          {pendingApprovalCount !== null && pendingApprovalCount > 0 && (
+            <span className="absolute right-0.5 top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white md:-right-0.5 md:-top-0.5">
+              {pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}
+            </span>
+          )}
+        </Link>
 
         {/* Desktop: bahasa + avatar + logout berjajar */}
         <div className="hidden items-center gap-3 md:flex">
