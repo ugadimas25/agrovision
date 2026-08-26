@@ -6,9 +6,14 @@
  * versi lama ditutup, versi baru lahir, dan nilai historis tidak ikut berubah.
  *
  * Pop-up modal (`<dialog>` native, B-31) -- pola OpRecordEditor.tsx, bukan
- * lagi <details> inline. Formnya tetap ada di DOM sejak render pertama
- * (dialog native, bukan toggle useState) jadi tarif tetap bisa diterbitkan
- * tanpa JavaScript, sama seperti alasan <details> yang diganti.
+ * lagi <details> inline. Formnya ADA di DOM sejak render pertama (dialog
+ * native, bukan toggle useState) sehingga harness HTTP (`at:verify`) tetap
+ * menemukannya -- tapi ini BUKAN "tetap bisa diterbitkan tanpa JavaScript".
+ * `<dialog>` tanpa atribut `open` adalah `display: none`; satu-satunya
+ * pemicunya `showModal()`, yang butuh JS. Regresi ini persis yang dicatat
+ * komentar lama berkas ini sendiri soal versi `useState`: tanpa JS, tarif
+ * memang tidak bisa diterbitkan sama sekali. Review @dimasperceka-se di
+ * PR #43.
  *
  * INI BUKAN edit-di-tempat -- judul & label tombol modal sengaja tetap
  * menyebut "Terbitkan tarif baru", bukan "Ubah tarif", supaya tidak
@@ -31,6 +36,14 @@ export function PriceRateEditor({
   const [state, action, pending] = useActionState(setPriceRateAction, initial);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
+  // Tutup otomatis begitu penerbitan berhasil -- sama seperti OpRecordEditor.
+  // Investigasi tambahan (Dimas, nit non-blocking): menahan modal terbuka
+  // dengan konfirmasi eksplisit TIDAK bisa diandalkan di sini -- setPriceRateAction
+  // memanggil revalidatePath("/costing/refleksi") (angka refleksi biaya harus
+  // ikut ter-refresh), dan itu me-remount seluruh pohon komponen ini begitu
+  // sukses, termasuk state dialognya sendiri. Diverifikasi langsung: modal
+  // hilang seketika pasca-submit apa pun yang dilakukan di sini, sebelum
+  // sempat menampilkan apa pun ke pengguna.
   useEffect(() => {
     if (state.ok) dialogRef.current?.close();
   }, [state.ok]);
@@ -60,7 +73,7 @@ export function PriceRateEditor({
         onClick={(e) => { if (e.target === dialogRef.current) dialogRef.current?.close(); }}
         className="m-auto w-[min(92vw,24rem)] rounded-xl border border-slate-200 bg-white p-0 text-left shadow-xl backdrop:bg-slate-900/50"
       >
-        <form action={action} data-testid={`terbitkan-tarif-${code}`} className="w-full space-y-2 p-4">
+        <form action={action} data-testid={`terbitkan-tarif-${code}`} className="max-h-[85vh] w-full space-y-2 overflow-y-auto p-4">
           <div className="mb-1 flex items-center justify-between border-b border-slate-100 pb-3">
             <h2 className="text-sm font-semibold text-slate-800">Terbitkan tarif baru &mdash; {code}</h2>
             <button
