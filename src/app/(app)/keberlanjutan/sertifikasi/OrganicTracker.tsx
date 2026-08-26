@@ -47,8 +47,11 @@ export function OrganicTracker({
  * Editor per baris dibuka lewat pop-up modal (`<dialog>` native, B-32) --
  * sebelumnya <details> inline, ditinggalkan karena melebarkan baris tabel.
  * Dua form terpisah (status & unggah bukti) tetap ada di HTML sejak render
- * pertama, jadi tetap bisa disubmit tanpa JavaScript -- hanya pembungkusnya
- * yang berubah dari <details> ke <dialog>, bukan balik ke toggle useState.
+ * pertama -- itu yang membuat uji berbasis HTTP (scripts/at-verify.mjs) tetap
+ * menemukannya. Tapi BUKAN berarti tetap jalan tanpa JavaScript: <dialog>
+ * tanpa atribut open adalah display:none dan hanya bisa dibuka showModal(),
+ * jadi tanpa JS modalnya tidak pernah terlihat. Itu harga yang dibayar untuk
+ * backdrop/Escape/focus trap -- sama seperti 9 modul lain sejak B-21.
  *
  * Tidak auto-close saat salah satu form berhasil (beda dari OpRecordEditor):
  * pengguna sering mengubah status LALU melampirkan bukti dalam satu sesi --
