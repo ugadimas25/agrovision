@@ -32,6 +32,13 @@ export type BudgetPlanRow = {
   itemCount: number;
   /** Jumlah baris. null = belum ada baris sama sekali — BUKAN 0 rupiah. */
   subtotalIdr: number | null;
+  /** Investasi awal (08_CAPEX_RAB). null = belum ada baris capex. */
+  capexIdr: number | null;
+  /** Biaya operasional berulang (09_OPEX_10Y). null = belum ada baris opex. */
+  opexIdr: number | null;
+  /** Nilai kontingensi. Dihitung dari subtotal DIKURANGI baris yang
+   *  dikecualikan (mis. akuisisi lahan) — aturan 02_Assumptions C14. */
+  contingencyIdr: number | null;
   /** subtotal + kontingensi. null bila subtotal null. */
   totalIdr: number | null;
 };
@@ -48,6 +55,15 @@ export type BudgetPlanItemRow = {
   amountIdr: number;
   addedAfterApproval: boolean;
   note: string | null;
+  /** 0061, mengikuti model Banyumas. */
+  costKind: "capex" | "opex";
+  stage: string | null;
+  driver: string | null;
+  sourceRef: string | null;
+  confidence: "high" | "medium" | "low" | null;
+  excludeFromContingency: boolean;
+  /** false = dicoret, tetap ditampilkan tapi tidak ikut total mana pun. */
+  isActive: boolean;
 };
 
 const PLAN_SELECT = `
@@ -55,12 +71,19 @@ const PLAN_SELECT = `
          p.note, p.approval_status, p.rejection_reason,
          cu.full_name AS created_by_name, du.full_name AS decided_by_name,
          COALESCE(i.n, 0) AS item_count,
-         i.subtotal
+         i.subtotal, i.capex, i.opex, i.dasar_cadangan
     FROM app.budget_plans p
     LEFT JOIN app.users cu ON cu.id = p.created_by
     LEFT JOIN app.users du ON du.id = p.decided_by
     LEFT JOIN LATERAL (
-      SELECT count(*)::int AS n, sum(amount_idr) AS subtotal
+      -- Seluruh angka hanya dari baris AKTIF. Baris nonaktif tetap ada dan
+      -- tetap terlihat, tapi tidak boleh ikut menggerakkan total mana pun.
+      SELECT count(*) FILTER (WHERE is_active)::int AS n,
+             sum(amount_idr) FILTER (WHERE is_active) AS subtotal,
+             sum(amount_idr) FILTER (WHERE is_active AND cost_kind = 'capex') AS capex,
+             sum(amount_idr) FILTER (WHERE is_active AND cost_kind = 'opex')  AS opex,
+             -- Dasar kontingensi mengecualikan baris bertanda (akuisisi lahan).
+             sum(amount_idr) FILTER (WHERE is_active AND NOT exclude_from_contingency) AS dasar_cadangan
         FROM app.budget_plan_items WHERE plan_id = p.id
     ) i ON true`;
 
@@ -69,6 +92,7 @@ type PlanDb = {
   horizon_months: number; contingency_pct: string; note: string | null; approval_status: string;
   rejection_reason: string | null; created_by_name: string | null;
   decided_by_name: string | null; item_count: number; subtotal: string | null;
+  capex: string | null; opex: string | null; dasar_cadangan: string | null;
 };
 
 function toPlan(r: PlanDb): BudgetPlanRow {
@@ -76,6 +100,11 @@ function toPlan(r: PlanDb): BudgetPlanRow {
   // bukan "nol rupiah". Layar merender em-dash untuk itu.
   const subtotal = r.subtotal === null ? null : Number(r.subtotal);
   const pct = Number(r.contingency_pct);
+  // Kontingensi dihitung dari baris yang TIDAK dikecualikan, bukan dari
+  // seluruh subtotal — 0060 melakukan yang kedua dan melebih-lebihkan
+  // anggaran tepat pada komponen termahal (harga tanah).
+  const dasar = r.dasar_cadangan === null ? null : Number(r.dasar_cadangan);
+  const cadangan = dasar === null ? null : Math.round(dasar * pct / 100);
   return {
     id: r.id,
     code: r.code,
@@ -90,7 +119,10 @@ function toPlan(r: PlanDb): BudgetPlanRow {
     decidedByName: r.decided_by_name,
     itemCount: r.item_count,
     subtotalIdr: subtotal,
-    totalIdr: subtotal === null ? null : Math.round(subtotal * (1 + pct / 100)),
+    capexIdr: r.capex === null ? null : Number(r.capex),
+    opexIdr: r.opex === null ? null : Number(r.opex),
+    contingencyIdr: cadangan,
+    totalIdr: subtotal === null ? null : subtotal + (cadangan ?? 0),
   };
 }
 
@@ -109,16 +141,20 @@ export async function listBudgetPlanItems(ctx: RlsContext, planId: string): Prom
     id: string; phase_month: number; category_name: string | null; description: string;
     item_kind: string; volume: string; uom_name: string | null; unit_price_idr: string;
     amount_idr: string; added_after_approval: boolean; note: string | null;
+    cost_kind: "capex" | "opex"; stage: string | null; driver: string | null;
+    source_ref: string | null; confidence: "high" | "medium" | "low" | null;
+    exclude_from_contingency: boolean; is_active: boolean;
   }>(
     ctx,
     `SELECT i.id, i.phase_month, cat.name AS category_name, i.description, i.item_kind,
             i.volume, uom.name AS uom_name, i.unit_price_idr, i.amount_idr,
-            i.added_after_approval, i.note
+            i.added_after_approval, i.note, i.cost_kind, i.stage, i.driver,
+            i.source_ref, i.confidence, i.exclude_from_contingency, i.is_active
        FROM app.budget_plan_items i
        LEFT JOIN app.master_items cat ON cat.id = i.cost_category_id
        LEFT JOIN app.master_items uom ON uom.id = i.uom_item_id
       WHERE i.plan_id = $1
-      ORDER BY i.phase_month, i.sort_order, i.created_at`,
+      ORDER BY i.cost_kind, i.stage NULLS LAST, i.phase_month, i.sort_order, i.created_at`,
     [planId],
   );
   return rows.map((r) => ({
@@ -133,6 +169,13 @@ export async function listBudgetPlanItems(ctx: RlsContext, planId: string): Prom
     amountIdr: Number(r.amount_idr),
     addedAfterApproval: r.added_after_approval,
     note: r.note,
+    costKind: r.cost_kind,
+    stage: r.stage,
+    driver: r.driver,
+    sourceRef: r.source_ref,
+    confidence: r.confidence,
+    excludeFromContingency: r.exclude_from_contingency,
+    isActive: r.is_active,
   }));
 }
 
@@ -144,7 +187,7 @@ export async function budgetPlanByPhase(
   const rows = await rlsQuery<{ phase_month: number; amount: string }>(
     ctx,
     `SELECT phase_month, sum(amount_idr) AS amount
-       FROM app.budget_plan_items WHERE plan_id = $1
+       FROM app.budget_plan_items WHERE plan_id = $1 AND is_active
       GROUP BY phase_month ORDER BY phase_month`,
     [planId],
   );
@@ -170,6 +213,9 @@ export async function addBudgetPlanItem(
   input: {
     planId: string; phaseMonth: number; costCategoryId: string; description: string;
     itemKind: string; volume: number; uomItemId: string | null; unitPriceIdr: number; note: string | null;
+    costKind: "capex" | "opex"; stage: string | null; driver: string | null;
+    sourceRef: string | null; confidence: "high" | "medium" | "low" | null;
+    excludeFromContingency: boolean;
   },
 ): Promise<void> {
   // added_after_approval ditentukan DARI STATUS RAB-nya, bukan dari kiriman
@@ -179,18 +225,37 @@ export async function addBudgetPlanItem(
     ctx,
     `INSERT INTO app.budget_plan_items
        (plan_id, phase_month, cost_category_id, description, item_kind, volume,
-        uom_item_id, unit_price_idr, note, created_by, added_after_approval)
+        uom_item_id, unit_price_idr, note, created_by, added_after_approval,
+        cost_kind, stage, driver, source_ref, confidence, exclude_from_contingency)
      SELECT $1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10,
-            (p.approval_status = 'approved')
+            (p.approval_status = 'approved'),
+            $11::app.budget_cost_kind,$12,$13,$14,$15::app.assumption_confidence,$16
        FROM app.budget_plans p WHERE p.id = $1`,
     [input.planId, input.phaseMonth, input.costCategoryId, input.description, input.itemKind,
-     input.volume, input.uomItemId, input.unitPriceIdr, input.note, ctx.userId],
+     input.volume, input.uomItemId, input.unitPriceIdr, input.note, ctx.userId,
+     input.costKind, input.stage, input.driver, input.sourceRef, input.confidence,
+     input.excludeFromContingency],
   );
 }
 
-export async function deleteBudgetPlanItem(ctx: RlsContext, itemId: string): Promise<number> {
+/**
+ * Nonaktifkan / hidupkan kembali satu baris RAB.
+ *
+ * TIDAK ada penghapusan. 17_Model_Fleksibel memakai kolom `Aktif` di seluruh
+ * bagiannya dan peta ketergantungannya menulis "Jangan hapus baris total":
+ * RAB adalah dokumen yang dinegosiasikan, dan baris yang dicoret finance
+ * minggu ini bisa dihidupkan lagi bulan depan.
+ */
+export async function setBudgetPlanItemActive(
+  ctx: RlsContext,
+  itemId: string,
+  aktif: boolean,
+): Promise<number> {
   return withRls(ctx, async (c) => {
-    const r = await c.query(`DELETE FROM app.budget_plan_items WHERE id = $1`, [itemId]);
+    const r = await c.query(
+      `UPDATE app.budget_plan_items SET is_active = $2, updated_at = now() WHERE id = $1`,
+      [itemId, aktif],
+    );
     return r.rowCount ?? 0;
   });
 }

@@ -8,6 +8,21 @@ import { cn } from "@/lib/utils";
 const initial: PlanState = { ok: false, message: "" };
 type Option = { value: string; label: string };
 
+// Tahap & penggerak dari 08_CAPEX_RAB (model Banyumas). Dipakai sebagai
+// <datalist> — saran, bukan kurungan: daftar tahap milik metodologi proyek,
+// dan agronomis harus bisa menambah tanpa menunggu migrasi.
+const STAGES = [
+  "A Land", "A Assessment", "A Survey", "A Safeguard", "A Design",
+  "B Land prep", "B Soil", "C Road", "C Drain", "C Boundary", "C Facility",
+  "C Water", "C Power", "C Mobilization", "D Planting", "D Ecology",
+  "E Equipment", "F Systems", "F Payroll",
+];
+
+const DRIVERS = [
+  "gross ha", "net ha", "site", "lot", "sample", "pit", "ton", "m", "unit",
+  "% stock", "tree kg", "equipment", "annual", "calculated",
+];
+
 const KINDS: Option[] = [
   { value: "consumable", label: "Habis pakai (pupuk, dolomit, bibit)" },
   { value: "asset", label: "Aset (cangkul, mesin)" },
@@ -105,6 +120,66 @@ export function ItemForm({
             <input name="note" maxLength={500} className={cls("note")} />
           </label>
         </div>
+
+        {/* Ketertelusuran — mengikuti 08_CAPEX_RAB & 02_Assumptions pada model
+            Banyumas. Kolom-kolom inilah yang membedakan RAB dari daftar
+            belanja: tiap angka menyebut tahapnya, penggeraknya, asalnya, dan
+            seberapa yakin penyusunnya. */}
+        <fieldset className="mt-4 rounded-md border border-slate-200 p-3">
+          <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Ketertelusuran
+          </legend>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Jenis biaya</span>
+              <select name="costKind" defaultValue="capex" className={cls("costKind")}>
+                <option value="capex">CAPEX — investasi awal</option>
+                <option value="opex">OPEX — biaya berulang</option>
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Tahap</span>
+              <input name="stage" maxLength={80} list="tahap-rab" placeholder="mis. B Land prep" className={cls("stage")} />
+              <datalist id="tahap-rab">
+                {STAGES.map((t) => <option key={t} value={t} />)}
+              </datalist>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Penggerak volume</span>
+              <input name="driver" maxLength={80} list="penggerak-rab" placeholder="mis. net ha" className={cls("driver")} />
+              <datalist id="penggerak-rab">
+                {DRIVERS.map((d) => <option key={d} value={d} />)}
+              </datalist>
+            </label>
+
+            <label className="block lg:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Dasar / sumber angka</span>
+              <input name="sourceRef" maxLength={300} placeholder="mis. penawaran CV Angkutan Barito 12 Agu, atau UMK Banyumas 2026" className={cls("sourceRef")} />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Tingkat keyakinan</span>
+              {/* Kosong = BELUM DINILAI, dan itu tetap kosong. Menebak "sedang"
+                  membuat seluruh kolom ini kehilangan arti. */}
+              <select name="confidence" defaultValue="" className={cls("confidence")}>
+                <option value="">— belum dinilai —</option>
+                <option value="high">Tinggi — ada sumber resmi/penawaran</option>
+                <option value="medium">Sedang — tolok ukur pasar</option>
+                <option value="low">Rendah — asumsi perencanaan</option>
+              </select>
+            </label>
+
+            <label className="mt-1 flex items-start gap-2 lg:col-span-3">
+              <input type="checkbox" name="excludeFromContingency" className="mt-0.5 h-4 w-4 rounded border-slate-300" />
+              <span className="text-xs leading-relaxed text-slate-600">
+                Kecualikan dari dasar kontingensi — dipakai untuk akuisisi/sewa lahan,
+                yang harganya hasil negosiasi dan tidak membengkak seperti volume pekerjaan.
+              </span>
+            </label>
+          </div>
+        </fieldset>
 
         <div className="mt-4 flex items-center gap-3">
           <button

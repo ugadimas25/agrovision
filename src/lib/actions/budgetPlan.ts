@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
 import {
-  addBudgetPlanItem, createBudgetPlan, decideBudgetPlan, deleteBudgetPlanItem, submitBudgetPlan,
+  addBudgetPlanItem, createBudgetPlan, decideBudgetPlan, setBudgetPlanItemActive, submitBudgetPlan,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -94,6 +94,15 @@ const itemSchema = z.object({
   uomItemId: z.string().uuid().nullable().catch(null),
   unitPriceIdr: z.coerce.number().min(0, "Harga satuan tidak boleh negatif").max(1e15),
   note: z.string().trim().max(500).nullable().catch(null),
+  // 0061, mengikuti 08_CAPEX_RAB pada model Banyumas.
+  costKind: z.enum(["capex", "opex"]),
+  stage: z.string().trim().max(80).nullable().catch(null),
+  driver: z.string().trim().max(80).nullable().catch(null),
+  sourceRef: z.string().trim().max(300).nullable().catch(null),
+  // Sengaja TANPA default: menebak "medium" untuk baris yang belum ditelaah
+  // membuat seluruh kolom keyakinan tidak berarti.
+  confidence: z.enum(["high", "medium", "low"]).nullable().catch(null),
+  excludeFromContingency: z.coerce.boolean().catch(false),
 });
 
 export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanState> {
@@ -104,6 +113,8 @@ export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanSt
     const ctx = await requireRole("agronomist", "approver", "super_admin");
     const uom = fd.get("uomItemId");
     const note = fd.get("note");
+    const kosong = (v: FormDataEntryValue | null) =>
+      v === null || String(v).trim() === "" ? null : v;
     const parsed = itemSchema.safeParse({
       planId: fd.get("planId"),
       phaseMonth: fd.get("phaseMonth"),
@@ -111,9 +122,15 @@ export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanSt
       description: fd.get("description"),
       itemKind: fd.get("itemKind") ?? "consumable",
       volume: fd.get("volume"),
-      uomItemId: uom === null || String(uom).trim() === "" ? null : uom,
+      uomItemId: kosong(uom),
       unitPriceIdr: fd.get("unitPriceIdr"),
-      note: note === null || String(note).trim() === "" ? null : note,
+      note: kosong(note),
+      costKind: fd.get("costKind") ?? "capex",
+      stage: kosong(fd.get("stage")),
+      driver: kosong(fd.get("driver")),
+      sourceRef: kosong(fd.get("sourceRef")),
+      confidence: kosong(fd.get("confidence")),
+      excludeFromContingency: fd.get("excludeFromContingency") === "on",
     });
     if (!parsed.success) {
       return { ok: false, message: parsed.error.issues[0]?.message ?? "Isian tidak valid", fieldErrors: fieldErrors(parsed.error) };
@@ -126,21 +143,31 @@ export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanSt
   }
 }
 
-export async function deleteItemAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+/**
+ * Coret / hidupkan kembali satu baris — TIDAK menghapus.
+ *
+ * Mengikuti kolom `Aktif` di 17_Model_Fleksibel: "Aktif=0 mengeluarkan baris
+ * dari total tanpa menghapus referensi". Baris yang dicoret finance minggu ini
+ * bisa dihidupkan lagi bulan depan, dan pertanyaan "kenapa pos ini hilang?"
+ * tetap punya jawaban di layar — bukan hanya di audit_log.
+ */
+export async function toggleItemAction(_p: PlanState, fd: FormData): Promise<PlanState> {
   try {
     const ctx = await requireRole("agronomist", "approver", "super_admin");
     const id = z.string().uuid().safeParse(fd.get("id"));
     const planId = z.string().uuid().safeParse(fd.get("planId"));
     if (!id.success || !planId.success) return { ok: false, message: "Baris tidak valid." };
+    const aktifkan = fd.get("aktifkan") === "1";
 
-    const n = await deleteBudgetPlanItem(ctx, id.data);
+    const n = await setBudgetPlanItemActive(ctx, id.data, aktifkan);
     revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
-    // rowCount 0 = policy bpi_edit_delete menyaringnya lewat USING, dan
-    // penyaringan USING tidak melempar galat. Tanpa pesan ini, penghapusan
-    // yang ditolak terlihat seperti penghapusan yang berhasil.
-    return n === 0
-      ? { ok: false, message: "Baris tidak bisa dihapus — RAB ini sudah diajukan atau bukan susunan Anda." }
-      : { ok: true, message: "Komponen dihapus." };
+    // rowCount 0 = policy bpi_edit_update menyaringnya lewat USING, dan
+    // penyaringan USING tidak melempar galat. Tanpa pesan ini, perubahan yang
+    // ditolak terlihat seperti perubahan yang berhasil.
+    if (n === 0) {
+      return { ok: false, message: "Baris tidak bisa diubah — RAB ini sudah diajukan atau bukan susunan Anda." };
+    }
+    return { ok: true, message: aktifkan ? "Komponen dihidupkan kembali." : "Komponen dicoret dari total." };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }

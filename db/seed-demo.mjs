@@ -1273,28 +1273,49 @@ async function seed() {
 
   if (rab.rowCount === 1) {
     const RAB = rab.rows[0].id
-    // [bulan, kategori induk, sub-kategori, uraian, jenis, volume, satuan, harga satuan]
+    // [bulan, kategori induk, sub-kategori, uraian, jenis, volume, satuan, harga,
+    //  tahap, jenis biaya, penggerak, sumber, keyakinan, di luar kontingensi]
+    //
+    // Enam kolom terakhir mengikuti model Banyumas (08_CAPEX_RAB + 02_Assumptions).
+    // Tingkat keyakinan sengaja bervariasi dan sebagian besar RENDAH — di model
+    // aslinya 51 dari 100+ asumsi bertanda Low, dan menyembunyikan itu akan
+    // membuat RAB contoh terlihat lebih pasti daripada kenyataannya.
     const barisRab = [
-      [1, 'Persiapan Lahan', 'Land Clearing', 'Land clearing manual — 10 orang x 5 hari', 'labor', 50, 'HOK', 150000],
-      [1, 'Pengadaan Pupuk', 'Kapur / Dolomit', 'Dolomit 100 kg/ha untuk menetralkan pH', 'consumable', 10000, 'KG', 3500],
-      [1, 'Alat & Mekanisasi', 'Alat Tangan', 'Cangkul — 1 unit per 0,5 ha', 'asset', 200, 'UNIT', 85000],
-      [2, 'Persiapan Lahan', 'Pembuatan Lubang Tanam', 'Lubang tanam 140/ha', 'labor', 350, 'HOK', 150000],
-      [2, 'Pengadaan Pupuk', 'Pupuk Organik', 'Pupuk kandang per lubang tanam', 'consumable', 28000, 'KG', 1200],
-      [2, 'Pengadaan Bibit', 'Bibit Kelapa', 'Bibit kelapa genjah — 70 batang/ha', 'consumable', 7000, 'BATANG', 100000],
-      [2, 'Pengadaan Bibit', 'Bibit Durian', 'Bibit durian — 70 batang/ha (intercrop)', 'consumable', 7000, 'BATANG', 200000],
-      [3, 'Pengadaan Bibit', 'Transport Bibit', 'Angkut bibit dari lokasi pembibitan ke lahan', 'service', 1, 'PAKET', 45000000],
-      [3, 'Tenaga Kerja', 'Upah Harian', 'Penanaman — 5 ha/hari, ~20 hari', 'labor', 400, 'HOK', 150000],
-      [4, 'Tenaga Kerja', 'Upah Harian', 'Pemeliharaan bulan ke-4 — penyiangan & pemupukan', 'labor', 440, 'HOK', 130000],
-      [4, 'Pengadaan Pupuk', 'Pupuk Majemuk', 'NPK ~200 g/tanaman', 'consumable', 2800, 'KG', 12000],
+      [1, 'Persiapan Lahan', 'Land Clearing', 'Land clearing manual — 10 orang x 5 hari', 'labor', 50, 'HOK', 150000,
+       'B Land prep', 'capex', 'gross ha', 'Upah lisan rapat 26 Agu, belum ada penawaran kontraktor', 'low', false],
+      [1, 'Pengadaan Pupuk', 'Kapur / Dolomit', 'Dolomit 100 kg/ha untuk netralkan pH', 'consumable', 10000, 'KG', 3500,
+       'B Soil', 'capex', 'net ha', 'Dosis: Kementan, Budi Daya Hortikultura 2022 (1-1,5 t/ha)', 'medium', false],
+      [1, 'Alat & Mekanisasi', 'Alat Tangan', 'Cangkul — 1 unit per 0,5 ha', 'asset', 200, 'UNIT', 85000,
+       'E Equipment', 'capex', 'net ha', 'Rasio lisan rapat 26 Agu', 'low', false],
+      [2, 'Persiapan Lahan', 'Pembuatan Lubang Tanam', 'Lubang tanam 140/ha', 'labor', 350, 'HOK', 150000,
+       'B Land prep', 'capex', 'net ha', 'Belum ada studi waktu kerja', 'low', false],
+      [2, 'Pengadaan Pupuk', 'Pupuk Organik', 'Pupuk kandang per lubang tanam', 'consumable', 28000, 'KG', 1200,
+       'B Soil', 'capex', 'net ha', 'Harga ritel/curah, perlu penawaran pemasok', 'low', false],
+      [2, 'Pengadaan Bibit', 'Bibit Kelapa', 'Bibit kelapa genjah — 70 batang/ha', 'consumable', 7000, 'BATANG', 100000,
+       'D Planting', 'capex', 'net ha', 'Harga lisan rapat 26 Agu', 'low', false],
+      [2, 'Pengadaan Bibit', 'Bibit Durian', 'Bibit durian — 70 batang/ha (intercrop)', 'consumable', 7000, 'BATANG', 200000,
+       'D Planting', 'capex', 'net ha', 'Harga lisan rapat 26 Agu', 'low', false],
+      [3, 'Pengadaan Bibit', 'Transport Bibit', 'Angkut bibit dari pembibitan ke lahan', 'service', 1, 'PAKET', 45000000,
+       'D Planting', 'capex', 'lot', 'Perkiraan; bibit dari Jateng/Jogja/Sumatera', 'low', false],
+      [3, 'Tenaga Kerja', 'Upah Harian', 'Penanaman — 5 ha/hari, ~20 hari', 'labor', 400, 'HOK', 150000,
+       'D Planting', 'capex', 'net ha', 'Upah lisan rapat 26 Agu', 'low', false],
+      [4, 'Tenaga Kerja', 'Upah Harian', 'Pemeliharaan bulan ke-4 — penyiangan & pemupukan', 'labor', 440, 'HOK', 130000,
+       'F Payroll', 'opex', 'annual', 'UMK Banyumas 2026 sebagai batas bawah', 'medium', false],
+      [4, 'Pengadaan Pupuk', 'Pupuk Majemuk', 'NPK ~200 g/tanaman', 'consumable', 2800, 'KG', 12000,
+       'B Soil', 'opex', 'net ha', 'Dosis lisan rapat; harga ritel', 'low', false],
     ]
-    for (const [i, [bulan, induk, sub, uraian, jenis, vol, uom, harga]] of barisRab.entries()) {
+    for (const [i, [bulan, induk, sub, uraian, jenis, vol, uom, harga,
+                    tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan]] of barisRab.entries()) {
       await c.query(
         `INSERT INTO app.budget_plan_items
            (plan_id, phase_month, cost_category_id, description, item_kind, volume,
-            uom_item_id, unit_price_idr, sort_order, created_by)
-         VALUES ($1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10)`,
+            uom_item_id, unit_price_idr, sort_order, created_by,
+            stage, cost_kind, driver, source_ref, confidence, exclude_from_contingency)
+         VALUES ($1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10,
+                 $11,$12::app.budget_cost_kind,$13,$14,$15::app.assumption_confidence,$16)`,
         [RAB, bulan, kategoriRab(induk, sub), uraian, jenis, vol, uomIds[uom], harga, i,
-         '00000000-0000-4000-8000-0000000000e7'])
+         '00000000-0000-4000-8000-0000000000e7',
+         tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan])
     }
   }
 
