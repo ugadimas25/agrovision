@@ -124,6 +124,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "role.approver": "Approver",
     "role.creator": "Petugas Lapangan",
     "role.viewer": "Pembaca",
+    "role.agronomist": "Agronomis",
     // status record
     "status.draft": "Draft",
     "status.submitted": "Diajukan",
@@ -251,6 +252,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "role.approver": "Approver",
     "role.creator": "Field Officer",
     "role.viewer": "Viewer",
+    "role.agronomist": "Agronomist",
     "status.draft": "Draft",
     "status.submitted": "Submitted",
     "status.under_review": "Under review",

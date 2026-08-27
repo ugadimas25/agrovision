@@ -12,7 +12,7 @@ import { UserRowActions } from "./UserRowActions";
 
 export const metadata = { title: "Pengguna & Akses — AgroVision" };
 
-const ROLE = { super_admin: "Super Admin", approver: "Approver", creator: "Petugas Lapangan", viewer: "Pembaca" };
+const ROLE = { super_admin: "Super Admin", approver: "Approver", creator: "Petugas Lapangan", viewer: "Pembaca", agronomist: "Agronomis" };
 
 /**
  * Daftar pengguna & akses -- hanya super_admin dan approver.

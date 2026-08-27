@@ -23,6 +23,7 @@ const LABEL_PERAN: Record<string, string> = {
   approver: "Approver",
   creator: "Petugas Lapangan",
   viewer: "Pembaca",
+  agronomist: "Agronomis",
 };
 
 const namaPeran = (role: string) => LABEL_PERAN[role] ?? role;
