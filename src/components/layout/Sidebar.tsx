@@ -118,10 +118,11 @@ const GROUPS: Group[] = [
     items: [
       // Rapat Fadli 26 Agu 2026: RAB disusun agronomis SEBELUM anggaran ada.
       // Ditaruh paling atas karena urutannya memang mendahului yang lain --
-      // rencana → master anggaran → realisasi. `ready: false` sampai modulnya
-      // ada; menu yang menjanjikan halaman yang belum jadi lebih buruk
-      // daripada menu yang mengaku belum jadi.
-      { href: "/costing/rencana-anggaran", key: "nav.budgetplan", icon: ClipboardList, ready: false },
+      // rencana → master anggaran → realisasi. Sengaja TANPA `roles`: seluruh
+      // peran boleh MELIHAT rencana anggaran entitasnya; yang dibatasi adalah
+      // menyusun (agronomist) dan memutuskan (approver), dan itu ditegakkan
+      // policy migrasi 0060, bukan dengan menyembunyikan menunya.
+      { href: "/costing/rencana-anggaran", key: "nav.budgetplan", icon: ClipboardList, ready: true },
       { href: "/costing/refleksi", key: "nav.reflection", icon: Calculator, ready: true },
       { href: "/costing/pengeluaran", key: "nav.expenditure", icon: Wallet, ready: true },
       { href: "/costing/pendapatan", key: "nav.revenue", icon: TrendingUp, ready: true },

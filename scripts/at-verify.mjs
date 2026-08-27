@@ -1086,6 +1086,93 @@ async function main() {
       `status ${ngawurId.status}`);
   }
 
+  console.log("\n=== RAB (rapat Fadli 26 Agu): agronomis menyusun, finance memutuskan ===");
+  {
+    // Pengguna SEKALI PAKAI, pola yang sama dengan AI-28 di bawah: akun seed
+    // tidak punya role agronomist, dan menambahkannya ke seed akan mengubah
+    // hitungan uji lain.
+    const DEV = "(SELECT id FROM app.companies WHERE code='DEV')";
+    const EMAIL = "rab-agronomis@uji.invalid";
+    await psql(`DELETE FROM app.budget_plan_items WHERE plan_id IN (
+                  SELECT id FROM app.budget_plans WHERE code LIKE 'RAB-AT-%')`);
+    await psql(`DELETE FROM app.budget_plans WHERE code LIKE 'RAB-AT-%'`);
+    await psql(`DELETE FROM app.user_company_access WHERE user_id IN (
+                  SELECT id FROM app.users WHERE email='${EMAIL}')`);
+    await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
+    await psql(`INSERT INTO app.users (company_id, external_id, email, full_name, app_role, is_active)
+                VALUES (${DEV}, 'at-rab-agro', '${EMAIL}', 'Agronomis Uji', 'agronomist', true)`);
+    await psql(`INSERT INTO app.user_company_access (user_id, company_id)
+                SELECT id, ${DEV} FROM app.users WHERE email='${EMAIL}'`);
+
+    const agro = await login(EMAIL);
+    const fin = await login("approver@agrovision.local");
+    const lap = await login("creator@agrovision.local");
+
+    const daftar = await agro.get("/costing/rencana-anggaran");
+    ok("agronomis membuka Rencana Anggaran", daftar.status === 200, `HTTP ${daftar.status}`);
+    ok("agronomis melihat form susun RAB", visible(daftar.html).includes("Susun RAB baru"));
+
+    const lapDaftar = await lap.get("/costing/rencana-anggaran");
+    ok("petugas lapangan boleh MELIHAT RAB tapi tidak menyusunnya",
+      lapDaftar.status === 200 && !visible(lapDaftar.html).includes("Susun RAB baru"));
+
+    const kode = "RAB-AT-1";
+    await agro.submit("/costing/rencana-anggaran",
+      { code: kode, name: "RAB uji acceptance", areaHa: 100, horizonMonths: 12, contingencyPct: 5 },
+      { formMarker: 'name="code"' });
+
+    const sesudah = await agro.get("/costing/rencana-anggaran");
+    ok("RAB tersimpan dan tampil di daftar", visible(sesudah.html).includes(kode));
+    const id = (new RegExp('href="/costing/rencana-anggaran/([0-9a-f-]{36})"').exec(sesudah.html) ?? [])[1];
+
+    let detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+    // Kejujuran angka: RAB tanpa komponen BUKAN Rp 0.
+    ok("RAB tanpa komponen dirender em-dash, bukan Rp 0",
+      !/Rp\s*0(?![.\d])/.test(visible(detail.html)));
+
+    const kat = (/<select[^>]*name="costCategoryId"[\s\S]*?<option value="([0-9a-f-]{36})"/.exec(detail.html) ?? [])[1];
+    if (kat) {
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        costCategoryId: kat, phaseMonth: 1, description: "Bibit kelapa genjah",
+        itemKind: "consumable", volume: 7000, unitPriceIdr: 100000, uomItemId: "", note: "",
+      }, { formMarker: 'name="costCategoryId"' });
+
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      // 7.000 x 100.000 = 700.000.000, dihitung kolom GENERATED di database.
+      ok("jumlah baris dihitung database, bukan dikirim form",
+        visible(detail.html).includes("700.000.000"));
+    } else {
+      ok("kategori biaya tersedia untuk RAB", false, "dropdown kategori kosong");
+    }
+
+    ok("agronomis TIDAK diberi tombol Setujui", !visible(detail.html).includes('value="approved"'));
+
+    await agro.submit(`/costing/rencana-anggaran/${id}`, { id }, { formMarker: "Ajukan ke finance" });
+    detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+    ok("RAB yang diajukan tidak bisa ditambah komponen oleh agronomis",
+      !visible(detail.html).includes("Tambah komponen biaya"));
+
+    const finDetail = await fin.get(`/costing/rencana-anggaran/${id}`);
+    ok("finance melihat tombol keputusan", visible(finDetail.html).includes('value="approved"'));
+    await fin.submit(`/costing/rencana-anggaran/${id}`, { id }, { formMarker: 'value="approved"' });
+
+    const finSesudah = await fin.get(`/costing/rencana-anggaran/${id}`);
+    ok("finance bisa menambah baris SETELAH disetujui (kesepakatan rapat)",
+      visible(finSesudah.html).includes("Tambah komponen biaya"));
+
+    const agroSesudah = await agro.get(`/costing/rencana-anggaran/${id}`);
+    ok("agronomis tetap bisa MEMBACA RAB yang sudah disetujui",
+      agroSesudah.status === 200 && visible(agroSesudah.html).includes("Bibit kelapa"));
+
+    // Bersihkan: pemulihan tidak boleh jadi langkah yang bisa terlewat.
+    await psql(`DELETE FROM app.budget_plan_items WHERE plan_id IN (
+                  SELECT id FROM app.budget_plans WHERE code LIKE 'RAB-AT-%')`);
+    await psql(`DELETE FROM app.budget_plans WHERE code LIKE 'RAB-AT-%'`);
+    await psql(`DELETE FROM app.user_company_access WHERE user_id IN (
+                  SELECT id FROM app.users WHERE email='${EMAIL}')`);
+    await psql(`DELETE FROM app.users WHERE email='${EMAIL}'`);
+  }
+
   console.log("\n=== AI-28: aksi baris pengguna (nonaktifkan / aktifkan / hapus) ===");
   {
     // Blok ini memakai pengguna SEKALI PAKAI, bukan akun seed.
