@@ -673,6 +673,89 @@ async function run() {
   r = await c.query(`SELECT app.role_may_write_records() AS boleh`)
   ok('viewer tetap ditolak oleh fungsi yang sama', r.rows[0].boleh === false)
 
+  // =========================================================================
+  // 0060: RAB (app.budget_plans) -- siapa boleh menyusun, siapa boleh memutus
+  // =========================================================================
+  console.log('\n=== 0060: Rencana Anggaran (RAB) ===')
+
+  await as(U_AGRO, 'agronomist', CA)
+  const rab = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, area_ha, horizon_months, created_by)
+     VALUES ($1, 'RAB-UJI', 'RAB Uji 100 ha', 100, 12, $2) RETURNING id`, [CA, U_AGRO])
+  const RAB_ID = rab.rows[0].id
+  ok('agronomist BISA menyusun RAB', rab.rowCount === 1)
+
+  const baris = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       item_kind, volume, unit_price_idr, created_by)
+     VALUES ($1, 1, $2, 'Bibit kelapa', 'consumable', 7000, 100000, $3)
+     RETURNING amount_idr`, [RAB_ID, CAT, U_AGRO])
+  ok('amount_idr dihitung database, bukan dikirim aplikasi',
+    Number(baris.rows[0].amount_idr) === 700000000, `Rp ${baris.rows[0].amount_idr}`)
+
+  await mustFail(c, 'fase melewati horizon RAB DITOLAK',
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description, volume, unit_price_idr, created_by)
+     VALUES ($1, 13, $2, 'Di luar horizon', 1, 1, $3)`, [RAB_ID, CAT, U_AGRO], /horizon/i)
+
+  // Inti pemisahan wewenang: penyusun tidak boleh menyetujui susunannya sendiri.
+  await mustFail(c, 'agronomist TIDAK bisa menyetujui RAB-nya sendiri (self-approval)',
+    `UPDATE app.budget_plans SET approval_status = 'approved' WHERE id = $1`, [RAB_ID],
+    /row-level security/i)
+
+  await c.query(`UPDATE app.budget_plans SET approval_status = 'submitted' WHERE id = $1`, [RAB_ID])
+  r = await c.query(`SELECT approval_status FROM app.budget_plans WHERE id = $1`, [RAB_ID])
+  ok('agronomist BISA mengajukan RAB (draft -> submitted)', r.rows[0].approval_status === 'submitted')
+
+  // Setelah diajukan, barisnya tidak lagi terlihat untuk UPDATE (klausa USING),
+  // jadi hasilnya NOL BARIS -- bukan exception. Bedanya penting: pelanggaran
+  // WITH CHECK melempar, penyaringan USING diam. Yang diuji karena itu bahwa
+  // tidak ada yang berubah.
+  const suntingSetelahAjukan = await c.query(
+    `UPDATE app.budget_plans SET name = 'diubah setelah diajukan' WHERE id = $1`, [RAB_ID])
+  r = await c.query(`SELECT name FROM app.budget_plans WHERE id = $1`, [RAB_ID])
+  ok('agronomist TIDAK bisa menyunting RAB yang sudah diajukan (nol baris, nama utuh)',
+    suntingSetelahAjukan.rowCount === 0 && r.rows[0].name === 'RAB Uji 100 ha',
+    `${suntingSetelahAjukan.rowCount} baris, nama "${r.rows[0].name}"`)
+
+  // creator = pencatat realisasi, bukan perencana.
+  await as(U_CREATOR, 'creator', CA)
+  await mustFail(c, 'creator TIDAK bisa menyusun RAB',
+    `INSERT INTO app.budget_plans (company_id, code, name, created_by) VALUES ($1,'RAB-CR','RAB creator',$2)`,
+    [CA, U_CREATOR], /row-level security/i)
+
+  await as(U_VIEWER, 'viewer', CA)
+  await mustFail(c, 'viewer TIDAK bisa menyusun RAB',
+    `INSERT INTO app.budget_plans (company_id, code, name, created_by) VALUES ($1,'RAB-VW','RAB viewer',$2)`,
+    [CA, U_VIEWER], /row-level security/i)
+
+  // Finance = approver. Ia memutuskan, dan rapat menyepakati ia boleh menambah
+  // baris SETELAH disetujui (mis. menyewa ahli hidrologi).
+  await as(U_APPROVER, 'approver', CA)
+  const putus = await c.query(
+    `UPDATE app.budget_plans SET approval_status = 'approved', decided_by = $2, decided_at = now()
+      WHERE id = $1`, [RAB_ID, U_APPROVER])
+  ok('approver (finance) BISA menyetujui RAB', putus.rowCount === 1)
+
+  const tambahan = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       item_kind, volume, unit_price_idr, added_after_approval, created_by)
+     VALUES ($1, 2, $2, 'Ahli hidrologi', 'service', 1, 25000000, true, $3) RETURNING id`,
+    [RAB_ID, CAT, U_APPROVER])
+  ok('approver BISA menambah baris setelah RAB disetujui', tambahan.rowCount === 1)
+
+  await mustFail(c, 'penolakan RAB tanpa alasan DITOLAK',
+    `UPDATE app.budget_plans SET approval_status = 'rejected', rejection_reason = NULL WHERE id = $1`,
+    [RAB_ID], /rejection_needs_reason/i)
+
+  // Isolasi tenant tetap berlaku untuk tabel baru.
+  await as(U_TENANT_B, 'creator', CB)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_plans WHERE id = $1`, [RAB_ID])
+  ok('RAB tenant A TIDAK terlihat oleh tenant B', r.rows[0].n === 0)
+
+  await as(U_AGRO, 'agronomist', CA)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_plan_items WHERE plan_id = $1`, [RAB_ID])
+  ok('agronomist tetap melihat seluruh baris RAB entitasnya', r.rows[0].n === 2, `${r.rows[0].n} baris`)
+
   await c.query('ROLLBACK')
   await c.end()
   await restoreStubSwitch()
