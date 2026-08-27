@@ -136,6 +136,11 @@ async function purge() {
     // menyimpang dari skema setiap kali ada migrasi baru. Semuanya ditambahkan
     // sekaligus, ber-scope company/blok, supaya migrasi berikutnya tidak
     // mematahkannya lagi. Uji purge->seed di at:verify menjaga hal ini.
+    // RAB (migrasi 0060). Ditambahkan bersamaan dengan seed RAB-nya -- uji
+    // at:verify "nol tabel berisi data demo yang luput dari daftar purge"
+    // menangkapnya dalam hitungan menit ketika sempat terlewat.
+    `DELETE FROM app.budget_plan_items WHERE plan_id IN (SELECT id FROM app.budget_plans WHERE company_id = ANY($1))`,
+    `DELETE FROM app.budget_plans WHERE company_id = ANY($1)`,
     `DELETE FROM app.agri_input_stock_movements WHERE company_id = ANY($1)`,
     `DELETE FROM app.weeding_schedules WHERE company_id = ANY($1)`,
     `DELETE FROM app.tree_survey_points WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id = ANY($1))`,
@@ -240,6 +245,10 @@ async function seed() {
     ['00000000-0000-4000-8000-0000000000e2', 'demo|approver', 'approver@demo.invalid', 'Budi Approver', 'approver'],
     ['00000000-0000-4000-8000-0000000000e3', 'demo|creator', 'creator@demo.invalid', 'Rizky Lapangan', 'creator'],
     ['00000000-0000-4000-8000-0000000000e4', 'demo|viewer', 'direktur@demo.invalid', 'Dewi Direktur', 'viewer'],
+    // Rapat Fadli 26 Agu 2026: RAB disusun agronomis, bukan finance. Tanpa akun
+    // ber-role agronomist, alur Rencana Anggaran tidak bisa diuji dari sisi
+    // penyusunnya -- yang tersisa hanya sisi persetujuan.
+    ['00000000-0000-4000-8000-0000000000e7', 'demo|agronomist', 'agronomis@demo.invalid', 'Yudi Agronomis', 'agronomist'],
   ]
   for (const [id, sub, email, name, role] of users) {
     await c.query(
@@ -1228,6 +1237,67 @@ async function seed() {
     txCountB++
   }
 
+  // =========================================================================
+  // RENCANA ANGGARAN (RAB) -- rapat Fadli 26 Agustus 2026
+  //
+  // Satu RAB contoh supaya alurnya bisa diuji dari sisi penyusunnya, bukan
+  // hanya dari sisi persetujuan. Statusnya sengaja 'submitted': begitu seed
+  // selesai, finance (approver@demo.invalid) langsung punya sesuatu untuk
+  // diputuskan, dan agronomis punya contoh bentuk RAB yang lengkap.
+  //
+  // ANGKANYA ILUSTRATIF, dan lebih rapuh daripada angka demo lain di berkas ini.
+  // Ia berasal dari contoh lisan Fadli di rapat (140 bibit/ha, upah Rp150 rb/hari,
+  // dolomit 100 kg/ha, cangkul 1 unit per 0,5 ha), yang transkripnya sendiri
+  // ditandai banyak salah tangkap dan belum dikonfirmasi ke agronomis mana pun
+  // -- catatan itu ditulis di dokumen rapatnya, dan diulang di kolom `note` RAB
+  // ini supaya siapa pun yang membukanya di aplikasi ikut membacanya.
+  // JANGAN dipakai sebagai acuan biaya.
+  // =========================================================================
+  const kategoriRab = (parent, name) => {
+    const f = leafIds.find((l) => l.parent === parent && l.name === name)
+    if (!f) throw new Error(`kategori RAB tidak ketemu: ${parent} > ${name}`)
+    return f.id
+  }
+
+  const rab = await c.query(
+    `INSERT INTO app.budget_plans
+       (company_id, code, name, area_ha, horizon_months, contingency_pct, note,
+        approval_status, submitted_at, created_by)
+     VALUES ($1,'RAB-2026-01','RAB set-up kebun kelapa + durian 100 ha',
+             100, 12, 5,
+             'ILUSTRASI PARSIAL: hanya bulan 1-4 dari horizon 12 bulan, disusun dari contoh komponen yang disebut lisan di rapat 26 Agu 2026 (140 bibit/ha, upah Rp150 rb/hari, dolomit 100 kg/ha). Simulasi drawdown di rapat yang sama memakai angka lain (total Rp10 M) dan KEDUANYA BELUM DIREKONSILIASI. Belum divalidasi agronomis mana pun. Jangan dipakai sebagai acuan biaya.',
+             'submitted', now(), $2)
+     ON CONFLICT (company_id, code) DO NOTHING
+     RETURNING id`,
+    [CO, '00000000-0000-4000-8000-0000000000e7'])
+
+  if (rab.rowCount === 1) {
+    const RAB = rab.rows[0].id
+    // [bulan, kategori induk, sub-kategori, uraian, jenis, volume, satuan, harga satuan]
+    const barisRab = [
+      [1, 'Persiapan Lahan', 'Land Clearing', 'Land clearing manual — 10 orang x 5 hari', 'labor', 50, 'HOK', 150000],
+      [1, 'Pengadaan Pupuk', 'Kapur / Dolomit', 'Dolomit 100 kg/ha untuk menetralkan pH', 'consumable', 10000, 'KG', 3500],
+      [1, 'Alat & Mekanisasi', 'Alat Tangan', 'Cangkul — 1 unit per 0,5 ha', 'asset', 200, 'UNIT', 85000],
+      [2, 'Persiapan Lahan', 'Pembuatan Lubang Tanam', 'Lubang tanam 140/ha', 'labor', 350, 'HOK', 150000],
+      [2, 'Pengadaan Pupuk', 'Pupuk Organik', 'Pupuk kandang per lubang tanam', 'consumable', 28000, 'KG', 1200],
+      [2, 'Pengadaan Bibit', 'Bibit Kelapa', 'Bibit kelapa genjah — 70 batang/ha', 'consumable', 7000, 'BATANG', 100000],
+      [2, 'Pengadaan Bibit', 'Bibit Durian', 'Bibit durian — 70 batang/ha (intercrop)', 'consumable', 7000, 'BATANG', 200000],
+      [3, 'Pengadaan Bibit', 'Transport Bibit', 'Angkut bibit dari lokasi pembibitan ke lahan', 'service', 1, 'PAKET', 45000000],
+      [3, 'Tenaga Kerja', 'Upah Harian', 'Penanaman — 5 ha/hari, ~20 hari', 'labor', 400, 'HOK', 150000],
+      [4, 'Tenaga Kerja', 'Upah Harian', 'Pemeliharaan bulan ke-4 — penyiangan & pemupukan', 'labor', 440, 'HOK', 130000],
+      [4, 'Pengadaan Pupuk', 'Pupuk Majemuk', 'NPK ~200 g/tanaman', 'consumable', 2800, 'KG', 12000],
+    ]
+    for (const [i, [bulan, induk, sub, uraian, jenis, vol, uom, harga]] of barisRab.entries()) {
+      await c.query(
+        `INSERT INTO app.budget_plan_items
+           (plan_id, phase_month, cost_category_id, description, item_kind, volume,
+            uom_item_id, unit_price_idr, sort_order, created_by)
+         VALUES ($1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10)`,
+        [RAB, bulan, kategoriRab(induk, sub), uraian, jenis, vol, uomIds[uom], harga, i,
+         '00000000-0000-4000-8000-0000000000e7'])
+    }
+  }
+
   // Login stub (B-27, migrasi 0057). Akun demo tidak punya kredensial di
   // Identity Platform, jadi tanpa saklar ini dataset demo tidak bisa dipakai
   // masuk sama sekali. Dinyalakan di seed -- bukan di migrasi -- supaya
@@ -1270,6 +1340,7 @@ async function seed() {
   console.log(`  farm activities    3 weeding · 2 spraying · ${harvestRows.length} harvest (2 approved → revenue)`)
   console.log('\nLogin stub DINYALAKAN (app.auth_settings.stub_login_enabled = true).')
   console.log('Aplikasi juga perlu AUTH_MODE=stub di .env.local -- lihat .env.example.')
+  console.log(`  RAB contoh         RAB-2026-01 (status Diajukan, menunggu keputusan finance)`)
   console.log('\nLogin demo (tanpa password):')
   for (const [, , email, name, role] of users) console.log(`  ${role.padEnd(12)} ${email.padEnd(26)} ${name}`)
   console.log(`  ${'viewer'.padEnd(12)} ${'direktur.mamuju@demo.invalid'} Rina Direktur Mamuju (entitas DEMO2)`)

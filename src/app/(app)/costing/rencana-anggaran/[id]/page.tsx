@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ArrowLeft, ClipboardList } from "lucide-react";
+import { ArrowLeft, ClipboardList, TriangleAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
 import { budgetPlanByPhase, getBudgetPlan, listBudgetPlanItems } from "@/lib/repo/budgetPlan";
 import { listCategoryOptions, listOptions } from "@/lib/repo/master";
@@ -66,6 +66,17 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
       {plan.rejectionReason && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-relaxed text-red-800">
           <strong>Ditolak finance:</strong> {plan.rejectionReason}
+        </div>
+      )}
+
+      {/* Catatan penyusun. Dataset demo memakainya untuk menyatakan bahwa
+          angkanya ilustratif dan belum divalidasi agronomis — peringatan yang
+          hanya tersimpan di database, tanpa pernah sampai ke layar, sama saja
+          tidak ada. Ditempatkan SEBELUM angka, bukan sesudahnya. */}
+      {plan.note && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <p className="text-sm leading-relaxed text-amber-900">{plan.note}</p>
         </div>
       )}
 

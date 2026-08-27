@@ -22,6 +22,9 @@ export type BudgetPlanRow = {
   areaHa: number | null;
   horizonMonths: number;
   contingencyPct: number;
+  /** Catatan penyusun. Seed demo memakainya untuk peringatan "angka ilustratif"
+   *  — dan peringatan yang tidak sampai ke layar sama saja tidak ada. */
+  note: string | null;
   approvalStatus: string;
   rejectionReason: string | null;
   createdByName: string | null;
@@ -49,7 +52,7 @@ export type BudgetPlanItemRow = {
 
 const PLAN_SELECT = `
   SELECT p.id, p.code, p.name, p.area_ha, p.horizon_months, p.contingency_pct,
-         p.approval_status, p.rejection_reason,
+         p.note, p.approval_status, p.rejection_reason,
          cu.full_name AS created_by_name, du.full_name AS decided_by_name,
          COALESCE(i.n, 0) AS item_count,
          i.subtotal
@@ -63,7 +66,7 @@ const PLAN_SELECT = `
 
 type PlanDb = {
   id: string; code: string; name: string; area_ha: string | null;
-  horizon_months: number; contingency_pct: string; approval_status: string;
+  horizon_months: number; contingency_pct: string; note: string | null; approval_status: string;
   rejection_reason: string | null; created_by_name: string | null;
   decided_by_name: string | null; item_count: number; subtotal: string | null;
 };
@@ -80,6 +83,7 @@ function toPlan(r: PlanDb): BudgetPlanRow {
     areaHa: r.area_ha === null ? null : Number(r.area_ha),
     horizonMonths: r.horizon_months,
     contingencyPct: pct,
+    note: r.note,
     approvalStatus: r.approval_status,
     rejectionReason: r.rejection_reason,
     createdByName: r.created_by_name,
