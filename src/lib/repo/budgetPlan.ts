@@ -288,8 +288,22 @@ export async function addBudgetPlanItem(
     excludeFromContingency: boolean;
     /** 0063. Berdampingan dengan sourceRef, tidak menggantikannya. */
     sourceId: string | null;
+    // 0062. Sempat hilang di jalur tulis: form mengumpulkannya, action
+    // memvalidasinya berpasangan, lalu repo membuangnya diam-diam karena tipe
+    // ini tidak menyebutnya. Akibatnya setiap baris tersimpan basis_code NULL,
+    // sehingga seluruh tahap 2 mati dari UI: layar tidak menganotasi rumusnya,
+    // dan mengubah asumsi tidak menggerakkan baris mana pun. tsc tidak
+    // menangkapnya karena `parsed.data` bukan object literal, jadi properti
+    // berlebih diterima tanpa keluhan.
+    basisCode: string | null; ratioPerBasis: number | null;
   },
 ): Promise<void> {
+  // Volume sengaja tetap dikirim apa adanya meski basis diisi: trigger
+  // budget_item_derive_volume() (0062) BEFORE INSERT menimpanya dengan
+  // nilai_asumsi x rasio. Itu juga yang membuat form boleh mengosongkan Volume
+  // -- zod mengubah "" jadi 0, dan tanpa basis_code tersimpan angka 0 itu
+  // menabrak CHECK (volume > 0) dengan galat Postgres mentah berbahasa Inggris.
+  //
   // added_after_approval ditentukan DARI STATUS RAB-nya, bukan dari kiriman
   // form: rapat mengizinkan finance menambah baris setelah disetujui, dan
   // penanda itu harus jujur tanpa bergantung pada apa yang dikirim klien.
@@ -299,16 +313,16 @@ export async function addBudgetPlanItem(
        (plan_id, phase_month, cost_category_id, description, item_kind, volume,
         uom_item_id, unit_price_idr, note, created_by, added_after_approval,
         cost_kind, stage, driver, source_ref, confidence, exclude_from_contingency,
-        source_id)
+        source_id, basis_code, ratio_per_basis)
      SELECT $1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10,
             (p.approval_status = 'approved'),
             $11::app.budget_cost_kind,$12,$13,$14,$15::app.assumption_confidence,$16,
-            $17
+            $17,$18,$19
        FROM app.budget_plans p WHERE p.id = $1`,
     [input.planId, input.phaseMonth, input.costCategoryId, input.description, input.itemKind,
      input.volume, input.uomItemId, input.unitPriceIdr, input.note, ctx.userId,
      input.costKind, input.stage, input.driver, input.sourceRef, input.confidence,
-     input.excludeFromContingency, input.sourceId],
+     input.excludeFromContingency, input.sourceId, input.basisCode, input.ratioPerBasis],
   );
 }
 

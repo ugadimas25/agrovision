@@ -743,6 +743,55 @@ async function run() {
     [RAB_ID, CAT, U_APPROVER])
   ok('approver BISA menambah baris setelah RAB disetujui', tambahan.rowCount === 1)
 
+  // =========================================================================
+  // 0064: RAB yang sudah diputuskan TIDAK BISA dihapus oleh siapa pun
+  //
+  // Audit 31 Agu 2026: app.budget_plans sama sekali tidak punya policy DELETE.
+  // bp_writer_roles adalah RESTRICTIVE FOR ALL USING (true) -- untuk DELETE
+  // hanya USING yang dikonsultasi, sehingga WITH CHECK-nya tidak pernah
+  // dievaluasi -- dan bp_edit_gate dibatasi FOR UPDATE. Akibatnya viewer pun
+  // bisa menghapus RAB yang sudah disetujui, dan ON DELETE CASCADE ikut
+  // membawa seluruh komponen biaya beserta asumsinya. Terbukti di DB lokal:
+  // 1 RAB / 11 komponen / 3 asumsi -> nol, sebagai viewer.
+  //
+  // Penolakannya DIAM: klausa USING menyaring baris, tidak melempar exception.
+  // Karena itu yang diuji bukan galat, melainkan dua hal sekaligus -- nol baris
+  // terhapus DAN RAB beserta komponennya masih utuh. Menguji rowCount saja
+  // tidak cukup: DELETE yang menyaring dan DELETE yang berhasil atas nol baris
+  // tidak bisa dibedakan tanpa memeriksa sisanya.
+  // =========================================================================
+  console.log('\n=== 0064: RAB yang sudah diputuskan tidak bisa dihapus ===')
+
+  const nKomponenSebelum = (await c.query(
+    `SELECT count(*)::int n FROM app.budget_plan_items WHERE plan_id = $1`, [RAB_ID])).rows[0].n
+
+  for (const [uid, role] of [[U_VIEWER, 'viewer'], [U_CREATOR, 'creator'],
+                             [U_APPROVER, 'approver'], [U_ADMIN, 'super_admin'],
+                             [U_AGRO, 'agronomist']]) {
+    await as(uid, role, CA)
+    const hapus = await c.query(`DELETE FROM app.budget_plans WHERE id = $1`, [RAB_ID])
+    const sisa = await c.query(
+      `SELECT (SELECT count(*)::int FROM app.budget_plans WHERE id = $1) AS rab,
+              (SELECT count(*)::int FROM app.budget_plan_items WHERE plan_id = $1) AS komponen`, [RAB_ID])
+    ok(`${role} TIDAK bisa menghapus RAB yang sudah disetujui`,
+       hapus.rowCount === 0 && sisa.rows[0].rab === 1 && sisa.rows[0].komponen === nKomponenSebelum,
+       `${hapus.rowCount} baris terhapus, ${sisa.rows[0].komponen}/${nKomponenSebelum} komponen tersisa`)
+  }
+
+  // Kontrol positif -- tambalan tidak boleh ikut mematikan jalur yang sah.
+  // Tanpa uji ini, policy yang menolak SEMUA penghapusan akan lolos diam-diam.
+  await as(U_AGRO, 'agronomist', CA)
+  const draftSendiri = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, area_ha, horizon_months,
+       contingency_pct, approval_status, created_by)
+     VALUES ($1, 'RAB-UJI-HAPUS', 'Draft percobaan', 1, 12, 0, 'draft', $2) RETURNING id`,
+    [CA, U_AGRO])
+  const hapusDraft = await c.query(
+    `DELETE FROM app.budget_plans WHERE id = $1`, [draftSendiri.rows[0].id])
+  ok('penyusun TETAP bisa menghapus draft-nya sendiri', hapusDraft.rowCount === 1)
+
+  await as(U_APPROVER, 'approver', CA)
+
   await mustFail(c, 'penolakan RAB tanpa alasan DITOLAK',
     `UPDATE app.budget_plans SET approval_status = 'rejected', rejection_reason = NULL WHERE id = $1`,
     [RAB_ID], /rejection_needs_reason/i)

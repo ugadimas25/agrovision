@@ -1141,6 +1141,48 @@ async function main() {
       // 7.000 x 100.000 = 700.000.000, dihitung kolom GENERATED di database.
       ok("jumlah baris dihitung database, bukan dikirim form",
         visible(detail.html).includes("700.000.000"));
+
+      // ---------------------------------------------------------------------
+      // 0062 lewat HTTP: volume yang DITURUNKAN dari asumsi.
+      //
+      // Ditambahkan setelah audit 31 Agu 2026. Sebelumnya blok ini hanya
+      // mengirim volume apa adanya, sehingga bug yang membuang basis_code di
+      // jalur tulis repo lolos sepenuhnya dari acceptance test: seluruh tahap 2
+      // mati dari UI sementara suite ini tetap hijau. Yang diuji di sini persis
+      // apa yang dilakukan agronomis sungguhan -- Volume DIKOSONGKAN, basis dan
+      // rasio diisi -- dan angkanya harus muncul tanpa ia mengetiknya.
+      // ---------------------------------------------------------------------
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        planId: id, code: "net_ha", label: "Areal efektif (88% bruto)",
+        value: 88, unit: "ha efektif", confidence: "medium", sourceRef: "uji at:verify",
+      }, { formMarker: 'placeholder="net_ha"' });
+
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        costCategoryId: kat, phaseMonth: 1, description: "Bibit durian via basis",
+        itemKind: "consumable", volume: "", unitPriceIdr: 200000, uomItemId: "", note: "",
+        basisCode: "net_ha", ratioPerBasis: 70,
+      }, { formMarker: 'name="costCategoryId"' });
+
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const teks = visible(detail.html);
+      // 88 x 70 = 6.160 batang, lalu x 200.000 = 1.232.000.000. Tidak satu pun
+      // dari kedua angka itu dikirim form -- keduanya lahir di database.
+      ok("volume diturunkan dari asumsi (88 x 70 = 6.160), bukan diketik",
+        teks.includes("6.160"), teks.includes("6.160") ? "" : "volume turunan tidak muncul");
+      ok("jumlah baris turunan dihitung dari volume turunan",
+        teks.includes("1.232.000.000"));
+      // Anotasinya wajib ada: baris yang volumenya diturunkan harus mengatakan
+      // dari mana, kalau tidak layar menyajikan angka tanpa asal-usul.
+      //
+      // Komentar HTML dibuang dulu. React SSR menyisipkan <!-- --> di antara dua
+      // ekspresi teks yang bersebelahan (`= {basisCode} × {ratio}`) sebagai
+      // penanda hidrasi, sehingga rangkaian yang dibaca manusia sebagai satu
+      // kalimat terpotong di sumbernya. helper visible() sengaja tidak diubah:
+      // ia dipakai ratusan asersi lain, dan pembersihan ini hanya perlu di sini.
+      const anotasi = teks.replace(/<!--[\s\S]*?-->/g, "");
+      const cocok = /=\s*net_ha\s*×\s*70/.test(anotasi);
+      ok("baris turunan menyebut rumusnya di layar", cocok,
+        cocok ? "" : (anotasi.match(/net_ha[\s\S]{0,40}/) ?? ["tidak ada 'net_ha' di halaman"])[0]);
     } else {
       ok("kategori biaya tersedia untuk RAB", false, "dropdown kategori kosong");
     }
