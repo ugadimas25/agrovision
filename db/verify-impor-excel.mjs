@@ -64,7 +64,7 @@ try {
   console.error("Butuh Node >= 22.18 (type stripping). Versi sekarang:", process.version);
   process.exit(1);
 }
-const { bacaWorkbookRab, bukaWorkbookMentah, SHEET_KOMPONEN, SHEET_ASUMSI } = mod;
+const { bacaWorkbookRab, bukaWorkbookMentah, SHEET_KOMPONEN, SHEET_ASUMSI, SHEET_CEK } = mod;
 
 const BERKAS = fileURLToPath(new URL("docs/RAB_Agroforestry_100ha_Banyumas_R2.xlsx", AKAR));
 if (!existsSync(BERKAS)) {
@@ -252,6 +252,18 @@ for (const skenario of ["1lokasi", "4lokasi"]) {
   }
   console.log(`  TOTAL volume x harga (${barisTerhitung} baris): Rp ${angka(total)}`);
 
+  const dariRumus = {
+    volume: hasil.komponen.filter((k) => k.volumeDariRumus).length,
+    harga: hasil.komponen.filter((k) => k.hargaDariRumus).length,
+  };
+  console.log(
+    `  Nilai hasil rumus: ${dariRumus.volume}/${hasil.komponen.length} volume, ` +
+      `${dariRumus.harga}/${hasil.komponen.length} harga satuan`,
+  );
+  const sm = hasil.statusModel;
+  console.log(`  STATUS MODEL (${SHEET_CEK}): ${sm ? (sm.status ?? "—") : "sheet tidak ada"}`);
+  for (const g of sm?.gagal ?? []) console.log(`      GAGAL: ${g.pemeriksaan} (selisih ${g.selisih ?? "—"})`);
+
   // Pembanding mandiri di dalam sheet itu sendiri: baris SUBTOTAL. Kalau
   // keduanya sama, pemetaan kolom kami membaca kolom yang sama dengan yang
   // dijumlahkan penyusun modelnya.
@@ -283,6 +295,31 @@ for (const skenario of ["1lokasi", "4lokasi"]) {
     `SUBTOTAL sheet Rp ${angka(subtotal)} vs hitungan kami Rp ${angka(total)}`,
   );
 
+  // Panduan_Per_Sheet baris 20: 08_CAPEX_RAB "menarik jumlah dan harga dari 02,
+  // 04, 05, 06, 14, dan 17". Kalau tidak satu pun nilai terdeteksi sebagai
+  // rumus, pendeteksinya yang rusak -- bukan sheet-nya yang berubah.
+  ok(
+    "nilai turunan terdeteksi sebagai rumus",
+    dariRumus.volume > 0 && dariRumus.harga > 0,
+    `${dariRumus.volume} volume, ${dariRumus.harga} harga`,
+  );
+  ok(
+    "ringkasan rumus diterbitkan sekali per sheet, bukan per baris",
+    hasil.masalah.filter((m) => m.sheet === SHEET_KOMPONEN && /berasal dari rumus/.test(m.pesan)).length === 1 &&
+      hasil.masalah.filter((m) => m.sheet === SHEET_ASUMSI && /berasal dari rumus/.test(m.pesan)).length === 1,
+  );
+  ok(
+    "baris yang harganya diketik tidak ditandai rumus",
+    hasil.komponen.some((k) => !k.hargaDariRumus),
+    `${hasil.komponen.filter((k) => !k.hargaDariRumus).length} baris berharga ketik`,
+  );
+  ok("STATUS MODEL terbaca dari 15_Checks", sm !== null && sm.status === "PASS", `status=${sm?.status ?? "—"}`);
+  ok(
+    "pemeriksaan berstatus OK tidak dianggap gagal",
+    sm !== null && sm.gagal.length === 0,
+    `${sm?.gagal.length ?? 0} gagal`,
+  );
+  ok("workbook tetap diimpor walau ada pemeriksaan", hasil.komponen.length > 0);
   ok("ada komponen terbaca", hasil.komponen.length > 0, `${hasil.komponen.length} baris`);
   ok("ada asumsi terbaca", hasil.asumsi.length > 0, `${hasil.asumsi.length} baris`);
   ok(
@@ -349,6 +386,23 @@ baris("Harga hilang", None, "A Land", 1, "lot", 1, None, "lot", None, None)
 baris("Total tidak cocok", 100, "A Land", 2, "unit", 2, 250, "unit", 250, None)
 baris("Nol yang disengaja", 0, "A Land", 10, "unit", 10, 0, "unit", 0, "OPEN")
 baris("Kurung akuntansi", "(1.500,50)", "A Land", 1, "unit", 1, None, "unit", None, None)
+# openpyxl menulis rumus TANPA nilai ter-cache: rumusnya ada, nilainya tidak
+# pernah ada. Persis yang terjadi bila berkas dibuat alat selain Excel.
+baris("Rumus tanpa nilai", 10, "A Land", 1, "unit", "=1+1", None, "unit", None, None)
+
+wc = wb.create_sheet("15_Checks")
+wc.append(["Pemeriksaan Model dan Peringatan Kritis"])
+wc.append([])
+wc.append(["Pemeriksaan", "Aktual", "Harapan", "Selisih", "Toleransi", "Status", "Lokasi perbaikan"])
+wc.append(["Luas konsisten", 100, 100, 0, 0.01, "OK", "02_Assumptions"])
+wc.append(["CAPEX terikat skenario", 5, 7, -2, 1, "FAIL", "08_CAPEX_RAB"])
+wc.append(["STATUS MODEL", None, None, None, None, "FAIL", None])
+wc.append([])
+wc.append(["Peringatan yang tidak menggagalkan rumus"])
+wc.append(["Biaya lahan masih Rp0 sampai ada objek nyata."])
+wc.append([])
+wc.append(["Pemeriksaan", "Nilai aktual", "Batas/harapan", "Selisih", "Penjelasan", "Status", "Tindakan"])
+wc.append(["Kas kumulatif T10", -5, 0, -5, "Harus positif", "CEK", "Perbaiki penggerak"])
 
 wa = wb.create_sheet("02_Assumptions")
 wa["A1"] = "Pusat asumsi"
@@ -505,6 +559,48 @@ try {
     "variabel numerik tidak diimpor tapi dilaporkan",
     !s1.asumsi.some((a) => a.variabel === "1") && s1.masalah.some((m) => /Kolom Variabel berisi angka/i.test(m.pesan)),
   );
+  const rumusKosong = cari(s1, "Rumus tanpa nilai");
+  ok(
+    "rumus tanpa nilai ter-cache: ditandai rumus, nilainya null",
+    rumusKosong?.volumeDariRumus === true && rumusKosong?.volume === null,
+    `volumeDariRumus=${rumusKosong?.volumeDariRumus} volume=${JSON.stringify(rumusKosong?.volume)}`,
+  );
+  ok(
+    "pesannya menyuruh simpan ulang di Excel, bukan mengisi sel",
+    pesan(s1, "Rumus tanpa nilai").some((p) => /simpan ulang di Excel/i.test(p)),
+    JSON.stringify(pesan(s1, "Rumus tanpa nilai")),
+  );
+  ok(
+    "harga yang diketik pada baris yang sama TIDAK ditandai rumus",
+    rumusKosong?.hargaDariRumus === false && rumusKosong?.hargaSatuan === 10,
+  );
+
+  // --- 15_Checks
+  const cek = s1.statusModel;
+  console.log(`  STATUS MODEL sintetis: ${cek?.status ?? "—"}`);
+  for (const g of cek?.gagal ?? []) console.log(`      GAGAL: ${g.pemeriksaan} (selisih ${g.selisih ?? "—"})`);
+  ok("STATUS MODEL yang FAIL diteruskan apa adanya", cek?.status === "FAIL", `status=${cek?.status}`);
+  ok(
+    "pemeriksaan gagal terkumpul beserta selisihnya",
+    cek?.gagal.length === 2 &&
+      cek.gagal[0].pemeriksaan === "CAPEX terikat skenario" &&
+      cek.gagal[0].selisih === "-2",
+    JSON.stringify(cek?.gagal),
+  );
+  ok(
+    "tabel pemeriksaan KEDUA (judul kolom berbeda) ikut terbaca",
+    cek?.gagal.some((g) => g.pemeriksaan === "Kas kumulatif T10" && g.selisih === "-5"),
+  );
+  ok(
+    "baris peringatan tanpa status tidak dihitung sebagai pemeriksaan gagal",
+    !cek?.gagal.some((g) => /Biaya lahan/i.test(g.pemeriksaan)),
+  );
+  ok(
+    "pemeriksaan yang gagal TIDAK memblokir impor",
+    s1.komponen.length > 0 && s1.asumsi.length > 0,
+    `${s1.komponen.length} komponen tetap terbaca`,
+  );
+
   // Kolom wajib yang hilang harus dilaporkan SEKALI di tingkat header, bukan
   // diam-diam mengosongkan isian di setiap baris.
   const hilang = bacaWorkbookRab(readFileSync(jalurTanpaKolom), { skenario: "1lokasi" });
@@ -514,6 +610,11 @@ try {
     pesanHeader.filter((p) => /Kolom "Tahap" tidak ada/i.test(p)).length === 1 &&
       pesanHeader.some((p) => /Kolom "dasar\/sumber\/pengecualian" tidak ada/i.test(p)),
     JSON.stringify(pesanHeader),
+  );
+  ok(
+    "statusModel null bila 15_Checks tidak ada di berkas",
+    hilang.statusModel === null,
+    JSON.stringify(hilang.statusModel),
   );
   ok(
     "barisnya tetap terbaca, isian yang kolomnya hilang jadi null",

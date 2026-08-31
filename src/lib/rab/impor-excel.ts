@@ -54,6 +54,12 @@
  *   Yang tidak ada di daftar menjadi `null` + satu Masalah. TIDAK ADA tebakan
  *   "yang paling mirip": menempatkan baris ke tahap yang salah lebih buruk
  *   daripada mengosongkannya, karena yang salah tidak terlihat salah.
+ * - Nilai HASIL RUMUS dibedakan dari nilai yang diketik, dan jumlahnya
+ *   dilaporkan sekali per sheet. Aplikasi punya mesin penurunan sendiri (0062);
+ *   nilai rumus yang diimpor menjadi angka mati, dan itu harus disadari.
+ * - 15_Checks dibaca dan STATUS MODEL-nya diteruskan apa adanya. Impor dari
+ *   workbook yang pemeriksaannya gagal tidak ditolak -- itu keputusan pengguna
+ *   -- tapi ia harus terlihat sebelum disimpan, bukan sesudah.
  * - Angka dalam bentuk teks dibaca hanya bila artinya PASTI. "1.000.000" pasti
  *   satu juta; "1.000" tidak pasti (seribu atau satu koma nol) dan karena itu
  *   ditolak, bukan ditebak. Lihat `bacaAngka()` di §4.
@@ -76,6 +82,9 @@ export type BarisImpor = {
   hargaSatuan: number | null;
   sumberRef: string | null;
   totalDiSheet: number | null; // HANYA untuk dicocokkan, tidak pernah diimpor
+  /** true bila nilai di sheet berasal dari rumus, bukan diketik orang. */
+  volumeDariRumus: boolean;
+  hargaDariRumus: boolean;
 };
 
 export type AsumsiImpor = {
@@ -92,14 +101,26 @@ export type AsumsiImpor = {
 /** `baris: 0` berarti masalahnya bukan pada satu baris data (sheet/header). */
 export type Masalah = { sheet: string; baris: number; pesan: string };
 
+/**
+ * Hasil 15_Checks. `status` adalah baris "STATUS MODEL" -- panduan berkasnya
+ * (Panduan_Per_Sheet baris 27) menuntutnya PASS sebelum workbook dipakai.
+ */
+export type StatusModel = {
+  status: string | null;
+  gagal: { pemeriksaan: string; selisih: string | null }[];
+};
+
 export type HasilImpor = {
   asumsi: AsumsiImpor[];
   komponen: BarisImpor[];
   masalah: Masalah[];
+  /** Dari sheet 15_Checks. null bila sheet-nya tidak ada di berkas. */
+  statusModel: StatusModel | null;
 };
 
 export const SHEET_KOMPONEN = "08_CAPEX_RAB";
 export const SHEET_ASUMSI = "02_Assumptions";
+export const SHEET_CEK = "15_Checks";
 
 // ===========================================================================
 // §1. ZIP -- .xlsx adalah arsip ZIP berisi XML
@@ -275,6 +296,14 @@ export type LembarMentah = {
   kolomMaks: number;
   /** Baris & kolom 1-basis, seperti yang dilihat pengguna di Excel. */
   sel: (baris: number, kolom: number) => NilaiSel;
+  /**
+   * true bila sel itu RUMUS (punya elemen <f>), bukan angka yang diketik.
+   * Nilainya sendiri tetap yang ter-cache di <v>; ini hanya menjawab "dari mana
+   * angka ini datang", yang di 08_CAPEX_RAB adalah pertanyaan penting: panduan
+   * berkasnya menyebut sheet itu "menarik jumlah dan harga dari 02, 04, 05, 06,
+   * 14, dan 17", jadi sebagian besar angkanya turunan, bukan ketikan.
+   */
+  rumus: (baris: number, kolom: number) => boolean;
 };
 
 const KOLOM_MAKS_XLSX = 16384;
@@ -300,6 +329,7 @@ function bacaSharedStrings(xml: string): string[] {
 
 function bacaLembar(nama: string, xml: string, shared: string[]): LembarMentah {
   const sel = new Map<number, NilaiSel>();
+  const selRumus = new Set<number>();
   let barisMaks = 0;
   let kolomMaks = 0;
 
@@ -351,8 +381,15 @@ function bacaLembar(nama: string, xml: string, shared: string[]): LembarMentah {
         }
       }
 
-      if (nilai !== null && nilai !== "") {
-        sel.set(kunciSel(nomorBaris, kolom), nilai);
+      // Penanda rumus dicatat TERPISAH dari nilainya: sel rumus yang belum
+      // pernah dihitung tidak punya <v> sama sekali, dan justru sel seperti
+      // itulah yang paling perlu dikenali -- tanpa ini ia hanya tampak sebagai
+      // sel kosong biasa. <f>, <f .../>, dan <f t="shared" si="0"/> sama saja.
+      const kunci = kunciSel(nomorBaris, kolom);
+      const adaRumus = /<f[\s/>]/.test(isiSel);
+      if (adaRumus) selRumus.add(kunci);
+      if (nilai !== null && nilai !== "") sel.set(kunci, nilai);
+      if (adaRumus || (nilai !== null && nilai !== "")) {
         if (nomorBaris > barisMaks) barisMaks = nomorBaris;
         if (kolom > kolomMaks) kolomMaks = kolom;
       }
@@ -393,7 +430,10 @@ function bacaLembar(nama: string, xml: string, shared: string[]): LembarMentah {
       const kolom = kunci - baris * KOLOM_MAKS_XLSX;
       for (const r of rentang) {
         if (baris < r.atas || baris > r.bawah || kolom < r.kiri || kolom > r.kanan) continue;
-        if (baris !== r.atas || kolom !== r.kiri) sel.delete(kunci);
+        if (baris !== r.atas || kolom !== r.kiri) {
+          sel.delete(kunci);
+          selRumus.delete(kunci);
+        }
         break;
       }
     }
@@ -404,6 +444,7 @@ function bacaLembar(nama: string, xml: string, shared: string[]): LembarMentah {
     barisMaks,
     kolomMaks,
     sel: (baris, kolom) => sel.get(kunciSel(baris, kolom)) ?? null,
+    rumus: (baris, kolom) => selRumus.has(kunciSel(baris, kolom)),
   };
 }
 
@@ -721,6 +762,137 @@ function cariLembar(wb: Map<string, LembarMentah>, nama: string): LembarMentah |
   return null;
 }
 
+/**
+ * Satu Masalah RINGKAS per sheet tentang berapa banyak nilai yang ternyata
+ * hasil rumus, bukan ketikan orang.
+ *
+ * Kenapa ini dilaporkan sama sekali: aplikasi punya mesin penurunannya sendiri
+ * (asumsi + basis_code x ratio_per_basis, migrasi 0062). Nilai yang di Excel
+ * ikut bergerak saat luas atau jumlah lokasi diubah, begitu diimpor menjadi
+ * ANGKA MATI di app.budget_plan_items.volume. Itu tidak salah -- tapi pengguna
+ * harus tahu bahwa yang ia impor adalah potret satu skenario, bukan modelnya.
+ * Persis bahaya "RAB setengah berubah" yang jadi alasan 0062 ada.
+ *
+ * Satu baris per sheet, bukan per baris data: 36 dari 36 volume di 08_CAPEX_RAB
+ * adalah rumus, dan 36 pesan yang sama hanya akan menenggelamkan Masalah yang
+ * benar-benar menuntut tindakan.
+ */
+/**
+ * Sel RUMUS yang kosong hampir selalu berarti hal lain daripada sel kosong
+ * biasa: berkasnya ditulis alat yang tidak menyimpan hasil hitungan (openpyxl,
+ * sebagian eksportir), sehingga rumusnya ada tapi nilainya tidak pernah ada.
+ * "Tidak punya volume" akan menyuruh pengguna mengisi sel yang di layarnya
+ * terlihat berangka; yang benar adalah membuka dan menyimpan ulang di Excel.
+ */
+function pesanAngkaGagal(
+  b: { jenis: "kosong" } | { jenis: "tolak"; alasan: string },
+  apa: string,
+  uraian: string,
+  dariRumus: boolean,
+): string {
+  if (b.jenis === "tolak") return `${apa} "${uraian}" tidak terbaca: ${b.alasan}.`;
+  if (dariRumus) {
+    return (
+      `${apa} "${uraian}" berupa rumus yang belum pernah dihitung, jadi berkasnya ` +
+      `tidak menyimpan nilai apa pun. Buka dan simpan ulang di Excel lebih dulu.`
+    );
+  }
+  return `"${uraian}" tidak punya ${apa.toLowerCase()}; baris ini tidak bisa dihitung.`;
+}
+
+function laporkanNilaiRumus(
+  sheet: string,
+  jumlahBaris: number,
+  masalah: Masalah[],
+  bagian: { apa: string; jumlah: number }[],
+): void {
+  const berisi = bagian.filter((b) => b.jumlah > 0);
+  if (berisi.length === 0) return;
+  const rincian = berisi.map((b) => `${b.jumlah} dari ${jumlahBaris} ${b.apa}`).join(" dan ");
+  masalah.push({
+    sheet,
+    baris: 0,
+    pesan:
+      `${rincian} berasal dari rumus, bukan angka yang diketik. Nilainya diimpor ` +
+      `apa adanya sebagai angka tetap dan TIDAK ikut berubah bila asumsinya diubah kemudian.`,
+  });
+}
+
+/**
+ * 15_Checks: pemeriksaan internal model, padanan app.check_*() di repo ini.
+ *
+ * Panduan berkasnya sendiri (Panduan_Per_Sheet baris 27) menuliskan aturannya:
+ * "STATUS MODEL harus PASS sebelum workbook digunakan". Impor dari workbook
+ * yang pemeriksaannya sendiri gagal TIDAK ditolak di sini -- itu keputusan
+ * pengguna -- tetapi ia harus melihatnya sebelum menekan simpan, bukan sesudah
+ * angkanya masuk.
+ *
+ * Sheet ini punya DUA tabel pemeriksaan dengan judul kolom berbeda (baris 4
+ * "Toleransi/Lokasi perbaikan", baris 26 "Penjelasan/Tindakan"), jadi setiap
+ * baris header dicari lagi, bukan hanya yang pertama.
+ */
+const STATUS_LULUS = new Set(["pass", "ok", "lulus", "sesuai"]);
+
+function bacaStatusModel(wb: Map<string, LembarMentah>): StatusModel | null {
+  const lembar = cariLembar(wb, SHEET_CEK);
+  if (!lembar) return null;
+
+  const judulPemeriksaan = ["pemeriksaan", "check", "uji"];
+  const judulStatus = ["status"];
+  const judulSelisih = ["selisih", "delta", "difference"];
+
+  // Semua baris header di sheet ini, beserta kolomnya masing-masing.
+  const header: { baris: number; pemeriksaan: number; status: number; selisih: number | null }[] = [];
+  for (let baris = 1; baris <= lembar.barisMaks; baris++) {
+    let kPemeriksaan = 0;
+    let kStatus = 0;
+    let kSelisih = 0;
+    for (let kolom = 1; kolom <= lembar.kolomMaks; kolom++) {
+      const t = bacaTeks(lembar.sel(baris, kolom));
+      if (t === null) continue;
+      const n = normal(t).replace(/[:*]+$/, "");
+      if (!kPemeriksaan && judulPemeriksaan.includes(n)) kPemeriksaan = kolom;
+      else if (!kStatus && judulStatus.includes(n)) kStatus = kolom;
+      else if (!kSelisih && judulSelisih.includes(n)) kSelisih = kolom;
+    }
+    if (kPemeriksaan && kStatus) {
+      header.push({ baris, pemeriksaan: kPemeriksaan, status: kStatus, selisih: kSelisih || null });
+    }
+  }
+  if (header.length === 0) return { status: null, gagal: [] };
+
+  let status: string | null = null;
+  const gagal: { pemeriksaan: string; selisih: string | null }[] = [];
+
+  for (let i = 0; i < header.length; i++) {
+    const h = header[i];
+    const batas = i + 1 < header.length ? header[i + 1].baris : lembar.barisMaks + 1;
+    for (let baris = h.baris + 1; baris < batas; baris++) {
+      const pemeriksaan = bacaTeks(lembar.sel(baris, h.pemeriksaan));
+      const teksStatus = bacaTeks(lembar.sel(baris, h.status));
+      if (pemeriksaan === null) continue;
+
+      // Baris "STATUS MODEL" adalah kesimpulan sheet, bukan satu pemeriksaan.
+      if (normal(pemeriksaan) === "status model") {
+        status = teksStatus ?? bacaTeks(lembar.sel(baris, h.status + 1));
+        continue;
+      }
+      // Bagian "Peringatan yang tidak menggagalkan rumus" berisi kalimat tanpa
+      // status; itu catatan, bukan pemeriksaan yang bisa lulus atau gagal.
+      if (teksStatus === null) continue;
+
+      // OK dan PASS sama-sama berarti lulus: tabel pertama memakai "OK" untuk
+      // tiap baris dan menyimpan "PASS" hanya untuk STATUS MODEL.
+      if (STATUS_LULUS.has(normal(teksStatus))) continue;
+      gagal.push({
+        pemeriksaan,
+        selisih: h.selisih === null ? null : bacaTeks(lembar.sel(baris, h.selisih)),
+      });
+    }
+  }
+  return { status, gagal };
+}
+
 function petakanKomponen(
   wb: Map<string, LembarMentah>,
   skenario: "1lokasi" | "4lokasi",
@@ -766,6 +938,8 @@ function petakanKomponen(
   }
 
   const hasil: BarisImpor[] = [];
+  let volumeRumus = 0;
+  let hargaRumus = 0;
   for (let baris = header.baris + 1; baris <= lembar.barisMaks; baris++) {
     // Tanpa uraian = baris kosong, pemisah, atau baris SUBTOTAL/TOTAL (yang
     // labelnya ada di kolom Tahap, bukan Uraian). Dilewati diam-diam.
@@ -794,19 +968,17 @@ function petakanKomponen(
       }
     }
 
+    const volumeDariRumus = kVolume !== undefined && lembar.rumus(baris, kVolume);
+    const hargaDariRumus = kHarga !== undefined && lembar.rumus(baris, kHarga);
+    if (volumeDariRumus) volumeRumus++;
+    if (hargaDariRumus) hargaRumus++;
+
     let volume: number | null = null;
     if (kVolume !== undefined) {
       const b = bacaAngka(lembar.sel(baris, kVolume));
       if (b.jenis === "angka") volume = b.nilai;
       else {
-        masalah.push({
-          sheet,
-          baris,
-          pesan:
-            b.jenis === "kosong"
-              ? `"${uraian}" tidak punya volume; baris ini tidak bisa dihitung.`
-              : `Volume "${uraian}" tidak terbaca: ${b.alasan}.`,
-        });
+        masalah.push({ sheet, baris, pesan: pesanAngkaGagal(b, "Volume", uraian, volumeDariRumus) });
       }
     }
 
@@ -815,14 +987,7 @@ function petakanKomponen(
       const b = bacaAngka(lembar.sel(baris, kHarga));
       if (b.jenis === "angka") hargaSatuan = b.nilai;
       else {
-        masalah.push({
-          sheet,
-          baris,
-          pesan:
-            b.jenis === "kosong"
-              ? `"${uraian}" tidak punya harga satuan; baris ini tidak bisa dihitung.`
-              : `Harga satuan "${uraian}" tidak terbaca: ${b.alasan}.`,
-        });
+        masalah.push({ sheet, baris, pesan: pesanAngkaGagal(b, "Harga satuan", uraian, hargaDariRumus) });
       }
     }
 
@@ -860,8 +1025,15 @@ function petakanKomponen(
       hargaSatuan,
       sumberRef: bacaTeks(lembar.sel(baris, header.kolom.get("sumber") ?? 0)),
       totalDiSheet,
+      volumeDariRumus,
+      hargaDariRumus,
     });
   }
+
+  laporkanNilaiRumus(sheet, hasil.length, masalah, [
+    { apa: "volume", jumlah: volumeRumus },
+    { apa: "harga satuan", jumlah: hargaRumus },
+  ]);
   return hasil;
 }
 
@@ -887,6 +1059,7 @@ function petakanAsumsi(wb: Map<string, LembarMentah>, masalah: Masalah[]): Asums
   const kNilai = header.kolom.get("nilai");
 
   const hasil: AsumsiImpor[] = [];
+  let nilaiRumus = 0;
   for (let baris = header.baris + 1; baris <= lembar.barisMaks; baris++) {
     const selVariabel = lembar.sel(baris, kVariabel);
     // Judul seksi ("A. Proyek, finansial, dan skenario") hanya mengisi kolom
@@ -948,7 +1121,10 @@ function petakanAsumsi(wb: Map<string, LembarMentah>, masalah: Masalah[]): Asums
       keyakinan,
       catatan: bacaTeks(lembar.sel(baris, header.kolom.get("catatan") ?? 0)),
     });
+    if (kNilai !== undefined && lembar.rumus(baris, kNilai)) nilaiRumus++;
   }
+
+  laporkanNilaiRumus(sheet, hasil.length, masalah, [{ apa: "nilai", jumlah: nilaiRumus }]);
   return hasil;
 }
 
@@ -972,5 +1148,8 @@ export function bacaWorkbookRab(
   const masalah: Masalah[] = [];
   const asumsi = petakanAsumsi(wb, masalah);
   const komponen = petakanKomponen(wb, opts.skenario, masalah);
-  return { asumsi, komponen, masalah };
+  // TIDAK memblokir impor, hanya melaporkan: workbook yang pemeriksaannya
+  // sendiri gagal tetap boleh diimpor, asal pengguna melihatnya lebih dulu.
+  const statusModel = bacaStatusModel(wb);
+  return { asumsi, komponen, masalah, statusModel };
 }
