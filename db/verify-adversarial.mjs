@@ -1029,6 +1029,200 @@ async function run() {
   r = await c.query(`SELECT count(*)::int n FROM app.check_budget_source_scope()`)
   ok('check_budget_source_scope() bersih — tidak ada kutipan lintas entitas', r.rows[0].n === 0)
 
+  // =========================================================================
+  // 0065: baris RAB yang sudah disetujui BEKU — untuk semua peran
+  //
+  // 0060 memasang bpi_edit_update sebagai RESTRICTIVE FOR UPDATE dengan cabang
+  // approver TANPA syarat status dan TANPA WITH CHECK. Akibatnya approver (dan
+  // super_admin) bisa menulis ulang unit_price_idr / volume / is_active pada RAB
+  // yang SUDAH disetujui: amount_idr ikut karena GENERATED, total bergeser,
+  // added_after_approval tetap false, decided_at tidak bergerak. Terbukti pada
+  // dataset demo: RAB-2026-01, 11 baris, Rp 2.185.200.000 → Rp 5.463.000.000
+  // hanya dengan satu UPDATE, lalu 11 baris itu bisa dicoret dan dihapus.
+  //
+  // Penolakannya DIAM (klausa USING menyaring, tidak melempar), jadi setiap uji
+  // di bawah memeriksa DUA hal: nol baris terubah/terhapus DAN angkanya masih
+  // utuh. rowCount saja tidak membuktikan apa pun — UPDATE yang tersaring dan
+  // UPDATE yang kebetulan tidak menemukan baris terlihat sama persis.
+  //
+  // Yang melempar hanya pelanggaran WITH CHECK (dua mustFail di bawah): baris
+  // lama lolos USING, baris barunya yang dilarang.
+  //
+  // Tiga kontrol positif ikut dijaga di sini, karena tambalan yang menolak
+  // segalanya juga "lulus" uji penolakan: approver tetap bisa MENAMBAH baris
+  // setelah persetujuan (kesepakatan rapat 26 Agu), penyusun tetap bisa
+  // menyunting draft-nya, dan cascade asumsi lintas peran tetap menggerakkan
+  // baris turunannya.
+  // =========================================================================
+  console.log('\n=== 0065: baris RAB yang sudah disetujui tidak bisa disunting ===')
+
+  await as(U_AGRO, 'agronomist', CA)
+  const rab4 = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, horizon_months, created_by)
+     VALUES ($1,'RAB-SUNTING','RAB uji gerbang sunting',12,$2) RETURNING id`, [CA, U_AGRO])
+  const RAB4 = rab4.rows[0].id
+
+  const barisLama = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       item_kind, volume, unit_price_idr, created_by)
+     VALUES ($1,1,$2,'Pupuk NPK','consumable',1000,50000,$3) RETURNING id`, [RAB4, CAT, U_AGRO])
+  const B_LAMA = barisLama.rows[0].id
+
+  // Baris yang HILANG dikembalikan sebagai serba-null, bukan undefined: kalau
+  // tambalannya dilepas, DELETE-nya berhasil dan pembacaan berikutnya akan
+  // mematikan seluruh suite dengan TypeError — kegagalan yang menyembunyikan
+  // sisa ujinya sendiri. Serba-null membuat setiap perbandingan di bawah
+  // tetap FAIL, bukan meledak.
+  const KOSONG = { volume: null, unit_price_idr: null, amount_idr: null,
+                   is_active: null, added_after_approval: null }
+  const bacaBaris = async (id) => (await c.query(
+    `SELECT volume::text, unit_price_idr::text, amount_idr::text, is_active, added_after_approval
+       FROM app.budget_plan_items WHERE id = $1`, [id])).rows[0] ?? KOSONG
+
+  // Kontrol positif: pada draft-nya sendiri, penyusun menyunting dan mencoret.
+  const suntingDraftSendiri = await c.query(
+    `UPDATE app.budget_plan_items SET unit_price_idr = 60000 WHERE id = $1`, [B_LAMA])
+  let sBaris = await bacaBaris(B_LAMA)
+  ok('penyusun TETAP bisa menyunting baris pada draft-nya sendiri',
+    suntingDraftSendiri.rowCount === 1 && Number(sBaris.unit_price_idr) === 60000
+      && Number(sBaris.amount_idr) === 60000000, `Rp ${sBaris.amount_idr}`)
+
+  const coret = await c.query(
+    `UPDATE app.budget_plan_items SET is_active = false WHERE id = $1`, [B_LAMA])
+  sBaris = await bacaBaris(B_LAMA)
+  ok('penyusun TETAP bisa mencoret baris pada draft-nya sendiri (is_active)',
+    coret.rowCount === 1 && sBaris.is_active === false)
+  await c.query(`UPDATE app.budget_plan_items SET is_active = true WHERE id = $1`, [B_LAMA])
+
+  // Diajukan: tidak ada yang boleh menyunting baris — termasuk pemutusnya,
+  // yang justru sedang menimbang angka itu.
+  await c.query(`UPDATE app.budget_plans SET approval_status = 'submitted' WHERE id = $1`, [RAB4])
+
+  for (const [uid, role] of [[U_AGRO, 'agronomist'], [U_APPROVER, 'approver'],
+                             [U_ADMIN, 'super_admin']]) {
+    await as(uid, role, CA)
+    const sunting = await c.query(
+      `UPDATE app.budget_plan_items SET unit_price_idr = 250000 WHERE id = $1`, [B_LAMA])
+    const st = await bacaBaris(B_LAMA)
+    ok(`${role} TIDAK bisa menyunting baris RAB yang sudah diajukan (nol baris, harga utuh)`,
+      sunting.rowCount === 0 && Number(st.unit_price_idr) === 60000,
+      `${sunting.rowCount} baris, Rp ${st.unit_price_idr}`)
+  }
+
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(
+    `UPDATE app.budget_plans SET approval_status = 'approved', decided_by = $2, decided_at = now()
+      WHERE id = $1`, [RAB4, U_APPROVER])
+
+  // Kontrol positif — kesepakatan rapat 26 Agu tidak boleh ikut mati.
+  const tambahSetelah = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       item_kind, volume, unit_price_idr, added_after_approval, created_by)
+     VALUES ($1,2,$2,'Ahli hidrologi','service',1,25000000,true,$3) RETURNING id`,
+    [RAB4, CAT, U_APPROVER])
+  const B_BARU = tambahSetelah.rows[0].id
+  ok('approver TETAP bisa menambah baris setelah RAB disetujui (rapat 26 Agu)',
+    tambahSetelah.rowCount === 1)
+
+  // Inti tambalan: baris yang IKUT disetujui beku bagi semua peran.
+  for (const [uid, role] of [[U_APPROVER, 'approver'], [U_ADMIN, 'super_admin'],
+                             [U_AGRO, 'agronomist']]) {
+    await as(uid, role, CA)
+    const sblm = await bacaBaris(B_LAMA)
+
+    // `st.x !== null` BUKAN hiasan: kalau peran sebelumnya berhasil MENGHAPUS
+    // baris ini (persis yang terjadi tanpa tambalan), pembacaan berikutnya
+    // serba-null dan "nilai lama === nilai baru" menjadi benar karena keduanya
+    // null — uji yang lulus justru karena datanya sudah lenyap.
+    const uHarga = await c.query(
+      `UPDATE app.budget_plan_items SET unit_price_idr = 250000 WHERE id = $1`, [B_LAMA])
+    let st = await bacaBaris(B_LAMA)
+    ok(`${role} TIDAK bisa mengubah unit_price_idr baris RAB yang sudah disetujui`,
+      uHarga.rowCount === 0 && st.unit_price_idr !== null
+        && st.unit_price_idr === sblm.unit_price_idr && st.amount_idr === sblm.amount_idr,
+      `${uHarga.rowCount} baris, Rp ${st.amount_idr} (semula Rp ${sblm.amount_idr})`)
+
+    const uVolume = await c.query(
+      `UPDATE app.budget_plan_items SET volume = 9999 WHERE id = $1`, [B_LAMA])
+    st = await bacaBaris(B_LAMA)
+    ok(`${role} TIDAK bisa mengubah volume baris RAB yang sudah disetujui`,
+      uVolume.rowCount === 0 && st.volume !== null && st.volume === sblm.volume
+        && st.amount_idr === sblm.amount_idr,
+      `${uVolume.rowCount} baris, volume ${st.volume}`)
+
+    // is_active bukan kolom rupiah, tapi mencoret baris mengeluarkan angkanya
+    // dari SELURUH total — akibatnya sama dengan menyetel nilainya jadi nol.
+    const uAktif = await c.query(
+      `UPDATE app.budget_plan_items SET is_active = false WHERE id = $1`, [B_LAMA])
+    st = await bacaBaris(B_LAMA)
+    ok(`${role} TIDAK bisa mencoret baris RAB yang sudah disetujui (is_active)`,
+      uAktif.rowCount === 0 && st.is_active === true,
+      `${uAktif.rowCount} baris, is_active ${st.is_active}`)
+
+    const hapus = await c.query(`DELETE FROM app.budget_plan_items WHERE id = $1`, [B_LAMA])
+    const masih = await c.query(
+      `SELECT count(*)::int n FROM app.budget_plan_items WHERE id = $1`, [B_LAMA])
+    ok(`${role} TIDAK bisa menghapus baris RAB yang sudah disetujui`,
+      hapus.rowCount === 0 && masih.rows[0].n === 1,
+      `${hapus.rowCount} baris terhapus, ${masih.rows[0].n} tersisa`)
+  }
+
+  // Yang ia tambahkan sendiri sesudah persetujuan tetap miliknya untuk
+  // diperbaiki — baris itu memang bukan bagian dari angka yang disetujui.
+  await as(U_APPROVER, 'approver', CA)
+  const suntingTambahan = await c.query(
+    `UPDATE app.budget_plan_items SET unit_price_idr = 30000000 WHERE id = $1`, [B_BARU])
+  sBaris = await bacaBaris(B_BARU)
+  ok('approver BISA menyunting baris yang ia tambahkan setelah persetujuan',
+    suntingTambahan.rowCount === 1 && Number(sBaris.unit_price_idr) === 30000000,
+    `Rp ${sBaris.amount_idr}`)
+
+  // WITH CHECK, bukan USING: baris lamanya boleh disunting, keadaan barunya yang
+  // dilarang. Tanpa WITH CHECK kedua UPDATE ini BERHASIL.
+  await mustFail(c, 'baris tambahan TIDAK bisa melebur jadi baris yang disetujui (added_after_approval → false)',
+    `UPDATE app.budget_plan_items SET added_after_approval = false WHERE id = $1`, [B_BARU],
+    /row-level security/i)
+
+  await mustFail(c, 'baris tambahan TIDAK bisa dipindahkan ke RAB lain yang sudah diajukan',
+    `UPDATE app.budget_plan_items SET plan_id = $2 WHERE id = $1`, [B_BARU, RAB3],
+    /row-level security/i)
+
+  const hapusTambahan = await c.query(
+    `DELETE FROM app.budget_plan_items WHERE id = $1`, [B_BARU])
+  const sisaTambahan = await c.query(
+    `SELECT count(*)::int n FROM app.budget_plan_items WHERE id = $1`, [B_BARU])
+  ok('approver BISA menghapus baris yang ia tambahkan setelah persetujuan',
+    hapusTambahan.rowCount === 1 && sisaTambahan.rows[0].n === 0)
+
+  // Kontrol positif terakhir, dan alasan teknis kenapa cabang draft/rejected
+  // TIDAK dipersempit jadi "hanya penyusunnya": app.budget_assumption_cascade()
+  // (0062) meng-UPDATE budget_plan_items dari trigger pada asumsi. Kalau
+  // approver tidak boleh menyentuh baris draft orang lain, mengubah asumsi akan
+  // berhasil sementara baris turunannya diam di tempat — RAB yang setengah
+  // berubah, dan check_budget_derived_volume() menandainya blocking sesudahnya.
+  await as(U_AGRO, 'agronomist', CA)
+  const rab5 = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, horizon_months, created_by)
+     VALUES ($1,'RAB-CASCADE','RAB uji cascade lintas peran',12,$2) RETURNING id`, [CA, U_AGRO])
+  const RAB5 = rab5.rows[0].id
+  await c.query(
+    `INSERT INTO app.budget_assumptions (plan_id, code, label, value, unit, created_by)
+     VALUES ($1,'net_ha','Areal efektif',88,'ha',$2)`, [RAB5, U_AGRO])
+  await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       volume, unit_price_idr, basis_code, ratio_per_basis, created_by)
+     VALUES ($1,1,$2,'Bibit dari basis',1,100000,'net_ha',70,$3)`, [RAB5, CAT, U_AGRO])
+
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(
+    `UPDATE app.budget_assumptions SET value = 100 WHERE plan_id = $1 AND code = 'net_ha'`, [RAB5])
+  r = await c.query(`SELECT volume::text FROM app.budget_plan_items WHERE plan_id = $1`, [RAB5])
+  ok('cascade asumsi TETAP menggerakkan baris draft orang lain (88→100 ha ⇒ 7000)',
+    Number(r.rows[0].volume) === 7000, `volume ${r.rows[0].volume}`)
+
+  r = await c.query(`SELECT count(*)::int n FROM app.check_budget_derived_volume()`)
+  ok('check_budget_derived_volume() bersih setelah cascade lintas peran', r.rows[0].n === 0)
+
   await c.query('ROLLBACK')
   await c.end()
   await restoreStubSwitch()
