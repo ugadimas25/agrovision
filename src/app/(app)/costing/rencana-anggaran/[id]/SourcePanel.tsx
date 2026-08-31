@@ -201,16 +201,21 @@ export function SourcePanel({ sources, canEdit }: { sources: Source[]; canEdit: 
  */
 export function SourceSelect({
   sources, name = "sourceId", defaultValue = "", className, label = "Sumber di registri",
+  ringkas = false,
 }: {
   sources: Source[];
   name?: string;
   defaultValue?: string;
   className?: string;
   label?: string;
+  /** Di dalam sel tabel: tanpa label dan tanpa keterangan, supaya satu baris
+   *  tabel tidak setinggi tiga baris. Keterangannya dipindah ke kaki tabel —
+   *  sekali, bukan diulang di setiap baris. */
+  ringkas?: boolean;
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-slate-500">{label}</span>
+      {!ringkas && <span className="mb-1 block text-xs font-medium text-slate-500">{label}</span>}
       <select name={name} defaultValue={defaultValue} disabled={sources.length === 0}
         className={className ?? "min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/30"}>
         <option value="">— tanpa sumber di registri —</option>
@@ -220,11 +225,13 @@ export function SourceSelect({
           </option>
         ))}
       </select>
-      <span className="mt-1 block text-xs leading-relaxed text-slate-400">
-        {sources.length === 0
-          ? "Registri masih kosong — daftarkan sumbernya lebih dulu di panel Registri sumber."
-          : "Boleh dikosongkan. Kolom dasar/sumber di sebelah tetap menampung keterangan yang tidak punya tautan."}
-      </span>
+      {!ringkas && (
+        <span className="mt-1 block text-xs leading-relaxed text-slate-400">
+          {sources.length === 0
+            ? "Registri masih kosong — daftarkan sumbernya lebih dulu di panel Registri sumber."
+            : "Boleh dikosongkan. Kolom dasar/sumber di sebelah tetap menampung keterangan yang tidak punya tautan."}
+        </span>
+      )}
     </label>
   );
 }

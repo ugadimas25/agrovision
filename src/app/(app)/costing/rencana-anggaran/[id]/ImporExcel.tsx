@@ -72,13 +72,34 @@ export function ImporExcel({
   // Pemetaan tahap -> kategori disimpan di sini supaya "terapkan ke semua" bisa
   // ada, dan supaya jumlah baris yang AKAN masuk bisa dihitung sebelum disimpan.
   const [peta, setPeta] = useState<Record<string, string>>({});
-  // Bulan fase per tahap. Bawaannya kosong (= bulan ke-1), bukan diisi dari
-  // jadwal sheet 05 secara otomatis: jadwal yang terpasang tanpa dilihat sama
-  // saja dengan jadwal karangan, hanya kebetulan berasal dari berkas.
+  // Bulan fase per tahap, TERISI dari jadwal sheet 05 begitu pratinjau dibuka.
+  //
+  // Berbeda dari pemetaan kategori yang sengaja dibiarkan kosong: kategori tidak
+  // ada di berkas sehingga mengisinya berarti menebak, sedangkan bulan MEMANG
+  // TERTULIS di 05_Workplan_Labor. Membacanya bukan menebak.
+  //
+  // Menunggu tombol justru menciptakan perangkap urutan: menekannya SESUDAH
+  // Simpan mengisi kotak di layar sementara datanya sudah tersimpan bulan ke-1,
+  // dan tidak ada apa pun yang memberi tahu bahwa itu terjadi.
   const [bulan, setBulan] = useState<Record<string, number>>({});
+  const [bulanTerisi, setBulanTerisi] = useState(false);
+  const kunciTahap = (t: string) => t.toLowerCase().replace(/^[a-z]\s+/, "");
 
   if (!canEdit) return null;
   const p = pra.pratinjau;
+
+  // Menyetel state saat render, sekali, begitu pratinjau tiba — pola "menyesuaikan
+  // state ketika props berubah" yang memang didukung React. Dijaga bulanTerisi
+  // supaya tidak menimpa angka yang sudah disunting pengguna.
+  if (p && !bulanTerisi) {
+    const dariJadwal = Object.fromEntries(
+      p.tahapUnik
+        .filter((t) => p.jadwalTahap[kunciTahap(t)] !== undefined)
+        .map((t) => [t, p.jadwalTahap[kunciTahap(t)]]),
+    );
+    if (Object.keys(dariJadwal).length > 0) setBulan(dariJadwal);
+    setBulanTerisi(true);
+  }
 
   return (
     <details className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -265,24 +286,23 @@ export function ImporExcel({
                     "sebaran per bulan" jadi satu batang tunggal. Jadwalnya ada
                     di sheet 05 — ditawarkan lewat tombol, bukan dipasang diam-diam. */}
                 {(() => {
-                  const kunci = (t: string) => t.toLowerCase().replace(/^[a-z]\s+/, "");
-                  const berjadwal = p.tahapUnik.filter((t) => p.jadwalTahap[kunci(t)] !== undefined);
+                  const berjadwal = p.tahapUnik.filter((t) => p.jadwalTahap[kunciTahap(t)] !== undefined);
                   return (
                     <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
                       <button
                         type="button"
                         disabled={berjadwal.length === 0}
-                        onClick={() => setBulan((v) => ({
-                          ...Object.fromEntries(berjadwal.map((t) => [t, p.jadwalTahap[kunci(t)]])), ...v,
-                        }))}
+                        onClick={() => setBulan(Object.fromEntries(
+                          berjadwal.map((t) => [t, p.jadwalTahap[kunciTahap(t)]]),
+                        ))}
                         className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                       >
-                        Ambil bulan dari sheet rencana kerja (05)
+                        Kembalikan ke jadwal berkas
                       </button>
                       <span className="text-xs text-slate-500">
                         {berjadwal.length === 0
-                          ? "Berkas ini tidak memuat sheet 05_Workplan_Labor, jadi tidak ada jadwal yang bisa diambil — isi bulannya manual."
-                          : `${berjadwal.length} dari ${p.tahapUnik.length} tahap punya jadwal di berkas. Sisanya tetap bulan ke-1 sampai Anda ubah.`}
+                          ? "Berkas ini tidak memuat sheet 05_Workplan_Labor, jadi bulannya harus diisi manual — semuanya bulan ke-1 sampai Anda ubah."
+                          : `Bulan di bawah sudah diisi dari jadwal 05_Workplan_Labor (${berjadwal.length} dari ${p.tahapUnik.length} tahap). Sisanya bulan ke-1 — ubah bila perlu.`}
                       </span>
                     </div>
                   );

@@ -762,13 +762,26 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
     if (nBaris === 0 && nAsumsi === 0) {
       return { ...imporKosong, message: "Tidak ada yang masuk. RAB ini mungkin sudah diajukan, atau bukan susunan Anda." };
     }
-    const catatan = dilewati.length > 0 ? ` ${dilewati.length} baris dilewati.` : "";
     const kurang = baris.length - nBaris;
+    // Bulan yang BENAR-BENAR dipakai, bukan kalimat tetap. Pesan sebelumnya
+    // selalu berbunyi "Semua masuk bulan ke-1" meski bulannya diisi — kalimat
+    // tetap yang berbohong begitu perilakunya berubah, dan tidak ada yang
+    // menangkapnya karena ia bukan angka yang dihitung dari apa pun.
+    const bulanDipakai = [...new Set(baris.map((b) => b.phaseMonth))].sort((a, b) => a - b);
+    const sebaran = bulanDipakai.length === 0 ? ""
+      : bulanDipakai.length === 1 ? ` Semua masuk bulan ke-${bulanDipakai[0]}.`
+      : ` Tersebar ke bulan ${bulanDipakai.join(", ")}.`;
+    const nLewatKomponen = muatan.data.komponen.length - baris.length;
+    const nLewatAsumsi = muatan.data.asumsi.length - asumsi.length;
+    const catatan = [
+      nLewatKomponen > 0 ? `${nLewatKomponen} komponen dilewati` : "",
+      nLewatAsumsi > 0 ? `${nLewatAsumsi} asumsi dilewati` : "",
+    ].filter(Boolean).join(", ");
     return {
       ok: kurang === 0,
       message: kurang === 0
-        ? `Impor selesai: ${nBaris} komponen, ${nAsumsi} asumsi.${catatan} Semua masuk bulan ke-1 — sesuaikan di tabel.`
-        : `Hanya ${nBaris} dari ${baris.length} komponen yang masuk; sisanya ditolak policy RAB ini.${catatan}`,
+        ? `Impor selesai: ${nBaris} komponen, ${nAsumsi} asumsi.${catatan ? ` ${catatan}.` : ""}${sebaran}`
+        : `Hanya ${nBaris} dari ${baris.length} komponen yang masuk; sisanya ditolak policy RAB ini.${catatan ? ` ${catatan}.` : ""}`,
     };
   } catch (e) {
     return { ...imporKosong, message: toMessage(e) };
