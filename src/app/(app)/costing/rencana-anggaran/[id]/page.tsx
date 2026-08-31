@@ -42,7 +42,7 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
     listBudgetPlanItems(ctx, id),
     budgetPlanByPhase(ctx, id),
     listCategoryOptions(ctx),
-    listOptions(ctx, "uom"),
+    listOptions(ctx, "unit_of_measure"),
     listBudgetAssumptions(ctx, id),
     // Registri milik entitas, bukan RAB ini — jadi tanpa `id` (migrasi 0063).
     listBudgetSources(ctx),

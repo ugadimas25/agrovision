@@ -277,6 +277,16 @@ async function main() {
   const mdAfter = await admin.get("/pengaturan/master-data?tipe=cost_category");
   ok("item baru tampil di layar master data", mdAfter.html.includes(catName));
 
+  // Satuan dibuat lewat UI juga. Entitas DEV sengaja bermaster-data KOSONG,
+  // jadi tanpa langkah ini dropdown Satuan di form RAB memang kosong secara sah
+  // -- dan dropdown kosong yang SAH tidak bisa dibedakan dari dropdown kosong
+  // karena bug. Layar RAB sempat memanggil listOptions dengan kode tipe master
+  // "uom" yang tidak pernah ada (yang benar "unit_of_measure"), dan tidak ada
+  // satu pun uji yang menangkapnya.
+  const uomName = `Satuan Uji ${stamp}`;
+  await admin.submit("/pengaturan/master-data?tipe=unit_of_measure",
+    { code: `UOM${stamp}`, name: uomName, sortOrder: 9 }, { formMarker: "masterTypeCode" });
+
   const expPage = await creator.get("/costing/pengeluaran");
   const catId = optionId(expPage.html, "costCategoryId", catName);
   const blkId = optionId(expPage.html, "blockId", blkCode);
@@ -1222,6 +1232,17 @@ async function main() {
     // BUKAN cuma bahwa layarnya dropdown, tapi bahwa SERVER menolak nilai di
     // luar daftar: Server Action bisa dipanggil POST langsung tanpa UI.
     // -----------------------------------------------------------------------
+    // Dropdown yang KOSONG tidak melempar galat apa pun -- ia hanya tampil
+    // sebagai daftar tanpa pilihan, dan pengguna menyimpulkan satuannya memang
+    // belum ada. Layar RAB memanggil listOptions dengan kode tipe master "uom"
+    // yang tidak pernah ada (yang benar "unit_of_measure"), jadi selama modul
+    // ini hidup, satuan tidak pernah bisa dipilih dari layar sama sekali.
+    // Satuan yang baru dibuat di AT1 harus benar-benar muncul di form RAB.
+    ok("dropdown Satuan berisi pilihan dari master, bukan kosong",
+      detail.html.includes(uomName),
+      detail.html.includes(uomName) ? ""
+        : detail.html.includes('name="uomItemId"') ? "select ada tapi tanpa pilihan" : "select tidak ada");
+
     ok("Tahap & penggerak dipilih dari daftar, bukan diketik bebas",
       detail.html.includes('<select name="stage"') && !detail.html.includes('list="tahap-rab"'));
 
