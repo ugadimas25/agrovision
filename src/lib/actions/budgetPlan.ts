@@ -686,7 +686,16 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
         dilewati.push(`baris ${k.barisAsli} (${k.uraian}): tahap belum dipetakan ke kategori biaya`);
         return [];
       }
-      if (k.volume === null || k.volume <= 0 || k.hargaSatuan === null) {
+      // Volume 0 BUKAN sama dengan volume kosong, dan template R2 memakai
+      // keduanya dengan sengaja: baris "Cover crop/insectary establishment"
+      // bervolume 0 karena biayanya sudah dihitung di 17_Model_Fleksibel supaya
+      // tidak dobel. CHECK (volume > 0) di 0060 menolaknya, jadi ia dilewati --
+      // tapi alasannya disebut apa adanya, bukan disamakan dengan sel kosong.
+      if (k.volume === 0) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volumenya 0 di berkas — biasanya karena biayanya sudah dihitung di sheet lain`);
+        return [];
+      }
+      if (k.volume === null || k.volume < 0 || k.hargaSatuan === null) {
         dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volume atau harga satuan kosong di berkas`);
         return [];
       }
