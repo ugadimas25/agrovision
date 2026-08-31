@@ -1391,12 +1391,40 @@ async function main() {
       ok("pratinjau meminta pemetaan kategori per tahap",
         Object.keys(petaKategori).length > 0, `${Object.keys(petaKategori).length} tahap`);
 
+      ok("pratinjau menawarkan jadwal bulan dari sheet 05",
+        /\d+ dari \d+ tahap punya jadwal di berkas/.test(tPra),
+        (/\d+ dari \d+ tahap punya jadwal di berkas/.exec(tPra) ?? ["tidak ditawarkan"])[0]);
+
+      // Bulan per tahap dikirim eksplisit — sebaran per bulan yang menumpuk di
+      // bulan ke-1 adalah keluhan nyata: satu batang tidak memberi tahu apa pun.
+      const petaBulan = {};
+      [...pra.html.matchAll(/name="kategori_([^"]+)"/g)].forEach((m, i) => {
+        petaBulan[`bulanTahap_${m[1]}`] = (i % 4) + 1;
+      });
+
       // Dikirim dari HTML pratinjau, bukan dari halaman yang dimuat ulang:
       // form konfirmasi hanya ada di respons POST sebelumnya.
       await agro.submit(`/costing/rencana-anggaran/${id}`,
-        { planId: id, ...petaKategori }, { formMarker: 'name="muatan"', html: pra.html });
+        { planId: id, ...petaKategori, ...petaBulan }, { formMarker: 'name="muatan"', html: pra.html });
       detail = await agro.get(`/costing/rencana-anggaran/${id}`);
       const tSes = visible(detail.html);
+
+      const nBulan = Number(await psql(`SELECT count(DISTINCT phase_month) FROM app.budget_plan_items
+                                          WHERE plan_id='${id}'`));
+      ok("baris tersebar ke beberapa bulan, tidak menumpuk di bulan ke-1",
+        nBulan > 1, `${nBulan} bulan berbeda`);
+
+      // Pos borongan di model: satuan "Rp", harga Rp 1, nilai rupiahnya di kolom
+      // volume. Diimpor sebagai 1 x harga penuh -- jumlahnya wajib IDENTIK.
+      const borongan = await psql(`SELECT volume||'|'||unit_price_idr||'|'||amount_idr
+                                     FROM app.budget_plan_items
+                                    WHERE plan_id='${id}' AND description='All planting stock'`);
+      ok("pos borongan jadi volume 1 x harga penuh, jumlahnya tidak berubah",
+        borongan.startsWith("1.0000|2330768000") && borongan.endsWith("|2330768000.00"),
+        borongan || "baris borongan tidak ditemukan");
+      ok("tidak ada lagi baris berharga satuan Rp 1 dengan volume miliaran",
+        Number(await psql(`SELECT count(*) FROM app.budget_plan_items
+                            WHERE plan_id='${id}' AND unit_price_idr <= 1 AND volume > 1000000`)) === 0);
 
       ok("baris dari Excel benar-benar masuk ke RAB",
         tSes.includes("Drone orthomosaic"),

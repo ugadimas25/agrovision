@@ -791,6 +791,15 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
         dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volume atau harga satuan kosong di berkas`);
         return [];
       }
+      // Pos borongan di model ditulis dengan satuan "Rp", harga satuan Rp 1, dan
+      // NILAI RUPIAHNYA di kolom volume ("All planting stock" volume
+      // 2.330.768.000 x Rp 1). Jumlahnya benar, tapi kolom Volume jadi tidak
+      // berarti apa-apa — dan lebih buruk: baris seperti itu tidak akan pernah
+      // bisa ditautkan ke asumsi, karena "volume" -nya bukan kuantitas.
+      //
+      // Ditukar menjadi 1 x harga penuh. Jumlahnya identik (GENERATED tetap
+      // volume x harga), tapi kolomnya kembali berarti.
+      const borongan = (k.satuanTeks ?? "").trim().toLowerCase() === "rp" && k.hargaSatuan === 1;
       return [{
         // 08_CAPEX_RAB tidak punya kolom bulan. Yang dipakai adalah bulan yang
         // DITETAPKAN PENGGUNA per tahap di pratinjau -- boleh diisi sendiri,
@@ -802,9 +811,9 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
         // Tidak ada kolom jenis di berkas. 'consumable' adalah default kolomnya
         // di 0060, dipakai apa adanya dan bukan tebakan dari uraian.
         itemKind: "consumable",
-        volume: k.volume,
+        volume: borongan ? 1 : k.volume,
         uomItemId: k.satuanTeks ? (petaUom.get(k.satuanTeks.toLowerCase().trim()) ?? null) : null,
-        unitPriceIdr: k.hargaSatuan,
+        unitPriceIdr: borongan ? k.volume : k.hargaSatuan,
         // 08_CAPEX_RAB adalah sheet investasi awal; seluruh barisnya capex.
         costKind: "capex" as const,
         stage: (TAHAP as readonly string[]).includes(k.tahap ?? "") ? k.tahap : null,

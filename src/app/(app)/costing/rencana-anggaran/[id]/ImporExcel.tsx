@@ -321,6 +321,21 @@ export function ImporExcel({
                   Yang perlu Anda tahu sebelum menyimpan
                 </p>
                 <ul className="mt-1 space-y-0.5 text-xs text-amber-900">
+                  {(() => {
+                    // Pos borongan: satuan "Rp" + harga Rp 1, nilai rupiahnya di
+                    // kolom volume. Disebutkan supaya penukarannya jadi 1 x harga
+                    // penuh tidak terlihat seperti angka yang berubah sendiri.
+                    const n = p.komponen.filter(
+                      (k) => (k.satuanTeks ?? "").trim().toLowerCase() === "rp" && k.hargaSatuan === 1,
+                    ).length;
+                    return n === 0 ? null : (
+                      <li>
+                        <b>{n} baris</b> ditulis sebagai pos borongan di berkas (satuan Rp, harga
+                        Rp 1, nilai rupiahnya di kolom volume). Diimpor sebagai <b>volume 1 ×
+                        harga penuh</b> — jumlahnya sama persis, tapi kolom Volume tetap berarti.
+                      </li>
+                    );
+                  })()}
                   {p.satuanTidakDikenal.length > 0 && (
                     <li>
                       Satuan tidak ada di master: <b>{p.satuanTidakDikenal.join(", ")}</b> — barisnya
