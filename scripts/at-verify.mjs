@@ -1391,16 +1391,21 @@ async function main() {
       ok("pratinjau meminta pemetaan kategori per tahap",
         Object.keys(petaKategori).length > 0, `${Object.keys(petaKategori).length} tahap`);
 
-      ok("pratinjau menawarkan jadwal bulan dari sheet 05",
-        /\d+ dari \d+ tahap punya jadwal di berkas/.test(tPra),
-        (/\d+ dari \d+ tahap punya jadwal di berkas/.exec(tPra) ?? ["tidak ditawarkan"])[0]);
+      ok("pratinjau menyebut berapa tahap yang jadwalnya diambil dari sheet 05",
+        /sudah diisi dari jadwal 05_Workplan_Labor \(\d+ dari \d+ tahap\)/.test(tPra),
+        (/sudah diisi dari jadwal[^<]*/.exec(tPra) ?? ["tidak disebutkan"])[0].slice(0, 80));
 
-      // Bulan per tahap dikirim eksplisit — sebaran per bulan yang menumpuk di
-      // bulan ke-1 adalah keluhan nyata: satu batang tidak memberi tahu apa pun.
-      const petaBulan = {};
-      [...pra.html.matchAll(/name="kategori_([^"]+)"/g)].forEach((m, i) => {
-        petaBulan[`bulanTahap_${m[1]}`] = (i % 4) + 1;
-      });
+      // Bulan TIDAK dikirim manual: pratinjau harus sudah mengisinya sendiri dari
+      // jadwal sheet 05. Mengirimnya di sini akan menutupi kegagalan pengisian
+      // otomatis itu — persis perangkap yang membuat impor pertama pengguna
+      // menumpuk di bulan ke-1 padahal kotaknya terlihat terisi di layar.
+      const petaBulan = Object.fromEntries(
+        [...pra.html.matchAll(/name="bulanTahap_([^"]+)"[^>]*value="(\d+)"/g)]
+          .map((m) => [`bulanTahap_${m[1]}`, Number(m[2])]),
+      );
+      ok("pratinjau mengisi bulan dari jadwal berkas tanpa diminta",
+        Object.values(petaBulan).some((v) => v > 1),
+        `bulan terisi: ${[...new Set(Object.values(petaBulan))].sort((a, b) => a - b).join(", ")}`);
 
       // Dikirim dari HTML pratinjau, bukan dari halaman yang dimuat ulang:
       // form konfirmasi hanya ada di respons POST sebelumnya.
