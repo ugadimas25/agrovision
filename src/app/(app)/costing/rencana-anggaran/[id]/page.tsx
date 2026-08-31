@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, ClipboardList, TriangleAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
-import { budgetPlanByPhase, getBudgetPlan, listBudgetPlanItems } from "@/lib/repo/budgetPlan";
+import { budgetPlanByPhase, getBudgetPlan, listBudgetAssumptions, listBudgetPlanItems } from "@/lib/repo/budgetPlan";
 import { listCategoryOptions, listOptions } from "@/lib/repo/master";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -10,6 +10,7 @@ import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
 import { RecordStatusBadge } from "@/components/ui/RecordStatusBadge";
 import { formatIdr, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { AssumptionPanel } from "./AssumptionPanel";
 import { ItemForm } from "./ItemForm";
 import { PlanDecision } from "./PlanDecision";
 
@@ -45,11 +46,12 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
   // benar-benar tidak ada ATAU milik entitas lain — keduanya 404 bagi pemanggil.
   if (!plan) notFound();
 
-  const [items, perPhase, categories, uoms] = await Promise.all([
+  const [items, perPhase, categories, uoms, assumptions] = await Promise.all([
     listBudgetPlanItems(ctx, id),
     budgetPlanByPhase(ctx, id),
     listCategoryOptions(ctx),
     listOptions(ctx, "uom"),
+    listBudgetAssumptions(ctx, id),
   ]);
 
   const role = ctx.session.role;
@@ -110,9 +112,16 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
         />
       </div>
 
+      {/* Asumsi didahulukan di layar karena didahulukan juga secara logika:
+          baris RAB menunjuk kodenya, jadi basis harus ada lebih dulu. */}
+      <div className="mb-5">
+        <AssumptionPanel planId={plan.id} assumptions={assumptions} canEdit={canAddItem} />
+      </div>
+
       {canAddItem && (
         <div className="mb-5">
           <ItemForm
+            assumptions={assumptions.map((a) => ({ code: a.code, label: a.label, unit: a.unit, value: a.value }))}
             planId={plan.id}
             horizonMonths={plan.horizonMonths}
             categories={categories}
@@ -197,6 +206,14 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
                       <td data-label="Jenis" className="px-4 py-2.5 text-slate-500">{KIND_LABEL[it.itemKind] ?? it.itemKind}</td>
                       <td data-label="Volume" className="px-4 py-2.5 text-right tabular-nums text-slate-600">
                         {formatNumber(it.volume)} {it.uomName ?? ""}
+                        {/* Volume turunan menyebut asalnya. Angka yang tidak
+                            bisa ditelusuri ke basisnya adalah angka yang tidak
+                            bisa diperiksa siapa pun. */}
+                        {it.basisCode && (
+                          <span className="block text-xs font-normal text-slate-400">
+                            = {it.basisCode} × {formatNumber(it.ratioPerBasis)}
+                          </span>
+                        )}
                       </td>
                       <td data-label="Harga satuan" className="px-4 py-2.5 text-right tabular-nums text-slate-600">{formatIdr(it.unitPriceIdr)}</td>
                       <td data-label="Jumlah" className="px-4 py-2.5 text-right tabular-nums font-medium text-slate-700">{formatIdr(it.amountIdr)}</td>

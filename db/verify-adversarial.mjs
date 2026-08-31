@@ -756,6 +756,84 @@ async function run() {
   r = await c.query(`SELECT count(*)::int n FROM app.budget_plan_items WHERE plan_id = $1`, [RAB_ID])
   ok('agronomist tetap melihat seluruh baris RAB entitasnya', r.rows[0].n === 2, `${r.rows[0].n} baris`)
 
+  // =========================================================================
+  // 0062: pusat asumsi — satu angka menggerakkan banyak baris, dan terkunci
+  //       begitu RAB diajukan
+  // =========================================================================
+  console.log('\n=== 0062: asumsi RAB (basis × rasio) ===')
+  await as(U_AGRO, 'agronomist', CA)
+
+  const rab2 = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, horizon_months, created_by)
+     VALUES ($1,'RAB-ASUMSI','RAB uji asumsi',12,$2) RETURNING id`, [CA, U_AGRO])
+  const RAB2 = rab2.rows[0].id
+
+  await c.query(
+    `INSERT INTO app.budget_assumptions (plan_id, code, label, value, unit, created_by)
+     VALUES ($1,'net_ha','Areal efektif',88,'ha',$2)`, [RAB2, U_AGRO])
+
+  const turunan = await c.query(
+    `INSERT INTO app.budget_plan_items
+       (plan_id, phase_month, cost_category_id, description, volume, unit_price_idr,
+        basis_code, ratio_per_basis, created_by)
+     VALUES ($1, 1, $2, 'Bibit dari basis', 1, 100000, 'net_ha', 70, $3)
+     RETURNING volume, amount_idr`, [RAB2, CAT, U_AGRO])
+  ok('volume diturunkan database, bukan dari angka yang dikirim (1 → 88×70)',
+    Number(turunan.rows[0].volume) === 6160, `volume ${turunan.rows[0].volume}`)
+  ok('amount_idr ikut turunannya', Number(turunan.rows[0].amount_idr) === 616000000,
+    `Rp ${turunan.rows[0].amount_idr}`)
+
+  await mustFail(c, 'basis tanpa rasio DITOLAK (harus berpasangan)',
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       volume, unit_price_idr, basis_code, created_by)
+     VALUES ($1,1,$2,'Basis yatim',1,1,'net_ha',$3)`, [RAB2, CAT, U_AGRO],
+    /rasio per basis kosong/i)
+
+  await mustFail(c, 'basis menunjuk asumsi yang tidak ada DITOLAK',
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       volume, unit_price_idr, basis_code, ratio_per_basis, created_by)
+     VALUES ($1,1,$2,'Basis ngawur',1,1,'entah_apa',2,$3)`, [RAB2, CAT, U_AGRO],
+    /tidak ada di RAB ini/i)
+
+  // Inti tahap 2: ubah satu angka, seluruh baris turunannya bergerak.
+  await c.query(`UPDATE app.budget_assumptions SET value = 70 WHERE plan_id = $1 AND code = 'net_ha'`, [RAB2])
+  r = await c.query(`SELECT volume, amount_idr FROM app.budget_plan_items WHERE plan_id = $1`, [RAB2])
+  ok('mengubah asumsi menghitung ulang baris yang memakainya (88→70 ha ⇒ 4900)',
+    Number(r.rows[0].volume) === 4900 && Number(r.rows[0].amount_idr) === 490000000,
+    `volume ${r.rows[0].volume}, Rp ${r.rows[0].amount_idr}`)
+
+  r = await c.query(`SELECT count(*)::int n FROM app.check_budget_derived_volume()`)
+  ok('check_budget_derived_volume() bersih setelah perhitungan ulang', r.rows[0].n === 0)
+
+  // Setelah diajukan, asumsi TERKUNCI — untuk semua peran, termasuk finance.
+  await c.query(`UPDATE app.budget_plans SET approval_status = 'submitted' WHERE id = $1`, [RAB2])
+
+  const kunciAgro = await c.query(
+    `UPDATE app.budget_assumptions SET value = 999 WHERE plan_id = $1 AND code = 'net_ha'`, [RAB2])
+  ok('agronomist TIDAK bisa mengubah asumsi setelah RAB diajukan', kunciAgro.rowCount === 0)
+
+  await as(U_APPROVER, 'approver', CA)
+  const kunciFin = await c.query(
+    `UPDATE app.budget_assumptions SET value = 999 WHERE plan_id = $1 AND code = 'net_ha'`, [RAB2])
+  ok('finance pun TIDAK bisa mengubah asumsi RAB yang sudah diajukan',
+    kunciFin.rowCount === 0, 'persetujuan atas angka yang berubah sendiri bukan persetujuan')
+
+  r = await c.query(`SELECT volume FROM app.budget_plan_items WHERE plan_id = $1`, [RAB2])
+  ok('nilai turunan tidak bergeser setelah penguncian', Number(r.rows[0].volume) === 4900)
+
+  // Tapi finance TETAP boleh menambah baris setelah disetujui — kesepakatan
+  // rapat 26 Agu, dan menambah baris tidak mengubah angka yang sudah ada.
+  await c.query(`UPDATE app.budget_plans SET approval_status = 'approved' WHERE id = $1`, [RAB2])
+  const tambah = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       volume, unit_price_idr, added_after_approval, created_by)
+     VALUES ($1,2,$2,'Ahli hidrologi',1,25000000,true,$3) RETURNING id`, [RAB2, CAT, U_APPROVER])
+  ok('finance tetap bisa menambah baris setelah disetujui', tambah.rowCount === 1)
+
+  await as(U_VIEWER, 'viewer', CA)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_assumptions WHERE plan_id = $1`, [RAB2])
+  ok('viewer tetap bisa MEMBACA asumsi (dasar angka tidak disembunyikan)', r.rows[0].n === 1)
+
   await c.query('ROLLBACK')
   await c.end()
   await restoreStubSwitch()

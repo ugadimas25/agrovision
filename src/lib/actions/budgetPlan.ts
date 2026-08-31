@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
 import {
-  addBudgetPlanItem, createBudgetPlan, decideBudgetPlan, setBudgetPlanItemActive, submitBudgetPlan,
+  addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, decideBudgetPlan,
+  setBudgetPlanItemActive, submitBudgetPlan, updateBudgetAssumptionValue,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -90,7 +91,9 @@ const itemSchema = z.object({
   costCategoryId: z.string().uuid("Kategori biaya wajib dipilih"),
   description: z.string().trim().min(1, "Uraian wajib diisi").max(300),
   itemKind: z.enum(["consumable", "asset", "labor", "service"]),
-  volume: z.coerce.number().positive("Volume harus lebih dari 0").max(1e12),
+  // Volume boleh 0/kosong bila diturunkan dari asumsi — trigger di database
+  // yang mengisinya. Divalidasi ulang di refine() bawah.
+  volume: z.coerce.number().min(0).max(1e12).catch(0),
   uomItemId: z.string().uuid().nullable().catch(null),
   unitPriceIdr: z.coerce.number().min(0, "Harga satuan tidak boleh negatif").max(1e15),
   note: z.string().trim().max(500).nullable().catch(null),
@@ -103,6 +106,14 @@ const itemSchema = z.object({
   // membuat seluruh kolom keyakinan tidak berarti.
   confidence: z.enum(["high", "medium", "low"]).nullable().catch(null),
   excludeFromContingency: z.coerce.boolean().catch(false),
+  // 0062: volume boleh diturunkan dari asumsi. Keduanya wajib berpasangan —
+  // constraint bpi_basis_berpasangan menegakkan hal yang sama di database.
+  basisCode: z.string().trim().regex(/^[a-z][a-z0-9_]{1,40}$/).nullable().catch(null),
+  ratioPerBasis: z.coerce.number().positive().max(1e9).nullable().catch(null),
+}).refine((v) => (v.basisCode === null) === (v.ratioPerBasis === null), {
+  message: "Basis dan rasio harus diisi berpasangan", path: ["ratioPerBasis"],
+}).refine((v) => v.basisCode !== null || v.volume > 0, {
+  message: "Volume harus lebih dari 0, atau turunkan dari asumsi", path: ["volume"],
 });
 
 export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanState> {
@@ -131,6 +142,8 @@ export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanSt
       sourceRef: kosong(fd.get("sourceRef")),
       confidence: kosong(fd.get("confidence")),
       excludeFromContingency: fd.get("excludeFromContingency") === "on",
+      basisCode: kosong(fd.get("basisCode")),
+      ratioPerBasis: kosong(fd.get("ratioPerBasis")),
     });
     if (!parsed.success) {
       return { ok: false, message: parsed.error.issues[0]?.message ?? "Isian tidak valid", fieldErrors: fieldErrors(parsed.error) };
@@ -219,6 +232,74 @@ export async function decidePlanAction(_p: PlanState, fd: FormData): Promise<Pla
         ? "RAB disetujui. Ia menjadi acuan anggaran."
         : "RAB ditolak beserta alasannya. Agronomis bisa memperbaiki lalu mengajukan ulang.",
     };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+const assumptionSchema = z.object({
+  planId: z.string().uuid(),
+  code: z.string().trim().regex(/^[a-z][a-z0-9_]{1,40}$/,
+    "Kode hanya huruf kecil, angka, dan garis bawah — mis. net_ha"),
+  label: z.string().trim().min(1, "Nama asumsi wajib diisi").max(120),
+  // Nol DIIZINKAN dan disengaja: di model Banyumas harga akuisisi lahan adalah
+  // 0 dengan sumber "OPEN". Yang membedakannya dari "belum diisi" adalah
+  // source_ref-nya, bukan angkanya.
+  value: z.coerce.number().min(0).max(1e15),
+  unit: z.string().trim().max(30).nullable().catch(null),
+  sourceRef: z.string().trim().max(300).nullable().catch(null),
+  confidence: z.enum(["high", "medium", "low"]).nullable().catch(null),
+  note: z.string().trim().max(500).nullable().catch(null),
+});
+
+export async function addAssumptionAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    const kosong = (v: FormDataEntryValue | null) =>
+      v === null || String(v).trim() === "" ? null : v;
+    const parsed = assumptionSchema.safeParse({
+      planId: fd.get("planId"),
+      code: fd.get("code"),
+      label: fd.get("label"),
+      value: fd.get("value"),
+      unit: kosong(fd.get("unit")),
+      sourceRef: kosong(fd.get("sourceRef")),
+      confidence: kosong(fd.get("confidence")),
+      note: kosong(fd.get("note")),
+    });
+    if (!parsed.success) {
+      return { ok: false, message: parsed.error.issues[0]?.message ?? "Isian tidak valid", fieldErrors: fieldErrors(parsed.error) };
+    }
+    await addBudgetAssumption(ctx, parsed.data);
+    revalidatePath(`/costing/rencana-anggaran/${parsed.data.planId}`);
+    return { ok: true, message: `Asumsi ${parsed.data.code} ditambahkan.` };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+/**
+ * Ubah nilai satu asumsi — dan dengan itu, seluruh baris yang menurunkannya.
+ *
+ * Efek berantainya dikerjakan trigger database (0062), bukan di sini: kalau
+ * perkalian ulang hidup di TypeScript, satu jalur tulis yang lupa memanggilnya
+ * akan meninggalkan RAB yang setengah berubah — dan RAB setengah berubah lebih
+ * berbahaya daripada yang salah seluruhnya, karena ia terlihat konsisten.
+ */
+export async function updateAssumptionAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    const id = z.string().uuid().safeParse(fd.get("id"));
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    const value = z.coerce.number().min(0).max(1e15).safeParse(fd.get("value"));
+    if (!id.success || !planId.success) return { ok: false, message: "Asumsi tidak valid." };
+    if (!value.success) return { ok: false, message: "Nilai asumsi tidak valid." };
+
+    const n = await updateBudgetAssumptionValue(ctx, id.data, value.data);
+    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
+    return n === 0
+      ? { ok: false, message: "Asumsi tidak bisa diubah — RAB ini sudah diajukan atau bukan susunan Anda." }
+      : { ok: true, message: "Asumsi diperbarui. Baris yang memakainya ikut dihitung ulang." };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }
