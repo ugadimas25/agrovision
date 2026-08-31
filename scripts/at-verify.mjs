@@ -1456,9 +1456,18 @@ async function main() {
     // baris bervolume 1 lot), uji ini akan gagal karena aturan yang justru
     // bekerja dengan benar. Label opsinya memuat volume: "uraian (7000 BATANG)".
     const idItem = (() => {
-      const sel = /<select[^>]*name="planItemId"[\s\S]*?<\/select>/.exec(stlhTgl.html)?.[0] ?? "";
-      for (const m of sel.matchAll(/<option value="([0-9a-f-]{36})">([^<]*)<\/option>/g)) {
-        const vol = Number((/\(([\d.]+)\s/.exec(m[2]) ?? [])[1] ?? "0");
+      // Komentar HTML dibuang dulu: React SSR menyisipkan <!-- --> di antara dua
+      // ekspresi teks bersebelahan, sehingga label opsi yang dibaca manusia
+      // sebagai satu kalimat terpotong di sumbernya dan pola "tanpa < di dalam"
+      // tidak pernah cocok.
+      const sel = (/<select[^>]*name="planItemId"[\s\S]*?<\/select>/.exec(stlhTgl.html)?.[0] ?? "")
+        .replace(/<!--[\s\S]*?-->/g, "");
+      for (const m of sel.matchAll(/<option value="([0-9a-f-]{36})">([^<]*)</g)) {
+        // Angka di layar berformat Indonesia: "7.000" itu tujuh ribu, bukan
+        // tujuh koma nol. Number("7.000") = 7 akan memilih baris yang justru
+        // terlalu kecil, lalu penugasannya ditolak pagu.
+        const teks = (/\(([\d.,]+)\s/.exec(m[2]) ?? [])[1] ?? "0";
+        const vol = Number(teks.replace(/\./g, "").replace(",", "."));
         if (vol >= 10) return m[1];
       }
       return undefined;
