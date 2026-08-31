@@ -5,24 +5,10 @@ import { Loader2, Plus, CircleAlert, CircleCheck } from "lucide-react";
 import { addItemAction, type PlanState } from "@/lib/actions/budgetPlan";
 import { cn } from "@/lib/utils";
 import { SourceSelect, type Source } from "./SourcePanel";
+import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
 
 const initial: PlanState = { ok: false, message: "" };
 type Option = { value: string; label: string };
-
-// Tahap & penggerak dari 08_CAPEX_RAB (model Banyumas). Dipakai sebagai
-// <datalist> — saran, bukan kurungan: daftar tahap milik metodologi proyek,
-// dan agronomis harus bisa menambah tanpa menunggu migrasi.
-const STAGES = [
-  "A Land", "A Assessment", "A Survey", "A Safeguard", "A Design",
-  "B Land prep", "B Soil", "C Road", "C Drain", "C Boundary", "C Facility",
-  "C Water", "C Power", "C Mobilization", "D Planting", "D Ecology",
-  "E Equipment", "F Systems", "F Payroll",
-];
-
-const DRIVERS = [
-  "gross ha", "net ha", "site", "lot", "sample", "pit", "ton", "m", "unit",
-  "% stock", "tree kg", "equipment", "annual", "calculated",
-];
 
 const KINDS: Option[] = [
   { value: "consumable", label: "Habis pakai (pupuk, dolomit, bibit)" },
@@ -170,18 +156,18 @@ export function ItemForm({
 
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-500">Tahap</span>
-              <input name="stage" maxLength={80} list="tahap-rab" placeholder="mis. B Land prep" className={cls("stage")} />
-              <datalist id="tahap-rab">
-                {STAGES.map((t) => <option key={t} value={t} />)}
-              </datalist>
+              <select name="stage" defaultValue="" className={cls("stage")}>
+                <option value="">— belum ditentukan —</option>
+                {TAHAP.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
             </label>
 
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-500">Penggerak volume</span>
-              <input name="driver" maxLength={80} list="penggerak-rab" placeholder="mis. net ha" className={cls("driver")} />
-              <datalist id="penggerak-rab">
-                {DRIVERS.map((d) => <option key={d} value={d} />)}
-              </datalist>
+              <select name="driver" defaultValue="" className={cls("driver")}>
+                <option value="">— belum ditentukan —</option>
+                {PENGGERAK.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
             </label>
 
             {/* Dua kolom sumber yang BERDAMPINGAN, bukan saling menggantikan.

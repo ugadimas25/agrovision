@@ -8,6 +8,7 @@ import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
 import { formatIdr, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SourceLink } from "./SourceLink";
+import { TAHAP } from "@/lib/rab/daftar";
 
 const initial: PlanState = { ok: false, message: "" };
 
@@ -307,9 +308,17 @@ export function ItemGrid({ planId, items, categories, uoms, canEdit, afterApprov
                 melewatinya. */}
             {barisBaruTampil && (
               <tr className="border-t border-slate-100 bg-emerald-50/20 align-top">
-                <td data-label="CAPEX / OPEX" className="px-4 py-2.5">
+                <td data-label="Tahap" className="px-4 py-2.5">
+                  {/* Daftar tertutup (src/lib/rab/daftar.ts): tahap yang salah
+                      tulis memecah pengelompokan CAPEX tanpa memunculkan galat
+                      apa pun, jadi di sini tidak ada ketikan bebas. */}
+                  <select name="baru_tahap" defaultValue="" aria-label="Tahap proyek baris baru"
+                    className={cn(SEL, "text-xs text-slate-600")}>
+                    <option value="">— tahap —</option>
+                    {TAHAP.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
                   <select name="baru_kind" defaultValue="capex" aria-label="CAPEX atau OPEX"
-                    className={cn(SEL, "text-xs uppercase")}>
+                    className={cn(SEL, "mt-1 text-xs uppercase")}>
                     <option value="capex">capex</option>
                     <option value="opex">opex</option>
                   </select>

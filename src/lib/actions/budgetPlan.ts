@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
+import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
 import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
   decideBudgetPlan, deleteBudgetPlanItem, setBudgetPlanItemActive, submitBudgetPlan,
@@ -109,8 +110,13 @@ const itemSchema = z.object({
   note: z.string().trim().max(500).nullable().catch(null),
   // 0061, mengikuti 08_CAPEX_RAB pada model Banyumas.
   costKind: z.enum(["capex", "opex"]),
-  stage: z.string().trim().max(80).nullable().catch(null),
-  driver: z.string().trim().max(80).nullable().catch(null),
+  // Daftar TERTUTUP, bukan sekadar dropdown di layar: Server Action bisa
+  // dipanggil POST langsung tanpa melewati UI, jadi <select> saja bukan jaminan.
+  // `.catch(null)` disengaja -- nilai di luar daftar diperlakukan sebagai
+  // "belum ditentukan" dan tampil apa adanya di layar, bukan diam-diam
+  // tersimpan sebagai tahap baru yang memecah pengelompokan CAPEX.
+  stage: z.enum(TAHAP).nullable().catch(null),
+  driver: z.enum(PENGGERAK).nullable().catch(null),
   sourceRef: z.string().trim().max(300).nullable().catch(null),
   // Sengaja TANPA default: menebak "medium" untuk baris yang belum ditelaah
   // membuat seluruh kolom keyakinan tidak berarti.
@@ -211,6 +217,7 @@ const barisBaruSchema = z.object({
   uomItemId: z.string().uuid().nullable(),
   unitPriceIdr: z.coerce.number().min(0, "Harga satuan tidak boleh negatif").max(1e15),
   costKind: z.enum(["capex", "opex"]),
+  stage: z.enum(TAHAP).nullable().catch(null),
 });
 
 const kosongkan = (v: FormDataEntryValue | null) =>
@@ -290,12 +297,13 @@ export async function gridAction(_p: PlanState, fd: FormData): Promise<PlanState
         uomItemId: kosongkan(fd.get("baru_satuan")),
         unitPriceIdr: fd.get("baru_harga"),
         costKind: fd.get("baru_kind") ?? "capex",
+        stage: kosongkan(fd.get("baru_tahap")),
       });
       if (!p.success) {
         return { ok: false, message: p.error.issues[0]?.message ?? "Isian baris baru tidak lengkap" };
       }
       await addBudgetPlanItem(ctx, {
-        ...p.data, note: null, stage: null, driver: null, sourceRef: null,
+        ...p.data, note: null, driver: null, sourceRef: null,
         confidence: null, excludeFromContingency: false, sourceId: null,
         basisCode: null, ratioPerBasis: null,
       });

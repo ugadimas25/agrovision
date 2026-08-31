@@ -1214,6 +1214,31 @@ async function main() {
     }
 
     // -----------------------------------------------------------------------
+    // Daftar tertutup untuk Tahap & Penggerak.
+    //
+    // Dulu keduanya <datalist> -- saran yang tetap menerima ketikan bebas --
+    // sehingga "B Land prep" dan "B land prep" bisa hidup berdampingan dan
+    // memecah pengelompokan CAPEX tanpa satu galat pun. Yang diuji di sini
+    // BUKAN cuma bahwa layarnya dropdown, tapi bahwa SERVER menolak nilai di
+    // luar daftar: Server Action bisa dipanggil POST langsung tanpa UI.
+    // -----------------------------------------------------------------------
+    ok("Tahap & penggerak dipilih dari daftar, bukan diketik bebas",
+      detail.html.includes('<select name="stage"') && !detail.html.includes('list="tahap-rab"'));
+
+    if (kat) {
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        costCategoryId: kat, phaseMonth: 1, description: "Baris bertahap ngawur",
+        itemKind: "consumable", volume: 1, unitPriceIdr: 1, uomItemId: "", note: "",
+        stage: "Tahap Karangan Sendiri", driver: "penggerak ngawur",
+      }, { formMarker: 'name="costCategoryId"' });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const stlh = visible(detail.html);
+      ok("baris tetap tersimpan meski tahapnya di luar daftar", stlh.includes("Baris bertahap ngawur"));
+      ok("tahap & penggerak di luar daftar TIDAK tersimpan (ditolak server, bukan hanya layar)",
+        !stlh.includes("Tahap Karangan Sendiri") && !stlh.includes("penggerak ngawur"));
+    }
+
+    // -----------------------------------------------------------------------
     // Tabel sunting-langsung (permintaan rapat: "seperti Excel tapi modern").
     //
     // Sebelum ini modul RAB tidak punya satu pun cara menyunting, mencoret,
