@@ -1,11 +1,18 @@
 name: CI
 
 on:
-  # 'feat/**' ikut supaya PR di TENGAH stack juga mendapat CI. Tanpa itu hanya PR
-  # paling bawah (yang menargetkan main) yang diuji, dan checklist
+  # Filter ini menyaring branch TUJUAN (base), bukan asal. 'feat/**' dst. ikut
+  # supaya PR di TENGAH stack juga mendapat CI -- tanpa itu hanya PR paling bawah
+  # (yang menargetkan main) yang diuji, dan checklist
   # .github/pull_request_template.md tidak bisa dipenuhi otomatis.
+  #
+  # 'fix/**', 'docs/**', 'chore/**' ditambahkan 31 Agu 2026: daftar lama hanya
+  # memuat 'feat/**', sehingga dua PR yang menargetkan branch fix/ lolos TANPA
+  # satu pun check -- persis kegagalan sunyi yang komentar di atas ingin cegah.
+  # Pola penamaan branch di CONTRIBUTING memakai keempatnya, jadi daftar ini
+  # mengikutinya, bukan sebaliknya.
   pull_request:
-    branches: [main, 'feat/**']
+    branches: [main, 'feat/**', 'fix/**', 'docs/**', 'chore/**']
 
 env:
   NODE_VERSION: "22"
