@@ -349,6 +349,79 @@ export async function setBudgetPlanItemActive(
 }
 
 /**
+ * Sunting beberapa baris RAB sekaligus (tabel sunting-langsung).
+ *
+ * Satu pernyataan untuk semua baris: kalau tiap baris dikirim terpisah, sebagian
+ * bisa lolos dan sebagian ditolak policy, dan RAB berakhir setengah tersimpan --
+ * keadaan yang paling berbahaya menurut kepala migrasi 0062, karena ia terlihat
+ * konsisten.
+ *
+ * `volume` SENGAJA tidak ditimpa untuk baris turunan. Trigger
+ * budget_item_derive_volume() (0062) hanya menyala saat basis_code/ratio_per_basis
+ * berubah -- BUKAN saat volume ditulis -- jadi menulis volume langsung ke baris
+ * ber-basis akan membuat layar tetap mencetak "= net_ha x 70" untuk angka yang
+ * bukan hasil perkalian itu. Penjagaan ini ditaruh di SQL, bukan hanya di layar:
+ * baris turunan yang volumenya menyimpang persis yang dicari
+ * app.check_budget_derived_volume().
+ *
+ * Mengembalikan id baris yang benar-benar berubah. Baris yang ditolak policy
+ * lewat USING hilang diam-diam dari hasil (tidak melempar), jadi pemanggil wajib
+ * membandingkan jumlahnya -- lihat gridAction.
+ */
+export async function updateBudgetPlanItems(
+  ctx: RlsContext,
+  planId: string,
+  edits: { id: string; phaseMonth: number; description: string; volume: number; unitPriceIdr: number }[],
+): Promise<string[]> {
+  if (edits.length === 0) return [];
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `UPDATE app.budget_plan_items i
+          SET phase_month    = v.bulan,
+              description    = v.uraian,
+              unit_price_idr = v.harga,
+              volume         = CASE WHEN i.basis_code IS NULL THEN v.volume ELSE i.volume END,
+              updated_at     = now()
+         FROM (SELECT * FROM unnest($2::uuid[], $3::int[], $4::text[], $5::numeric[], $6::numeric[])
+                 AS t(id, bulan, uraian, volume, harga)) v
+        WHERE i.id = v.id
+          AND i.plan_id = $1
+          -- Hanya baris yang benar-benar berubah, supaya jumlah kembalian bisa
+          -- dipakai membedakan "tidak ada yang diubah" dari "ditolak policy".
+          -- Tanda kurungnya WAJIB: tanpa itu presedensi AND/OR membuat cabang
+          -- volume ikut mengabaikan syarat plan_id.
+          AND (
+                (i.phase_month, i.description, i.unit_price_idr)
+                  IS DISTINCT FROM (v.bulan, v.uraian, v.harga)
+             OR (i.basis_code IS NULL AND i.volume IS DISTINCT FROM v.volume)
+              )
+        RETURNING i.id`,
+      [planId, edits.map((e) => e.id), edits.map((e) => e.phaseMonth), edits.map((e) => e.description),
+       edits.map((e) => e.volume), edits.map((e) => e.unitPriceIdr)],
+    );
+    return r.rows.map((row: { id: string }) => row.id);
+  });
+}
+
+/**
+ * Hapus satu baris RAB. rowCount 0 = policy bpi_edit_delete menyaringnya lewat
+ * USING -- diam, tanpa galat.
+ */
+export async function deleteBudgetPlanItem(
+  ctx: RlsContext,
+  planId: string,
+  itemId: string,
+): Promise<number> {
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `DELETE FROM app.budget_plan_items WHERE id = $1 AND plan_id = $2`,
+      [itemId, planId],
+    );
+    return r.rowCount ?? 0;
+  });
+}
+
+/**
  * Ajukan RAB. rowCount 0 = RLS menolak (bukan penyusunnya, atau statusnya
  * bukan draft/rejected) — policy bp_edit_gate menyaring lewat USING, dan
  * penyaringan USING TIDAK melempar galat, ia diam.

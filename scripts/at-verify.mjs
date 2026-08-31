@@ -1130,6 +1130,32 @@ async function main() {
     ok("RAB tanpa komponen dirender em-dash, bukan Rp 0",
       !/Rp\s*0(?![.\d])/.test(visible(detail.html)));
 
+    // RAB yang masih kosong harus LANGSUNG menawarkan baris yang bisa diketik.
+    // Sebelumnya layar kosong menggantikan tabelnya, sehingga satu-satunya jalan
+    // masuk justru tersembunyi di balik form terpisah di bawahnya.
+    const katBaru = (/<select[^>]*name="baru_kategori"[\s\S]*?<option value="([0-9a-f-]{36})"/
+      .exec(detail.html) ?? [])[1];
+    ok("RAB kosong tetap menampilkan baris kosong yang bisa diketik", Boolean(katBaru),
+      katBaru ? "" : "tidak ada baris baru di tabel");
+
+    if (katBaru) {
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        _aksi: "tambah", baru_bulan: 1, baru_kategori: katBaru,
+        baru_uraian: "Dolomit uji baris ujung", baru_jenis: "consumable",
+        baru_volume: 100, baru_harga: 3500, baru_kind: "opex", baru_satuan: "",
+      }, { formMarker: 'value="tambah"' });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const stlhTambah = visible(detail.html);
+      ok("baris bisa ditambahkan langsung dari ujung tabel, tanpa form terpisah",
+        stlhTambah.includes("Dolomit uji baris ujung"));
+      // 100 x 3.500 = 350.000, dihitung kolom GENERATED -- tidak dikirim form.
+      ok("jumlah baris dari ujung tabel dihitung database", stlhTambah.includes("350.000"));
+      // Baris yang dibuat dari ujung tabel sengaja tidak membawa sumber &
+      // keyakinan; layar HARUS mengatakannya, bukan membiarkannya terlihat lengkap.
+      ok("baris ringkas mengakui sumber & keyakinannya belum diisi",
+        stlhTambah.includes("keyakinan belum dinilai") && stlhTambah.includes("sumber belum disebutkan"));
+    }
+
     const kat = (/<select[^>]*name="costCategoryId"[\s\S]*?<option value="([0-9a-f-]{36})"/.exec(detail.html) ?? [])[1];
     if (kat) {
       await agro.submit(`/costing/rencana-anggaran/${id}`, {
@@ -1185,6 +1211,89 @@ async function main() {
         cocok ? "" : (anotasi.match(/net_ha[\s\S]{0,40}/) ?? ["tidak ada 'net_ha' di halaman"])[0]);
     } else {
       ok("kategori biaya tersedia untuk RAB", false, "dropdown kategori kosong");
+    }
+
+    // -----------------------------------------------------------------------
+    // Daftar tertutup untuk Tahap & Penggerak.
+    //
+    // Dulu keduanya <datalist> -- saran yang tetap menerima ketikan bebas --
+    // sehingga "B Land prep" dan "B land prep" bisa hidup berdampingan dan
+    // memecah pengelompokan CAPEX tanpa satu galat pun. Yang diuji di sini
+    // BUKAN cuma bahwa layarnya dropdown, tapi bahwa SERVER menolak nilai di
+    // luar daftar: Server Action bisa dipanggil POST langsung tanpa UI.
+    // -----------------------------------------------------------------------
+    ok("Tahap & penggerak dipilih dari daftar, bukan diketik bebas",
+      detail.html.includes('<select name="stage"') && !detail.html.includes('list="tahap-rab"'));
+
+    if (kat) {
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        costCategoryId: kat, phaseMonth: 1, description: "Baris bertahap ngawur",
+        itemKind: "consumable", volume: 1, unitPriceIdr: 1, uomItemId: "", note: "",
+        stage: "Tahap Karangan Sendiri", driver: "penggerak ngawur",
+      }, { formMarker: 'name="costCategoryId"' });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const stlh = visible(detail.html);
+      ok("baris tetap tersimpan meski tahapnya di luar daftar", stlh.includes("Baris bertahap ngawur"));
+      ok("tahap & penggerak di luar daftar TIDAK tersimpan (ditolak server, bukan hanya layar)",
+        !stlh.includes("Tahap Karangan Sendiri") && !stlh.includes("penggerak ngawur"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tabel sunting-langsung (permintaan rapat: "seperti Excel tapi modern").
+    //
+    // Sebelum ini modul RAB tidak punya satu pun cara menyunting, mencoret,
+    // atau menghapus baris dari layar: salah ketik harga berarti RAB itu tidak
+    // bisa diperbaiki sama sekali kecuali lewat psql. Temuan audit 31 Agu.
+    // -----------------------------------------------------------------------
+    const idKelapa = (new RegExp('name="uraian_([0-9a-f-]{36})"[^>]*value="Bibit kelapa genjah"')
+      .exec(detail.html) ?? [])[1];
+    ok("baris RAB tampil sebagai sel yang bisa diketik", Boolean(idKelapa),
+      idKelapa ? "" : "tidak ada input uraian_<id> di layar");
+
+    if (idKelapa) {
+      // Harga diperbaiki dari 100.000 jadi 250.000 -> 7.000 x 250.000.
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        _aksi: "simpan", [`uraian_${idKelapa}`]: "Bibit kelapa genjah",
+        [`bulan_${idKelapa}`]: 1, [`volume_${idKelapa}`]: 7000,
+        [`harga_${idKelapa}`]: 250000,
+      }, { formMarker: 'value="simpan"' });
+
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      ok("harga yang disunting di sel tersimpan dan jumlahnya dihitung ulang database",
+        visible(detail.html).includes("1.750.000.000"));
+
+      // Mencoret != menghapus: keluar dari total, tetap terbaca.
+      await agro.submit(`/costing/rencana-anggaran/${id}`,
+        { _aksi: `coret:${idKelapa}` }, { formMarker: 'value="simpan"' });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const setelahCoret = visible(detail.html);
+      ok("baris yang dicoret keluar dari total tapi TETAP terlihat",
+        setelahCoret.includes("DICORET") && setelahCoret.includes("Bibit kelapa genjah"));
+
+      await agro.submit(`/costing/rencana-anggaran/${id}`,
+        { _aksi: `hidup:${idKelapa}` }, { formMarker: 'value="simpan"' });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      ok("baris yang dicoret bisa dihidupkan kembali", !visible(detail.html).includes("DICORET"));
+    }
+
+    // Baris sekali-pakai, dibuat lalu dihapus -- membuktikan hapus benar-benar
+    // menghapus, tanpa mengganggu asersi total di bawah.
+    if (kat) {
+      await agro.submit(`/costing/rencana-anggaran/${id}`, {
+        costCategoryId: kat, phaseMonth: 1, description: "Baris salah masuk",
+        itemKind: "consumable", volume: 1, unitPriceIdr: 1, uomItemId: "", note: "",
+      }, { formMarker: 'name="costCategoryId"' });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const idBuang = (new RegExp('name="uraian_([0-9a-f-]{36})"[^>]*value="Baris salah masuk"')
+        .exec(detail.html) ?? [])[1];
+      ok("baris baru muncul di tabel sunting", Boolean(idBuang));
+      if (idBuang) {
+        await agro.submit(`/costing/rencana-anggaran/${id}`,
+          { _aksi: `hapus:${idBuang}` }, { formMarker: 'value="simpan"' });
+        detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+        ok("baris yang dihapus benar-benar hilang dari layar",
+          !visible(detail.html).includes("Baris salah masuk"));
+      }
     }
 
     ok("agronomis TIDAK diberi tombol Setujui", !visible(detail.html).includes('value="approved"'));

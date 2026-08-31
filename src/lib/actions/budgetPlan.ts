@@ -3,9 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
+import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
 import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
-  decideBudgetPlan, setBudgetPlanItemActive, submitBudgetPlan, updateBudgetAssumptionValue,
+  decideBudgetPlan, deleteBudgetPlanItem, setBudgetPlanItemActive, submitBudgetPlan,
+  updateBudgetAssumptionValue, updateBudgetPlanItems,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -108,8 +110,13 @@ const itemSchema = z.object({
   note: z.string().trim().max(500).nullable().catch(null),
   // 0061, mengikuti 08_CAPEX_RAB pada model Banyumas.
   costKind: z.enum(["capex", "opex"]),
-  stage: z.string().trim().max(80).nullable().catch(null),
-  driver: z.string().trim().max(80).nullable().catch(null),
+  // Daftar TERTUTUP, bukan sekadar dropdown di layar: Server Action bisa
+  // dipanggil POST langsung tanpa melewati UI, jadi <select> saja bukan jaminan.
+  // `.catch(null)` disengaja -- nilai di luar daftar diperlakukan sebagai
+  // "belum ditentukan" dan tampil apa adanya di layar, bukan diam-diam
+  // tersimpan sebagai tahap baru yang memecah pengelompokan CAPEX.
+  stage: z.enum(TAHAP).nullable().catch(null),
+  driver: z.enum(PENGGERAK).nullable().catch(null),
   sourceRef: z.string().trim().max(300).nullable().catch(null),
   // Sengaja TANPA default: menebak "medium" untuk baris yang belum ditelaah
   // membuat seluruh kolom keyakinan tidak berarti.
@@ -195,6 +202,147 @@ export async function toggleItemAction(_p: PlanState, fd: FormData): Promise<Pla
       return { ok: false, message: "Baris tidak bisa diubah — RAB ini sudah diajukan atau bukan susunan Anda." };
     }
     return { ok: true, message: aktifkan ? "Komponen dihidupkan kembali." : "Komponen dicoret dari total." };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+const barisBaruSchema = z.object({
+  planId: z.string().uuid(),
+  phaseMonth: z.coerce.number().int().min(1).max(600),
+  costCategoryId: z.string().uuid("Kategori biaya wajib dipilih"),
+  description: z.string().trim().min(1, "Uraian tidak boleh kosong").max(300),
+  itemKind: z.enum(["consumable", "asset", "labor", "service"]),
+  volume: z.coerce.number().positive("Volume harus lebih dari 0").max(1e12),
+  uomItemId: z.string().uuid().nullable(),
+  unitPriceIdr: z.coerce.number().min(0, "Harga satuan tidak boleh negatif").max(1e15),
+  costKind: z.enum(["capex", "opex"]),
+  stage: z.enum(TAHAP).nullable().catch(null),
+});
+
+const kosongkan = (v: FormDataEntryValue | null) =>
+  v === null || String(v).trim() === "" ? null : String(v);
+
+const barisSchema = z.object({
+  id: z.string().uuid(),
+  phaseMonth: z.coerce.number().int().min(1).max(600),
+  description: z.string().trim().min(1, "Uraian tidak boleh kosong").max(300),
+  volume: z.coerce.number().min(0).max(1e12),
+  unitPriceIdr: z.coerce.number().min(0, "Harga satuan tidak boleh negatif").max(1e15),
+});
+
+/**
+ * Satu action untuk seluruh tabel sunting-langsung: simpan, coret, hapus.
+ *
+ * Dibedakan lewat name/value tombol yang DITEKAN (`_aksi`), bukan lewat tiga
+ * <form> terpisah. Alasannya HTML, bukan selera: <form> tidak boleh bersarang
+ * di dalam <tr>/<td>, dan menaruh satu form per baris di luar tabel lalu
+ * merujuknya dengan atribut `form=` membuat urutan tab melompat-lompat di
+ * pembaca layar. Dengan satu form, tabelnya tetap satu dokumen yang wajar,
+ * tombolnya tetap tombol submit biasa, dan seluruhnya jalan tanpa JavaScript.
+ */
+export async function gridAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    // Daftar peran sengaja longgar; yang membatasi KAPAN dan BARIS MANA adalah
+    // policy bpi_edit_update/bpi_edit_delete, bukan daftar ini.
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ok: false, message: "RAB tidak valid." };
+    const jalur = `/costing/rencana-anggaran/${planId.data}`;
+    const aksi = String(fd.get("_aksi") ?? "simpan");
+
+    const idDari = (awalan: string) => {
+      const p = z.string().uuid().safeParse(aksi.slice(awalan.length));
+      return p.success ? p.data : null;
+    };
+
+    if (aksi.startsWith("hapus:")) {
+      const id = idDari("hapus:");
+      if (!id) return { ok: false, message: "Baris tidak valid." };
+      const n = await deleteBudgetPlanItem(ctx, planId.data, id);
+      revalidatePath(jalur);
+      // rowCount 0 = disaring policy lewat USING, yang TIDAK melempar. Tanpa
+      // pesan ini, penghapusan yang ditolak terlihat seperti yang berhasil.
+      return n === 0
+        ? { ok: false, message: "Baris ini tidak bisa dihapus — RAB sudah diajukan/disetujui, atau bukan susunan Anda." }
+        : { ok: true, message: "Baris dihapus." };
+    }
+
+    if (aksi.startsWith("coret:") || aksi.startsWith("hidup:")) {
+      const hidupkan = aksi.startsWith("hidup:");
+      const id = idDari(hidupkan ? "hidup:" : "coret:");
+      if (!id) return { ok: false, message: "Baris tidak valid." };
+      const n = await setBudgetPlanItemActive(ctx, id, hidupkan);
+      revalidatePath(jalur);
+      return n === 0
+        ? { ok: false, message: "Baris ini tidak bisa diubah — RAB sudah diajukan/disetujui, atau bukan susunan Anda." }
+        : { ok: true, message: hidupkan ? "Baris dihidupkan kembali dan masuk total." : "Baris dicoret dari total, tetap terlihat." };
+    }
+
+    if (aksi === "tambah") {
+      // Baris kosong di ujung tabel -- "seperti Excel". Sengaja hanya membawa
+      // kolom yang terlihat di tabel; tahap, penggerak, sumber, keyakinan, dan
+      // basis asumsi tetap lewat form lengkap "Tambah komponen biaya".
+      //
+      // Akibatnya baris yang dibuat di sini tampil sebagai "keyakinan belum
+      // dinilai" dan "sumber belum disebutkan" -- dan itu memang yang benar:
+      // layar menunjukkan apa yang belum diisi, bukan menebakkan nilai untuknya.
+      const p = barisBaruSchema.safeParse({
+        planId: planId.data,
+        phaseMonth: fd.get("baru_bulan"),
+        costCategoryId: fd.get("baru_kategori"),
+        description: fd.get("baru_uraian"),
+        itemKind: fd.get("baru_jenis") ?? "consumable",
+        volume: fd.get("baru_volume"),
+        uomItemId: kosongkan(fd.get("baru_satuan")),
+        unitPriceIdr: fd.get("baru_harga"),
+        costKind: fd.get("baru_kind") ?? "capex",
+        stage: kosongkan(fd.get("baru_tahap")),
+      });
+      if (!p.success) {
+        return { ok: false, message: p.error.issues[0]?.message ?? "Isian baris baru tidak lengkap" };
+      }
+      await addBudgetPlanItem(ctx, {
+        ...p.data, note: null, driver: null, sourceRef: null,
+        confidence: null, excludeFromContingency: false, sourceId: null,
+        basisCode: null, ratioPerBasis: null,
+      });
+      revalidatePath(jalur);
+      return { ok: true, message: "Baris ditambahkan." };
+    }
+
+    // ---- simpan seluruh baris yang berubah -------------------------------
+    const baris: { id: string; phaseMonth: number; description: string; volume: number; unitPriceIdr: number }[] = [];
+    for (const kunci of fd.keys()) {
+      if (!kunci.startsWith("uraian_")) continue;
+      const id = z.string().uuid().safeParse(kunci.slice("uraian_".length));
+      if (!id.success) continue;
+      const p = barisSchema.safeParse({
+        id: id.data,
+        phaseMonth: fd.get(`bulan_${id.data}`),
+        description: fd.get(`uraian_${id.data}`),
+        // Baris turunan tidak punya input volume sama sekali (volumenya milik
+        // trigger 0062). Nilainya diisi 0 dan diabaikan SQL -- lihat komentar
+        // di updateBudgetPlanItems.
+        volume: fd.get(`volume_${id.data}`) ?? 0,
+        unitPriceIdr: fd.get(`harga_${id.data}`),
+      });
+      if (!p.success) {
+        return { ok: false, message: p.error.issues[0]?.message ?? "Ada isian baris yang tidak valid" };
+      }
+      baris.push(p.data);
+    }
+
+    const berubah = await updateBudgetPlanItems(ctx, planId.data, baris);
+    revalidatePath(jalur);
+    if (baris.length === 0) return { ok: false, message: "Tidak ada baris untuk disimpan." };
+    if (berubah.length === 0) {
+      // Tidak bisa dibedakan dari sini apakah tidak ada yang diubah atau
+      // semuanya disaring policy -- keduanya mengembalikan nol baris. Pesannya
+      // karena itu menyebut kedua kemungkinan, bukan menebak salah satu.
+      return { ok: true, message: "Tidak ada perubahan yang tersimpan. Kalau Anda memang mengubah sesuatu, RAB ini sudah diajukan/disetujui atau bukan susunan Anda." };
+    }
+    return { ok: true, message: `${berubah.length} baris disimpan.` };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }

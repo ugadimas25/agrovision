@@ -12,31 +12,17 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ResponsiveTable } from "@/components/ui/ResponsiveTable";
 import { RecordStatusBadge } from "@/components/ui/RecordStatusBadge";
 import { formatIdr, formatNumber, EMPTY } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import { AssumptionPanel } from "./AssumptionPanel";
 import { ItemForm } from "./ItemForm";
+import { ItemGrid } from "./ItemGrid";
 import { PlanDecision } from "./PlanDecision";
 import { SourcePanel } from "./SourcePanel";
-import { SourceLink } from "./SourceLink";
 
 export const metadata = { title: "Detail RAB — AgroVision" };
 
 /** 02_Assumptions memberi tiap angka tingkat keyakinan. Di model Banyumas, 51
  *  dari 100+ asumsi bertanda Low — itu informasi yang harus ikut terbaca,
  *  bukan aib yang disembunyikan. */
-const CONFIDENCE: Record<string, { label: string; cls: string }> = {
-  high: { label: "keyakinan tinggi", cls: "bg-emerald-50 text-emerald-700" },
-  medium: { label: "keyakinan sedang", cls: "bg-amber-50 text-amber-700" },
-  low: { label: "keyakinan rendah", cls: "bg-red-50 text-red-700" },
-};
-
-const KIND_LABEL: Record<string, string> = {
-  consumable: "Habis pakai",
-  asset: "Aset",
-  labor: "Tenaga kerja",
-  service: "Jasa",
-};
-
 export default async function DetailRabPage({ params }: { params: Promise<{ id: string }> }) {
   let ctx;
   try {
@@ -148,108 +134,26 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
         </div>
       )}
 
-      {items.length === 0 ? (
+      {/* RAB kosong TETAP menampilkan tabelnya selama penyusunnya boleh
+          menyunting: baris kosong di ujung tabel adalah tempat mengetiknya,
+          jadi menggantinya dengan layar kosong justru menyembunyikan satu-satunya
+          jalan masuk. Layar kosong hanya untuk yang memang cuma boleh membaca. */}
+      {items.length === 0 && !canAddItem ? (
         <EmptyState
           icon={ClipboardList}
           title="Belum ada komponen biaya"
-          description="Isi satu per satu seperti di Excel: kategori, uraian, volume, satuan, dan harga satuan. Biayanya dihitung database, bukan diketik ulang."
+          description="RAB ini belum berisi pos biaya apa pun. Agronomis yang menyusunnya akan mengisi kategori, uraian, volume, satuan, dan harga satuan — jumlah rupiahnya dihitung database."
         />
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <ResponsiveTable>
-              <table className="w-full text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/60 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-2.5 font-medium">Tahap</th>
-                    <th className="px-4 py-2.5 font-medium">Bulan</th>
-                    <th className="px-4 py-2.5 font-medium">Kategori</th>
-                    <th className="px-4 py-2.5 font-medium">Uraian</th>
-                    <th className="px-4 py-2.5 font-medium">Jenis</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Volume</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Harga satuan</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Jumlah</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it) => (
-                    <tr
-                      key={it.id}
-                      className={cn(
-                        "border-b border-slate-50 align-top last:border-0",
-                        // Baris dicoret tetap TERLIHAT — itu inti kolom `Aktif`
-                        // di 17_Model_Fleksibel: dikeluarkan dari total, bukan
-                        // dari ingatan.
-                        !it.isActive && "text-slate-400 line-through decoration-slate-300",
-                      )}
-                    >
-                      <td data-label="Tahap" data-empty={!it.stage} className="px-4 py-2.5 text-xs text-slate-500">
-                        {it.stage ?? EMPTY}
-                        <span className="mt-0.5 block font-medium uppercase tracking-wide text-slate-400">
-                          {it.costKind}
-                        </span>
-                      </td>
-                      <td data-label="Bulan" className="px-4 py-2.5 tabular-nums text-slate-500">ke-{it.phaseMonth}</td>
-                      <td data-label="Kategori" data-empty={!it.categoryName} className="px-4 py-2.5 text-slate-600">{it.categoryName ?? EMPTY}</td>
-                      <td data-label="Uraian" className="px-4 py-2.5 text-slate-700">
-                        {it.description}
-                        {it.addedAfterApproval && (
-                          <span className="ml-2 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-700">
-                            tambahan finance
-                          </span>
-                        )}
-                        {it.note && <span className="block text-xs text-slate-400">{it.note}</span>}
-                        {/* Dari mana angkanya. Kosong ditampilkan apa adanya —
-                            angka anggaran tanpa asal-usul adalah angka
-                            fabrikasi yang kebetulan rapi. */}
-                        <span className="mt-1 flex flex-wrap items-center gap-1.5">
-                          {it.confidence ? (
-                            <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", CONFIDENCE[it.confidence].cls)}>
-                              {CONFIDENCE[it.confidence].label}
-                            </span>
-                          ) : (
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
-                              keyakinan belum dinilai
-                            </span>
-                          )}
-                          {/* Kutipan yang bisa dibuka ulang (0063) dan
-                              keterangan bebas (0061) ditampilkan BERDAMPINGAN.
-                              Baris yang hanya punya keterangan bebas bukan
-                              baris yang setengah jadi: "Upah lisan rapat 26 Agu,
-                              belum ada penawaran kontraktor" memang tidak punya
-                              tautan, dan menyembunyikannya justru membuang
-                              informasi yang paling jujur di baris itu. */}
-                          {it.source && <SourceLink source={it.source} className="text-xs" />}
-                          <span className="text-xs text-slate-400">
-                            {it.sourceRef
-                              ? `sumber: ${it.sourceRef}`
-                              : it.source === null ? "sumber belum disebutkan" : ""}
-                            {it.driver ? ` · penggerak: ${it.driver}` : ""}
-                            {it.excludeFromContingency ? " · di luar kontingensi" : ""}
-                            {!it.isActive ? " · DICORET" : ""}
-                          </span>
-                        </span>
-                      </td>
-                      <td data-label="Jenis" className="px-4 py-2.5 text-slate-500">{KIND_LABEL[it.itemKind] ?? it.itemKind}</td>
-                      <td data-label="Volume" className="px-4 py-2.5 text-right tabular-nums text-slate-600">
-                        {formatNumber(it.volume)} {it.uomName ?? ""}
-                        {/* Volume turunan menyebut asalnya. Angka yang tidak
-                            bisa ditelusuri ke basisnya adalah angka yang tidak
-                            bisa diperiksa siapa pun. */}
-                        {it.basisCode && (
-                          <span className="block text-xs font-normal text-slate-400">
-                            = {it.basisCode} × {formatNumber(it.ratioPerBasis)}
-                          </span>
-                        )}
-                      </td>
-                      <td data-label="Harga satuan" className="px-4 py-2.5 text-right tabular-nums text-slate-600">{formatIdr(it.unitPriceIdr)}</td>
-                      <td data-label="Jumlah" className="px-4 py-2.5 text-right tabular-nums font-medium text-slate-700">{formatIdr(it.amountIdr)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ResponsiveTable>
-          </div>
+          <ItemGrid
+            planId={plan.id}
+            items={items}
+            categories={categories}
+            uoms={uoms}
+            canEdit={canAddItem}
+            afterApproval={plan.approvalStatus === "approved"}
+          />
 
           {/* Simulasi drawdown yang dibahas rapat: berapa yang terpakai per bulan. */}
           <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white">
