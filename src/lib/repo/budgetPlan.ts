@@ -26,6 +26,9 @@ export type BudgetPlanRow = {
    *  — dan peringatan yang tidak sampai ke layar sama saja tidak ada. */
   note: string | null;
   approvalStatus: string;
+  /** 0066. Titik nol sumbu waktu kurva S. NULL = belum ditetapkan, dan selama
+   *  itu kurva S TIDAK digambar — bukan digambar dengan titik nol tebakan. */
+  startDate: string | null;
   rejectionReason: string | null;
   createdByName: string | null;
   decidedByName: string | null;
@@ -120,6 +123,7 @@ export type BudgetPlanItemRow = {
 
 const PLAN_SELECT = `
   SELECT p.id, p.code, p.name, p.area_ha, p.horizon_months, p.contingency_pct,
+         p.start_date::text AS start_date,
          p.note, p.approval_status, p.rejection_reason,
          cu.full_name AS created_by_name, du.full_name AS decided_by_name,
          COALESCE(i.n, 0) AS item_count,
@@ -142,6 +146,7 @@ const PLAN_SELECT = `
 type PlanDb = {
   id: string; code: string; name: string; area_ha: string | null;
   horizon_months: number; contingency_pct: string; note: string | null; approval_status: string;
+  start_date: string | null;
   rejection_reason: string | null; created_by_name: string | null;
   decided_by_name: string | null; item_count: number; subtotal: string | null;
   capex: string | null; opex: string | null; dasar_cadangan: string | null;
@@ -163,6 +168,7 @@ function toPlan(r: PlanDb): BudgetPlanRow {
     name: r.name,
     areaHa: r.area_ha === null ? null : Number(r.area_ha),
     horizonMonths: r.horizon_months,
+    startDate: r.start_date,
     contingencyPct: pct,
     note: r.note,
     approvalStatus: r.approval_status,
@@ -600,4 +606,165 @@ export async function updateBudgetAssumptionValue(
     );
     return r.rowCount ?? 0;
   });
+}
+
+// ===========================================================================
+// Penugasan & serapan anggaran (0066)
+// ===========================================================================
+
+export type SerapanRow = {
+  itemId: string;
+  description: string;
+  phaseMonth: number;
+  anggaran: number | null;
+  ditugaskan: number | null;
+  realisasi: number | null;
+  belumDiputuskan: number | null;
+  sisa: number | null;
+};
+
+/**
+ * Serapan per baris RAB.
+ *
+ * PERINGATAN PEMAKAIAN: app.budget_absorption() adalah SECURITY INVOKER, jadi
+ * angkanya adalah IRISAN YANG TERLIHAT OLEH PEMANGGIL. Bagi `creator`, policy
+ * cost_transactions_creator_own_select (0054) membatasi penglihatannya pada
+ * realisasi miliknya sendiri -- benar untuk layar "tugas saya", SALAH untuk
+ * layar "serapan RAB", karena serapan orang lain akan hilang tanpa jejak dan
+ * layar akan melaporkan penyerapan yang lebih kecil dari yang sebenarnya.
+ * Karena itu pemanggil layar serapan wajib membatasi perannya -- lihat
+ * PERAN_LIHAT_SERAPAN di bawah.
+ */
+export const PERAN_LIHAT_SERAPAN = ["agronomist", "approver", "viewer", "super_admin"];
+
+export async function listSerapan(ctx: RlsContext, planId: string): Promise<SerapanRow[]> {
+  const rows = await rlsQuery<{
+    item_id: string; description: string; phase_month: number;
+    anggaran: string | null; ditugaskan: string | null; realisasi: string | null;
+    belum_diputuskan: string | null; sisa: string | null;
+  }>(ctx, `SELECT * FROM app.budget_absorption($1)`, [planId]);
+  const n = (v: string | null) => (v === null ? null : Number(v));
+  return rows.map((r) => ({
+    itemId: r.item_id, description: r.description, phaseMonth: r.phase_month,
+    anggaran: n(r.anggaran), ditugaskan: n(r.ditugaskan), realisasi: n(r.realisasi),
+    belumDiputuskan: n(r.belum_diputuskan), sisa: n(r.sisa),
+  }));
+}
+
+/** Deret kurva S. NOL BARIS bila start_date RAB belum diisi -- itu disengaja. */
+export async function listKurvaS(
+  ctx: RlsContext, planId: string,
+): Promise<{ bulanKe: number; rencanaKumulatif: number; realisasiKumulatif: number | null }[]> {
+  const rows = await rlsQuery<{ bulan_ke: number; rencana_kumulatif: string; realisasi_kumulatif: string | null }>(
+    ctx, `SELECT * FROM app.budget_s_curve($1) ORDER BY bulan_ke`, [planId]);
+  return rows.map((r) => ({
+    bulanKe: r.bulan_ke,
+    rencanaKumulatif: Number(r.rencana_kumulatif),
+    realisasiKumulatif: r.realisasi_kumulatif === null ? null : Number(r.realisasi_kumulatif),
+  }));
+}
+
+export type PenugasanRow = {
+  id: string; planItemId: string; itemDescription: string;
+  assigneeName: string; assigneeId: string;
+  volume: number; uomName: string | null; targetDate: string | null;
+  status: string; note: string | null;
+};
+
+export async function listPenugasan(ctx: RlsContext, planId: string): Promise<PenugasanRow[]> {
+  const rows = await rlsQuery<{
+    id: string; plan_item_id: string; item_description: string; assignee_name: string;
+    assignee_id: string; volume: string; uom_name: string | null; target_date: string | null;
+    status: string; note: string | null;
+  }>(ctx, `
+    SELECT a.id, a.plan_item_id, i.description AS item_description,
+           u.full_name AS assignee_name, a.assignee_user_id AS assignee_id,
+           a.volume, uom.name AS uom_name, a.target_date::text, a.status::text, a.note
+      FROM app.budget_assignments a
+      JOIN app.budget_plan_items i ON i.id = a.plan_item_id
+      JOIN app.users u ON u.id = a.assignee_user_id
+      LEFT JOIN app.master_items uom ON uom.id = a.uom_item_id
+     WHERE a.plan_id = $1
+     ORDER BY a.created_at`, [planId]);
+  return rows.map((r) => ({
+    id: r.id, planItemId: r.plan_item_id, itemDescription: r.item_description,
+    assigneeName: r.assignee_name, assigneeId: r.assignee_id, volume: Number(r.volume),
+    uomName: r.uom_name, targetDate: r.target_date, status: r.status, note: r.note,
+  }));
+}
+
+/**
+ * Penerima tugas yang mungkin. Sengaja dibatasi peran yang BOLEH mencatat
+ * realisasi: menugasi viewer atau agronomis membuat tugas yang tak akan pernah
+ * bisa ditutup (0059 melarang mereka menulis cost_transactions) sementara jatah
+ * volume baris RAB-nya tertahan. Trigger 0066 menegakkan hal yang sama.
+ */
+export async function listPenerimaTugas(ctx: RlsContext): Promise<{ value: string; label: string }[]> {
+  const rows = await rlsQuery<{ id: string; full_name: string; app_role: string }>(
+    ctx, `
+    SELECT u.id, u.full_name, u.app_role::text
+      FROM app.users u
+      JOIN app.user_company_access a ON a.user_id = u.id
+                                    AND a.company_id = app.current_company_id()
+     WHERE u.is_active AND u.app_role IN ('creator','approver','super_admin')
+     ORDER BY u.full_name`, []);
+  return rows.map((r) => ({ value: r.id, label: `${r.full_name} (${r.app_role})` }));
+}
+
+export async function buatPenugasan(
+  ctx: RlsContext,
+  input: {
+    planId: string; planItemId: string; assigneeUserId: string; volume: number;
+    uomItemId: string | null; targetDate: string | null; note: string | null;
+  },
+): Promise<void> {
+  await rlsQuery(ctx, `
+    INSERT INTO app.budget_assignments
+      (company_id, plan_id, plan_item_id, assignee_user_id, volume, uom_item_id,
+       target_date, note, created_by)
+    SELECT p.company_id, p.id, $2, $3, $4, $5, $6, $7, $8
+      FROM app.budget_plans p WHERE p.id = $1`,
+    [input.planId, input.planItemId, input.assigneeUserId, input.volume,
+     input.uomItemId, input.targetDate, input.note, ctx.userId]);
+}
+
+/** Tanggal mulai RAB — titik nol sumbu waktu kurva S. */
+export async function setTanggalMulai(
+  ctx: RlsContext, planId: string, tanggal: string | null,
+): Promise<number> {
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `UPDATE app.budget_plans SET start_date = $2, updated_at = now() WHERE id = $1`,
+      [planId, tanggal]);
+    return r.rowCount ?? 0;
+  });
+}
+
+/**
+ * Penugasan yang MASIH TERBUKA untuk pengguna saat ini — dipakai form
+ * pengeluaran supaya realisasi bisa ditautkan ke baris RAB yang benar.
+ *
+ * Disaring `assignee_user_id = pemanggil` di SQL, bukan hanya bersandar pada
+ * RLS: kalau kelak policy-nya dilonggarkan, dropdown ini tidak ikut melonggar
+ * diam-diam menampilkan tugas orang lain.
+ */
+export async function listPenugasanSaya(
+  ctx: RlsContext,
+): Promise<{ value: string; label: string }[]> {
+  const rows = await rlsQuery<{
+    id: string; item_description: string; volume: string; uom_name: string | null; code: string;
+  }>(ctx, `
+    SELECT a.id, i.description AS item_description, a.volume,
+           uom.name AS uom_name, p.code
+      FROM app.budget_assignments a
+      JOIN app.budget_plan_items i ON i.id = a.plan_item_id
+      JOIN app.budget_plans p ON p.id = a.plan_id
+      LEFT JOIN app.master_items uom ON uom.id = a.uom_item_id
+     WHERE a.assignee_user_id = app.current_user_id()
+       AND a.status = 'assigned'
+     ORDER BY a.target_date NULLS LAST, a.created_at`, []);
+  return rows.map((r) => ({
+    value: r.id,
+    label: `${r.code} — ${r.item_description} (${Number(r.volume)} ${r.uom_name ?? ""})`.trim(),
+  }));
 }

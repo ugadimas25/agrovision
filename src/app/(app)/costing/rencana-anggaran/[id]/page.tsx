@@ -4,7 +4,8 @@ import { ArrowLeft, ClipboardList, TriangleAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
 import {
   budgetPlanByPhase, getBudgetPlan, listBudgetAssumptions, listBudgetPlanItems,
-  listBudgetSources,
+  listBudgetSources, listSerapan, listKurvaS, listPenugasan, listPenerimaTugas,
+  PERAN_LIHAT_SERAPAN,
 } from "@/lib/repo/budgetPlan";
 import { listCategoryOptions, listOptions } from "@/lib/repo/master";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -17,6 +18,8 @@ import { ItemForm } from "./ItemForm";
 import { ItemGrid } from "./ItemGrid";
 import { PlanDecision } from "./PlanDecision";
 import { SourcePanel } from "./SourcePanel";
+import { PenugasanPanel } from "./Penugasan";
+import { KurvaS } from "./KurvaS";
 
 export const metadata = { title: "Detail RAB — AgroVision" };
 
@@ -41,7 +44,7 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
     listBudgetPlanItems(ctx, id),
     budgetPlanByPhase(ctx, id),
     listCategoryOptions(ctx),
-    listOptions(ctx, "uom"),
+    listOptions(ctx, "unit_of_measure"),
     listBudgetAssumptions(ctx, id),
     // Registri milik entitas, bukan RAB ini — jadi tanpa `id` (migrasi 0063).
     listBudgetSources(ctx),
@@ -53,6 +56,31 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
   const editable = plan.approvalStatus === "draft" || plan.approvalStatus === "rejected";
   // Rapat: finance boleh menambah baris SETELAH disetujui (mis. ahli hidrologi).
   const canAddItem = (isDrafter && editable) || (isDecider && plan.approvalStatus === "approved") || (isDecider && editable);
+
+  // Penugasan & serapan baru ada artinya setelah RAB disetujui — sebelum itu
+  // tidak ada anggaran yang sah untuk dibelanjakan siapa pun (trigger 0066).
+  const disetujui = plan.approvalStatus === "approved";
+  // app.budget_absorption() SECURITY INVOKER: bagi `creator`, policy
+  // cost_transactions_creator_own_select (0054) membatasi penglihatannya pada
+  // realisasi MILIKNYA SENDIRI. Angkanya benar untuk layar "tugas saya", tapi
+  // di layar serapan RAB ia akan melaporkan penyerapan yang lebih kecil dari
+  // yang sebenarnya — tanpa satu pun tanda bahwa ada yang tidak terlihat.
+  const bolehLihatSerapan = PERAN_LIHAT_SERAPAN.includes(role);
+  const [serapan, kurva, penugasan, penerima] = disetujui
+    ? await Promise.all([
+        bolehLihatSerapan ? listSerapan(ctx, id) : Promise.resolve([]),
+        bolehLihatSerapan ? listKurvaS(ctx, id) : Promise.resolve([]),
+        listPenugasan(ctx, id),
+        isDrafter ? listPenerimaTugas(ctx) : Promise.resolve([]),
+      ])
+    : [[], [], [], []];
+
+  const totalAnggaran = serapan.length === 0 ? null
+    : serapan.reduce((t, r) => t + (r.anggaran ?? 0), 0);
+  // NULL bila belum ada satu pun realisasi tercatat — bukan 0. Nol adalah klaim
+  // bahwa pencatatannya lengkap dan nihil; em-dash mengatakan belum ada datanya.
+  const totalRealisasi = serapan.some((r) => r.realisasi !== null)
+    ? serapan.reduce((t, r) => t + (r.realisasi ?? 0), 0) : null;
 
   return (
     <div>
@@ -156,6 +184,36 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
           />
 
           {/* Simulasi drawdown yang dibahas rapat: berapa yang terpakai per bulan. */}
+          {disetujui && (
+            <PenugasanPanel
+              planId={plan.id}
+              items={items.map((i) => ({ id: i.id, description: i.description, volume: i.volume, uomName: i.uomName }))}
+              penerima={penerima}
+              uoms={uoms}
+              daftar={penugasan}
+              canAssign={isDrafter}
+              startDate={plan.startDate ?? null}
+              // bp_edit_gate (0060) hanya mengizinkan approver/super_admin menyunting RAB
+              // yang sudah disetujui. Menawarkan form ini kepada agronomis di RAB approved
+              // berarti menampilkan tombol yang pasti ditolak — aksi yang tidak akan pernah
+              // berhasil tidak boleh punya tombol.
+              canSetStartDate={(isDrafter && editable) || isDecider}
+            />
+          )}
+
+          {disetujui && bolehLihatSerapan && (
+            <KurvaS
+              titik={kurva.map((k) => ({
+                bulanKe: k.bulanKe,
+                rencanaKumulatif: k.rencanaKumulatif,
+                realisasiKumulatif: k.realisasiKumulatif,
+              }))}
+              startDate={plan.startDate ?? null}
+              anggaran={totalAnggaran}
+              realisasi={totalRealisasi}
+            />
+          )}
+
           <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white">
             <h2 className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-800">Sebaran per bulan</h2>
             <ResponsiveTable>
