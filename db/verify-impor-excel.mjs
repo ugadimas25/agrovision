@@ -380,7 +380,11 @@ baris("Angka berbentuk teks", "Rp 35.000.000", "  b land PREP ", "2", "Gross HA"
       35000000000000, "ha", 70000000000000, "S08")
 baris("Ribuan ambigu", 100, "A Land", 1, "lot", "1.000", None, "lot", None, None)
 baris("Angka karangan", "sekitar 5 juta", "A Land", 1, "lot", 2, None, "lot", None, None)
-baris("Tahap & penggerak asing", 10, "Z Entah", 1, "system", 1, 10, "unit", 10, None)
+# "system" dulu dipakai di sini sebagai penggerak asing, tapi ia kemudian
+# DIMASUKKAN ke daftar tertutup: template R2 baris 39 memakainya, dan daftar
+# harus memuat apa yang model sungguhan pakai. Dipakai nilai yang benar-benar
+# tidak ada supaya uji ini menguji perilakunya, bukan isi daftarnya.
+baris("Tahap & penggerak asing", 10, "Z Entah", 1, "penggerak entah", 1, 10, "unit", 10, None)
 ws.append([None, None, "baris pemisah tanpa uraian", None, None, None, None, None, None, None])
 baris("Harga hilang", None, "A Land", 1, "lot", 1, None, "lot", None, None)
 baris("Total tidak cocok", 100, "A Land", 2, "unit", 2, 250, "unit", 250, None)

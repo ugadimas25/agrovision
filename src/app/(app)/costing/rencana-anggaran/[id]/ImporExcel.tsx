@@ -115,6 +115,59 @@ export function ImporExcel({
               </p>
             )}
 
+            {/* Angka turunan. Ini BUKAN butir peringatan biasa: pada template
+                R2, seluruh 36 volume di 08_CAPEX_RAB adalah rumus yang menarik
+                dari sheet 02/04/05/06. Setelah diimpor mereka menjadi angka
+                tetap — mengubah luas kebun di aplikasi tidak akan
+                menggerakkannya, padahal di Excel ia bergerak. Menyembunyikan
+                fakta itu di antara 24 peringatan lain sama saja menyembunyikannya. */}
+            {p.turunan.total > 0 && (p.turunan.volume > 0 || p.turunan.harga > 0) && (
+              <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
+                <p className="font-semibold">Angka ini turunan di Excel, dan akan menjadi angka tetap di sini</p>
+                <p className="mt-1">
+                  {p.turunan.volume} dari {p.turunan.total} volume
+                  {p.turunan.harga > 0 && <> dan {p.turunan.harga} dari {p.turunan.total} harga satuan</>}{" "}
+                  di berkas berasal dari rumus, bukan diketik. Nilainya diimpor apa adanya;
+                  mengubah asumsi di aplikasi <b>tidak</b> akan menggerakkannya.
+                </p>
+                <p className="mt-1 text-xs">
+                  Supaya ikut bergerak, tautkan barisnya ke asumsi lewat kolom Basis setelah impor —
+                  volume-nya lalu dihitung ulang database, seperti di Excel.
+                </p>
+              </div>
+            )}
+
+            {/* Status konsistensi model, dari sheet 15_Checks. Panduan template
+                menyatakan sendiri: "STATUS MODEL harus PASS sebelum workbook
+                digunakan." Impor dari workbook yang pemeriksaannya sendiri gagal
+                tetap boleh — itu keputusan pengguna — tapi ia harus melihatnya
+                SEBELUM menekan simpan, bukan sesudah angkanya masuk. */}
+            {p.statusModel && (
+              <div className={cn(
+                "mt-3 rounded-md border px-3 py-2.5 text-sm",
+                p.statusModel.gagal.length === 0
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                  : "border-rose-200 bg-rose-50 text-rose-900",
+              )}>
+                <p className="font-semibold">
+                  Pemeriksaan internal workbook (15_Checks): {p.statusModel.status ?? EMPTY}
+                </p>
+                {p.statusModel.gagal.length > 0 ? (
+                  <ul className="mt-1 space-y-0.5 text-xs">
+                    {p.statusModel.gagal.slice(0, 8).map((g, i) => (
+                      <li key={i}>{g.pemeriksaan}{g.selisih ? ` — selisih ${g.selisih}` : ""}</li>
+                    ))}
+                    {p.statusModel.gagal.length > 8 && <li>…dan {p.statusModel.gagal.length - 8} lainnya.</li>}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-xs">
+                    Seluruh pemeriksaan internal lolos. Ini hanya berarti rumusnya konsisten pada
+                    input saat ini — bukan bahwa angkanya sudah tervalidasi lapangan.
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Pemetaan tahap -> kategori. Tanpa ini barisnya tidak bisa masuk:
                 cost_category_id NOT NULL, dan berkasnya tidak punya kolomnya. */}
             {p.tahapUnik.length > 0 && (

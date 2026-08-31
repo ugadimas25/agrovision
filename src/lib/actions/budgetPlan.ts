@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
 import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
-import { bacaWorkbookRab, type AsumsiImpor, type BarisImpor, type Masalah } from "@/lib/rab/impor-excel";
+import {
+  bacaWorkbookRab, type AsumsiImpor, type BarisImpor, type Masalah, type StatusModel,
+} from "@/lib/rab/impor-excel";
 import { listOptions } from "@/lib/repo/master";
 import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
@@ -568,6 +570,10 @@ export type ImporState = {
     /** Satuan di berkas yang tidak ketemu di master; barisnya tetap masuk, uom-nya null. */
     satuanTidakDikenal: string[];
     komponenSudahAda: number;
+    /** Status konsistensi model dari sheet 15_Checks; null bila sheet tak ada. */
+    statusModel: StatusModel | null;
+    /** Berapa banyak angka yang di berkas berupa RUMUS, bukan ketikan. */
+    turunan: { volume: number; harga: number; total: number };
   };
 };
 
@@ -613,6 +619,12 @@ export async function pratinjauImporAction(_p: ImporState, fd: FormData): Promis
       pratinjau: {
         skenario, namaBerkas: berkas.name, asumsi: hasil.asumsi, komponen: hasil.komponen,
         masalah: hasil.masalah, tahapUnik, satuanTidakDikenal, komponenSudahAda,
+        statusModel: hasil.statusModel,
+        turunan: {
+          volume: hasil.komponen.filter((k) => k.volumeDariRumus).length,
+          harga: hasil.komponen.filter((k) => k.hargaDariRumus).length,
+          total: hasil.komponen.length,
+        },
       },
     };
   } catch (e) {
