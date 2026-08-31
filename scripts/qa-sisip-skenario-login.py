@@ -8,11 +8,14 @@ Dua langkah, dua sheet; sheet "Log Bug" TIDAK disentuh sama sekali:
   LANGKAH 1 — sheet "Skenario QA": sisipkan kelompok skenario login L-01..L-07.
     Sumber teks: docs/16-prioritas-qa-20260826.md, bagian "Tier 0 · Login".
 
-  LANGKAH 2 — sheet "Petunjuk": perbaiki kalimat yang sudah usang sejak B-27
-    mendarat 26 Agustus 2026 (URL aplikasi, judul blok akun uji, baris
-    "Login stub", urutan kerja yang belum menyebut kelompok L) dan tambahkan
-    satu baris "Kredensial" di blok CATATAN PENTING.
-    Sumber: CLAUDE.md bagian "Autentikasi — dua mode" + docs/12-deploy-gcp.md §9.
+  LANGKAH 2 — sheet "Petunjuk": perbaiki kalimat yang sudah usang (URL
+    aplikasi, judul blok akun uji, baris "Login stub", urutan kerja yang belum
+    menyebut kelompok L, dan tabel status merge Sprint 3B yang masih bilang
+    #40-#44 belum merged) lalu tambahkan satu baris "Kredensial" di blok
+    CATATAN PENTING.
+    Sumber: CLAUDE.md bagian "Autentikasi — dua mode", docs/12-deploy-gcp.md §9,
+    dan — untuk status merge — pemeriksaan langsung ke origin/main (perintahnya
+    ditulis di komentar PERUBAHAN_PETUNJUK; jalankan ulang sebelum percaya).
 
 Kenapa lewat skrip, bukan diedit tangan: perubahannya bisa diulang, bisa
 diperiksa orang lain, dan idempoten — kedua langkah berhenti sendiri kalau
@@ -361,6 +364,55 @@ PERUBAHAN_PETUNJUK = [
         "https://agrovision-393569486275.asia-southeast2.run.app",
         "https://agrovision-pjy4ku3jjq-et.a.run.app",
     ),
+    # ---- status merge Sprint 3B -------------------------------------------
+    # Sheet ditulis 26 Agustus pagi, waktu PR #40-#44 memang belum merged.
+    # Semuanya sudah masuk main sejak hari yang sama. Dibuktikan terhadap
+    # origin/main (ujungnya 24934a1, 31 Agustus 2026), bukan terhadap ingatan:
+    #
+    #   git log origin/main --oneline --grep='(#39)'   → f7c269d  (2026-08-26)
+    #   git branch -r --contains f7c269d               → memuat origin/main
+    #
+    # dan seterusnya untuk: 8d89bd9 (#37, 25 Agu), f7c269d (#39), 74d047f (#40),
+    # e5d526e (#41), fcd416e (#42), fcd1479 (#43), 3495196 (#44) — ketujuhnya
+    # leluhur origin/main. Ulangi perintah di atas sebelum mempercayai baris ini.
+    #
+    # Kenapa ini penting, bukan sekadar rapi: selama sheet bilang "belum ada di
+    # produksi", penguji diminta menandai BLOCKED alih-alih FAIL — sehingga
+    # fitur yang RUSAK ikut tertulis BLOCKED dan bugnya tidak pernah dilaporkan.
+    (
+        "A10",
+        "⚠️ BACA DULU — TIDAK SEMUA FITUR SUDAH ADA DI PRODUKSI",
+        "⚠️ BACA DULU — SELURUH FITUR SPRINT A/3/3B SUDAH ADA DI PRODUKSI",
+    ),
+    (
+        # Kotak kuning peringatan. Isinya ada di A12 (B12 kosong, tanpa latar) —
+        # jadi yang diganti hanya A12, dan latar FFFFF3CD-nya ikut apa adanya.
+        "A12",
+        "Kelompok F & G (Sprint 3B) sebagian BELUM di-merge. PR #40-#44 masih "
+        "menunggu review per 26 Agustus 2026. Kalau diuji di URL produksi dan "
+        "fiturnya belum ada, tandai BLOCKED — bukan FAIL. Uji di lokal dengan "
+        "branch PR terkait bila ingin menguji lebih awal.",
+        "Seluruh fitur Sprint 3B (PR #37, #39-#44) SUDAH merged dan live di "
+        "produksi — diperiksa terhadap origin/main pada 31 Agustus 2026. Karena "
+        "itu fitur kelompok F & G yang tidak berfungsi adalah FAIL, bukan "
+        "BLOCKED. Pakai BLOCKED hanya kalau pengujiannya memang tidak bisa "
+        "dijalankan karena hal DI LUAR fitur itu: data belum ada, akun belum "
+        "dibuat, atau layanan sedang mati.",
+    ),
+    (
+        # Cap waktu judul tabel — jadi tidak konsisten begitu isi tabelnya
+        # diperbarui, karena "per 26 Agustus ~11:15 WIB" memang keadaan lama.
+        "A14",
+        "STATUS MERGE PER TIKET (per 26 Agustus 2026, ~11:15 WIB)",
+        "STATUS MERGE PER TIKET (diperiksa ulang 31 Agustus 2026 terhadap origin/main)",
+    ),
+    ("C22", "#37 merged; #39 disetujui, belum merge", "SUDAH merged"),
+    ("C23", "BELUM merged", "SUDAH merged"),   # B-32, PR #40 → 74d047f
+    ("C24", "BELUM merged", "SUDAH merged"),   # B-29, PR #41 → e5d526e
+    ("C25", "BELUM merged", "SUDAH merged"),   # B-30, PR #42 → fcd416e
+    ("C26", "BELUM merged", "SUDAH merged"),   # B-31, PR #43 → fcd1479
+    ("C27", "BELUM merged", "SUDAH merged"),   # B-33, PR #44 → 3495196
+    # -----------------------------------------------------------------------
     (
         # Judul blok akun uji. Daftar emailnya di bawah (A30:B34) DIBIARKAN —
         # email akun demo bukan rahasia; yang salah hanya janji "cukup ketik
