@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import {
   Loader2, Upload, CircleAlert, CircleCheck, TriangleAlert, FileSpreadsheet,
 } from "lucide-react";
@@ -32,6 +32,9 @@ export function ImporExcel({
 }: { planId: string; categories: Option[]; canEdit: boolean }) {
   const [pra, aksiPratinjau, sedangBaca] = useActionState(pratinjauImporAction, awal);
   const [hasil, aksiJalan, sedangTulis] = useActionState(jalankanImporAction, awal);
+  // Pemetaan tahap -> kategori disimpan di sini supaya "terapkan ke semua" bisa
+  // ada, dan supaya jumlah baris yang AKAN masuk bisa dihitung sebelum disimpan.
+  const [peta, setPeta] = useState<Record<string, string>>({});
 
   if (!canEdit) return null;
   const p = pra.pratinjau;
@@ -175,11 +178,34 @@ export function ImporExcel({
                 <legend className="text-xs font-medium text-slate-500">
                   Kategori biaya per tahap — berkasnya tidak memuat kolom ini
                 </legend>
+                {/* Tanpa ini, 19 dropdown yang semuanya diawali "lewati" membuat
+                    jalur paling mudah — tekan Simpan — mengimpor NOL komponen.
+                    Jujur, tapi tidak berguna. Satu pilihan untuk semua tahap
+                    membereskan kasus yang paling lazim; per-tahap tetap bisa
+                    diubah sesudahnya. */}
+                <label className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
+                  <span className="text-slate-600">Terapkan satu kategori ke semua tahap:</span>
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPeta(v === "" ? {} : Object.fromEntries(p.tahapUnik.map((t) => [t, v])));
+                    }}
+                    className="min-h-11 flex-1 rounded-md border border-slate-200 px-2 text-sm"
+                  >
+                    <option value="">— pilih untuk mengisi sekaligus —</option>
+                    {categories.map((k) => (
+                      <option key={k.value} value={k.value}>{k.label}</option>
+                    ))}
+                  </select>
+                </label>
+
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {p.tahapUnik.map((t) => (
                     <label key={t} className="flex items-center gap-2 text-sm">
                       <span className="w-32 shrink-0 truncate text-slate-600" title={t}>{t}</span>
-                      <select name={`kategori_${t}`} defaultValue=""
+                      <select name={`kategori_${t}`} value={peta[t] ?? ""}
+                        onChange={(e) => setPeta((v) => ({ ...v, [t]: e.target.value }))}
                         className="min-h-11 w-full rounded-md border border-slate-200 px-2 text-sm">
                         <option value="">— lewati baris tahap ini —</option>
                         {categories.map((k) => (
@@ -247,11 +273,35 @@ export function ImporExcel({
               </table>
             </div>
 
-            <button type="submit" disabled={sedangTulis}
-              className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-md bg-emerald-700 px-3.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60">
-              {sedangTulis ? <Loader2 className="h-4 w-4 animate-spin" /> : <CircleCheck className="h-4 w-4" />}
-              Simpan ke RAB ini
-            </button>
+            {(() => {
+              // Dihitung dengan aturan yang SAMA seperti server (jalankanImporAction):
+              // tahap harus terpetakan, volume harus > 0, harga tidak boleh kosong.
+              // Kalau keduanya berbeda, angka di tombol ini berbohong.
+              const akanMasuk = p.komponen.filter((k) =>
+                k.tahap !== null && (peta[k.tahap] ?? "") !== ""
+                && k.volume !== null && k.volume > 0 && k.hargaSatuan !== null).length;
+              const dilewati = p.komponen.length - akanMasuk;
+              return (
+                <>
+                  <p className="mt-3 text-sm text-slate-600">
+                    <b>{akanMasuk}</b> dari {p.komponen.length} komponen akan masuk
+                    {dilewati > 0 && <> · {dilewati} dilewati (tahap belum dipetakan, atau volume/harga kosong di berkas)</>}
+                    {" · "}{p.asumsi.length} asumsi.
+                  </p>
+                  <button type="submit" disabled={sedangTulis || akanMasuk === 0}
+                    className="mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-md bg-emerald-700 px-3.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60">
+                    {sedangTulis ? <Loader2 className="h-4 w-4 animate-spin" /> : <CircleCheck className="h-4 w-4" />}
+                    Simpan ke RAB ini
+                  </button>
+                  {akanMasuk === 0 && (
+                    <p className="mt-1.5 text-xs text-rose-700">
+                      Belum ada tahap yang dipetakan ke kategori biaya, jadi tidak ada komponen yang
+                      akan masuk. Pakai &ldquo;terapkan ke semua tahap&rdquo; di atas, atau pilih per tahap.
+                    </p>
+                  )}
+                </>
+              );
+            })()}
           </form>
         )}
 
