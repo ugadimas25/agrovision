@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { Loader2, Plus, CircleAlert, CircleCheck } from "lucide-react";
 import { addItemAction, type PlanState } from "@/lib/actions/budgetPlan";
 import { cn } from "@/lib/utils";
+import { SourceSelect, type Source } from "./SourcePanel";
 
 const initial: PlanState = { ok: false, message: "" };
 type Option = { value: string; label: string };
@@ -39,7 +40,7 @@ const KINDS: Option[] = [
  * perkaliannya sendiri.
  */
 export function ItemForm({
-  planId, horizonMonths, categories, uoms, afterApproval, assumptions,
+  planId, horizonMonths, categories, uoms, afterApproval, assumptions, sources,
 }: {
   planId: string;
   horizonMonths: number;
@@ -47,6 +48,7 @@ export function ItemForm({
   uoms: Option[];
   afterApproval: boolean;
   assumptions: { code: string; label: string; unit: string | null; value: number }[];
+  sources: Source[];
 }) {
   const [state, formAction, pending] = useActionState(addItemAction, initial);
   const err = (k: string) => state.fieldErrors?.[k];
@@ -182,10 +184,19 @@ export function ItemForm({
               </datalist>
             </label>
 
+            {/* Dua kolom sumber yang BERDAMPINGAN, bukan saling menggantikan.
+                Yang di bawah menunjuk registri dan bisa dibuka ulang; yang ini
+                menampung keterangan yang memang tidak punya tautan. Baris yang
+                angkanya dari rapat lisan mengisi yang ini saja — dan itu jawaban
+                yang lengkap, bukan pekerjaan yang belum selesai. */}
             <label className="block lg:col-span-2">
               <span className="mb-1 block text-xs font-medium text-slate-500">Dasar / sumber angka</span>
               <input name="sourceRef" maxLength={300} placeholder="mis. penawaran CV Angkutan Barito 12 Agu, atau UMK Banyumas 2026" className={cls("sourceRef")} />
             </label>
+
+            <div className="lg:col-span-3">
+              <SourceSelect sources={sources} className={cls("sourceId")} />
+            </div>
 
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-500">Tingkat keyakinan</span>

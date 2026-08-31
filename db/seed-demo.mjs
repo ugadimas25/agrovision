@@ -141,6 +141,11 @@ async function purge() {
     // menangkapnya dalam hitungan menit ketika sempat terlewat.
     `DELETE FROM app.budget_plan_items WHERE plan_id IN (SELECT id FROM app.budget_plans WHERE company_id = ANY($1))`,
     `DELETE FROM app.budget_plans WHERE company_id = ANY($1)`,
+    // Registri sumber (0063) HARUS setelah budget_plans: source_id memakai
+    // ON DELETE RESTRICT, jadi menghapus sumber lebih dulu akan ditolak selama
+    // masih ada baris RAB yang mengutipnya. Menghapus RAB-nya lebih dulu
+    // membuang kutipan itu lewat ON DELETE CASCADE ke items & assumptions.
+    `DELETE FROM app.budget_sources WHERE company_id = ANY($1)`,
     `DELETE FROM app.agri_input_stock_movements WHERE company_id = ANY($1)`,
     `DELETE FROM app.weeding_schedules WHERE company_id = ANY($1)`,
     `DELETE FROM app.tree_survey_points WHERE block_id IN (SELECT id FROM app.blocks WHERE company_id = ANY($1))`,
@@ -1259,6 +1264,158 @@ async function seed() {
     return f.id
   }
 
+  // -------------------------------------------------------------------------
+  // REGISTRI SUMBER (migrasi 0063) — tahap 5 docs/19-rab-dari-excel-banyumas.md
+  //
+  // 22 baris di bawah adalah isi sheet 16_Sources model Banyumas APA ADANYA:
+  // kutipan dan tautan, BUKAN angka model. Yang dipindahkan hanya "dari mana
+  // keterangannya bisa dibaca ulang". Koefisien, harga, dan dosis dari berkas
+  // itu sengaja TIDAK ikut — berkasnya sendiri menutup diri dengan peringatan
+  // bahwa ia model, bukan kebenaran.
+  //
+  // Judul, topik, dan catatan dibiarkan dalam bahasa aslinya. Menerjemahkan
+  // judul dokumen yang dikutip membuatnya tidak bisa dicocokkan lagi dengan
+  // dokumen aslinya — dan kutipan yang tidak bisa dicocokkan sudah berhenti
+  // menjadi kutipan.
+  //
+  // Dua hal sengaja TIDAK dirapikan, keduanya soal kejujuran:
+  //
+  //   * USR ("keputusan pengguna") menulis "User-provided" di kolom URL sheet
+  //     aslinya. Itu bukan tautan, jadi url-nya NULL di sini dan layar merender
+  //     em-dash. CHECK di 0063 juga menolaknya masuk.
+  //   * 14 dari 22 sumber hanya menyebut TAHUN ("2019") atau tidak menyebut
+  //     tanggal sama sekali ("2026 website"). published_on-nya NULL, dan bunyi
+  //     aslinya dibawa ke kolom catatan — bukan dibulatkan jadi 1 Januari.
+  // -------------------------------------------------------------------------
+  // [kode, topik, judul, url, terbit, diakses, keyakinan, catatan]
+  const SUMBER = [
+    ["USR", "User decision",
+     "Conversation requirements",
+     null,
+     "2026-08-26", "2026-08-26", "high",
+     "Dipakai untuk: Banyumas baseline; 100 ha; 1 vs 4 sites"],
+    ["S01", "Durian bearing",
+     "Kementan: Teknologi Multiplikasi Vegetatif",
+     "https://repository.pertanian.go.id/server/api/core/bitstreams/f955febe-a389-4923-83be-a883f5eed703/content",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: Grafted/okulasi durian starts 4-6 years · Base revenue starts Y5; Y4 not assumed · Terbit menurut sumber: \"2019\""],
+    ["S02", "Banana agronomy",
+     "Kementan: Teknologi Budidaya Pisang",
+     "https://repository.pertanian.go.id/server/api/core/bitstreams/650af8ff-94fb-4a63-816a-1cb30eea671c/content",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: 10-15 t/ha common, 35-40 potential; spacing; manure; Urea/SP36/KCl doses; Trichoderma · Model is lower density agroforestry · Terbit menurut sumber: \"2023 repository\""],
+    ["S03", "Dolomite",
+     "Kementan: Budi Daya Tanaman Hortikultura",
+     "https://repository.pertanian.go.id/server/api/core/bitstreams/956a1e47-84bc-474e-8784-1f998e5fe29e/content",
+     null, "2026-08-26", "medium",
+     "Dipakai untuk: 1.0-1.5 t/ha for acidic soil in horticultural guide · Final dose from lime requirement · Terbit menurut sumber: \"2022\""],
+    ["S04", "Coconut price",
+     "Kementan: call to raise coconut buying price",
+     "https://www.pertanian.go.id/?act=view&id=7236&show=news",
+     "2025-10-28", "2026-08-26", "high",
+     "Dipakai untuk: Farmgate ordinary coconut Rp2,000-3,000/butir · Model uses Rp3,000/no aromatic premium"],
+    ["S05", "Banana farmgate",
+     "Banyuwangi Regency",
+     "https://banyuwangikab.go.id/berita/harga-stabil-dan-banyak-diminati-banyuwangi-pacu-produksi-pisang-cavendish",
+     "2024-07-03", "2026-08-26", "medium",
+     "Dipakai untuk: Cavendish price Rp6,000/kg and around Rp120k/tree · Used as base 2026 planning price; update locally"],
+    ["S06", "Durian price",
+     "RRI Purwokerto",
+     "https://rri.co.id/purwokerto/umkm/1254378/puncak-musim-penghujan-harga-durian-di-purwokerto-mengalami-peningkatan",
+     "2025-01-14", "2026-08-26", "medium",
+     "Dipakai untuk: Purwokerto local and Bawor retail price ranges · Farmgate model is conservative but still low confidence"],
+    ["S07", "Labor",
+     "Central Java Governor Decree 100.3.3.1/505/2025",
+     "https://jdih.jatengprov.go.id/inventarisasi-hukum/download/kepgub_100-3-3-1-505_th_2025",
+     "2025-12-24", "2026-08-26", "high",
+     "Dipakai untuk: UMK Banyumas Rp2,474,598.99/month · Loaded HOK includes benefit allowance"],
+    ["S08", "Mapping",
+     "Technogis mapping pilot price",
+     "https://www.technogis.co.id/harga-jasa-pilot-drone-pemetaan-profesional-bersertifikat-termurah-di-indonesia/",
+     "2025-04-24", "2026-08-26", "medium",
+     "Dipakai untuk: 51-100 ha mapping benchmark Rp250k/ha · Vendor benchmark; scope/accuracy varies"],
+    ["S09", "Soil laboratory",
+     "BRMP Soil & Fertilizer Laboratory",
+     "https://tanahpupuk.brmp.pertanian.go.id/layanan/layanan/layanan-pengujian-analisa-tanah-pupuk-tanaman-dan-air-irigasi",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: Official parameter tariffs and PP PNBP basis · Package allowance includes multiple parameters/logistics · Terbit menurut sumber: \"2026 website\""],
+    ["S10", "Input prices",
+     "Happy Tani fertilizer listing",
+     "https://www.happyshopingbatam.com/product-category/pupuk/",
+     null, "2026-08-26", "low",
+     "Dipakai untuk: Retail benchmarks: Urea, SP-36, NPK, glyphosate · Bulk delivered procurement requires tender · Terbit menurut sumber: \"2026 website\""],
+    ["S11", "Organic matter price",
+     "Indotrading compost suppliers",
+     "https://www.indotrading.com/company_pupuk-kompos_7132/",
+     null, "2026-08-26", "low",
+     "Dipakai untuk: Retail/bulk market reference; model uses Rp0.9-1.0m/t delivered · Quality/freight dominate · Terbit menurut sumber: \"2026 website\""],
+    ["S12", "Organic certification",
+     "LeSOS certification costs",
+     "https://lesosindonesia.com/s_dana",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: Registration, inspection, reviewer and surveillance tariff components · Travel, days and scope vary · Terbit menurut sumber: \"2026 website\""],
+    ["S13", "Plantation cost norms",
+     "East Kalimantan Plantation Development Unit Cost 2024",
+     "https://disbun.kaltimprov.go.id/download/satuan-biaya-pembangunan-perkebunan-tahun-2024",
+     null, "2026-08-26", "medium",
+     "Dipakai untuk: Kelapa seedlings 110/ha @ Rp50k; HOK benchmark Rp110k · Used as reasonableness benchmark, not copied total · Terbit menurut sumber: \"2024\""],
+    ["S14", "Organic standard",
+     "ICERT: SNI 6729:2025",
+     "https://icert.id/terbit-sni-67292025-sistem-pertanian-organik/",
+     "2025-10-30", "2026-08-26", "high",
+     "Dipakai untuk: SNI 6729:2025 transition and 2026 implementation note · Written LSO confirmation still required"],
+    ["S15", "Support seedlings",
+     "ForestaMart government marketplace",
+     "https://forestamart.bp2sdm.kehutanan.go.id/index.php/detail-produk/bibit-indigofera/4d544577",
+     null, "2026-08-26", "medium",
+     "Dipakai untuk: Indigofera/durian/serai/kelapa nursery listing · Model prices include bulk/logistics allowances · Terbit menurut sumber: \"2026 website\""],
+    ["S16", "Banana seedlings",
+     "Marketplace benchmark",
+     "https://www.blibli.com/jual/kultur-jaringan-pisang",
+     null, "2026-08-26", "low",
+     "Dipakai untuk: Tissue-culture banana listings around Rp14.5k-18k · Require disease-free certification and batch QA · Terbit menurut sumber: \"2026-08\""],
+    ["S17", "Coconut bearing",
+     "Ditjenbun variety description",
+     "https://ditjenbun.pertanian.go.id/deskripsi-varietas-kelapa-genjah-pandan-wangi-dan-kebun-sumber-benihnya-di-indonesia/",
+     "2022-12-05", "2026-08-26", "high",
+     "Dipakai untuk: Genjah Pandan Wangi starts around 2-3 years · Model uses light Y3 crop"],
+    ["S19", "Budidaya nanas",
+     "Petunjuk Teknis Budidaya Nenas",
+     "https://repository.pertanian.go.id/items/ed0e90fe-90c6-4119-9cd6-221ade7a5dd9",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: Pedoman pembibitan sampai panen; buah aksesion unggul >1.000 g · Model lorong memakai kerapatan jauh di bawah monokultur; validasi cahaya dan varietas · Terbit menurut sumber: \"2008\""],
+    ["S20", "Penutup tanah legum",
+     "Teknik Konservasi Tanah Secara Vegetatif",
+     "https://repository.pertanian.go.id/bitstreams/721ac5a2-a87d-46c1-9400-62c235f0bf34/download",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: Penutup tanah legum memperbaiki sifat tanah, menambat N, menghasilkan bahan organik, dan membantu infiltrasi · Arachis pintoi dipakai sebagai penutup rendah; lingkar batang tetap dijaga bersih · Terbit menurut sumber: \"2006\""],
+    ["S21", "Mucuna/benguk",
+     "Teknik Konservasi Tanah Secara Vegetatif",
+     "https://repository.pertanian.go.id/bitstreams/721ac5a2-a87d-46c1-9400-62c235f0bf34/download",
+     null, "2026-08-26", "high",
+     "Dipakai untuk: Biomassa Mucuna dilaporkan mengandung N, P, dan K dan dapat menjadi sumber hara/mulsa · Opsi nonaktif; perlu dikendalikan agar tidak memanjat tanaman inti · Terbit menurut sumber: \"2006\""],
+    ["S22", "Crotalaria",
+     "Alelopati pada Pola Tanam Kopi dan Teknik Pengendalian",
+     "https://repository.pertanian.go.id/bitstreams/946c3d1b-10c2-44bc-8935-d8c1258404e4/download",
+     null, "2026-08-26", "medium",
+     "Dipakai untuk: Beberapa spesies Crotalaria bersifat antagonis terhadap nematoda tertentu; manfaat harus disesuaikan dengan diagnosis OPT · Bukan klaim pengendalian umum; opsi nonaktif hingga ada diagnosis · Terbit menurut sumber: \"2014\""],
+  ]
+
+  const sumberIds = {}
+  for (const [kode, topik, judul, url, terbit, diakses, keyakinan, catatan] of SUMBER) {
+    await c.query(
+      `INSERT INTO app.budget_sources
+         (company_id, code, topic, title, url, published_on, accessed_on, confidence, note, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6::date,$7::date,$8::app.assumption_confidence,$9,$10)
+       ON CONFLICT (company_id, code) DO NOTHING`,
+      [CO, kode, topik, judul, url, terbit, diakses, keyakinan, catatan,
+       '00000000-0000-4000-8000-0000000000e7'])
+  }
+  for (const row of (await c.query(
+    `SELECT code, id FROM app.budget_sources WHERE company_id = $1`, [CO])).rows) {
+    sumberIds[row.code] = row.id
+  }
+
   const rab = await c.query(
     `INSERT INTO app.budget_plans
        (company_id, code, name, area_ha, horizon_months, contingency_pct, note,
@@ -1274,68 +1431,95 @@ async function seed() {
   if (rab.rowCount === 1) {
     const RAB = rab.rows[0].id
     // [bulan, kategori induk, sub-kategori, uraian, jenis, volume, satuan, harga,
-    //  tahap, jenis biaya, penggerak, sumber, keyakinan, di luar kontingensi]
+    //  tahap, jenis biaya, penggerak, sumber, keyakinan, di luar kontingensi,
+    //  kode sumber di registri]
     //
-    // Enam kolom terakhir mengikuti model Banyumas (08_CAPEX_RAB + 02_Assumptions).
-    // Tingkat keyakinan sengaja bervariasi dan sebagian besar RENDAH — di model
-    // aslinya 51 dari 100+ asumsi bertanda Low, dan menyembunyikan itu akan
-    // membuat RAB contoh terlihat lebih pasti daripada kenyataannya.
+    // Tujuh kolom terakhir mengikuti model Banyumas (08_CAPEX_RAB +
+    // 02_Assumptions + 16_Sources). Tingkat keyakinan sengaja bervariasi dan
+    // sebagian besar RENDAH — di model aslinya 51 dari 100+ asumsi bertanda
+    // Low, dan menyembunyikan itu akan membuat RAB contoh terlihat lebih pasti
+    // daripada kenyataannya.
+    //
+    // Kolom terakhir (0063) hanya diisi bila sumber di registri BENAR-BENAR
+    // yang melahirkan angkanya. Delapan dari sebelas baris di bawah tetap
+    // null, dan itu bukan pekerjaan yang belum selesai: harga bibit dan upah
+    // di sini datang dari contoh lisan rapat 26 Agu, bukan dari dokumen mana
+    // pun. Menautkannya ke S13 ("Kelapa seedlings 110/ha @ Rp50k") hanya
+    // karena topiknya kebetulan sama akan membuat angka rapat MENGAKU
+    // bersumber dari dokumen pemerintah yang sebenarnya menyebut angka lain —
+    // persis jenis kerapian yang doktrin kejujuran data ini ada untuk menolak.
     const barisRab = [
       [1, 'Persiapan Lahan', 'Land Clearing', 'Land clearing manual — 10 orang x 5 hari', 'labor', 50, 'HOK', 150000,
-       'B Land prep', 'capex', 'gross ha', 'Upah lisan rapat 26 Agu, belum ada penawaran kontraktor', 'low', false],
+       'B Land prep', 'capex', 'gross ha', 'Upah lisan rapat 26 Agu, belum ada penawaran kontraktor', 'low', false, null],
       [1, 'Pengadaan Pupuk', 'Kapur / Dolomit', 'Dolomit 100 kg/ha efektif untuk netralkan pH', 'consumable', 8800, 'KG', 3500,
-       'B Soil', 'capex', 'net ha', 'Dosis: Kementan, Budi Daya Hortikultura 2022 (1-1,5 t/ha)', 'medium', false],
+       'B Soil', 'capex', 'net ha', 'Dosis: Kementan, Budi Daya Hortikultura 2022 (1-1,5 t/ha)', 'medium', false, 'S03'],
       [1, 'Alat & Mekanisasi', 'Alat Tangan', 'Cangkul — 1 unit per 0,5 ha', 'asset', 200, 'UNIT', 85000,
-       'E Equipment', 'capex', 'net ha', 'Rasio lisan rapat 26 Agu', 'low', false],
+       'E Equipment', 'capex', 'net ha', 'Rasio lisan rapat 26 Agu', 'low', false, null],
       [2, 'Persiapan Lahan', 'Pembuatan Lubang Tanam', 'Lubang tanam 140/ha', 'labor', 350, 'HOK', 150000,
-       'B Land prep', 'capex', 'net ha', 'Belum ada studi waktu kerja', 'low', false],
+       'B Land prep', 'capex', 'net ha', 'Belum ada studi waktu kerja', 'low', false, null],
       [2, 'Pengadaan Pupuk', 'Pupuk Organik', 'Pupuk kandang per lubang tanam', 'consumable', 28000, 'KG', 1200,
-       'B Soil', 'capex', 'net ha', 'Harga ritel/curah, perlu penawaran pemasok', 'low', false],
+       'B Soil', 'capex', 'net ha', 'Harga ritel/curah, perlu penawaran pemasok', 'low', false, 'S11'],
       [2, 'Pengadaan Bibit', 'Bibit Kelapa', 'Bibit kelapa genjah — 70 batang/ha', 'consumable', 7000, 'BATANG', 100000,
-       'D Planting', 'capex', 'net ha', 'Harga lisan rapat 26 Agu', 'low', false],
+       'D Planting', 'capex', 'net ha', 'Harga lisan rapat 26 Agu', 'low', false, null],
       [2, 'Pengadaan Bibit', 'Bibit Durian', 'Bibit durian — 70 batang/ha (intercrop)', 'consumable', 7000, 'BATANG', 200000,
-       'D Planting', 'capex', 'net ha', 'Harga lisan rapat 26 Agu', 'low', false],
+       'D Planting', 'capex', 'net ha', 'Harga lisan rapat 26 Agu', 'low', false, null],
       [3, 'Pengadaan Bibit', 'Transport Bibit', 'Angkut bibit dari pembibitan ke lahan', 'service', 1, 'PAKET', 45000000,
-       'D Planting', 'capex', 'lot', 'Perkiraan; bibit dari Jateng/Jogja/Sumatera', 'low', false],
+       'D Planting', 'capex', 'lot', 'Perkiraan; bibit dari Jateng/Jogja/Sumatera', 'low', false, null],
       [3, 'Tenaga Kerja', 'Upah Harian', 'Penanaman — 5 ha/hari, ~20 hari', 'labor', 400, 'HOK', 150000,
-       'D Planting', 'capex', 'net ha', 'Upah lisan rapat 26 Agu', 'low', false],
+       'D Planting', 'capex', 'net ha', 'Upah lisan rapat 26 Agu', 'low', false, null],
       [4, 'Tenaga Kerja', 'Upah Harian', 'Pemeliharaan bulan ke-4 — penyiangan & pemupukan', 'labor', 440, 'HOK', 130000,
-       'F Payroll', 'opex', 'annual', 'UMK Banyumas 2026 sebagai batas bawah', 'medium', false],
+       'F Payroll', 'opex', 'annual', 'UMK Banyumas 2026 sebagai batas bawah', 'medium', false, 'S07'],
       [4, 'Pengadaan Pupuk', 'Pupuk Majemuk', 'NPK ~200 g/tanaman', 'consumable', 2800, 'KG', 12000,
-       'B Soil', 'opex', 'net ha', 'Dosis lisan rapat; harga ritel', 'low', false],
+       'B Soil', 'opex', 'net ha', 'Dosis lisan rapat; harga ritel', 'low', false, 'S10'],
     ]
     // Asumsi RAB — pusat penggerak, mengikuti 02_Assumptions (migrasi 0062).
     // Tiga baris di bawah bukan hiasan: bibit kelapa, bibit durian, dan dolomit
     // volumenya DITURUNKAN dari net_ha, jadi mengubah satu angka areal efektif
     // menggerakkan ketiganya sekaligus — itu inti tahap 2.
+    //
+    // Kolom terakhir (0063) menautkan asumsi ke registri sumber. Ia BERDAMPINGAN
+    // dengan source_ref, tidak menggantikannya — dan ketiga baris di bawah
+    // sengaja memperlihatkan ketiga kombinasi yang mungkin:
+    //
+    //   gross_ha  keterangan bebas + sumber USR yang tidak punya URL (em-dash)
+    //   net_ha    keterangan bebas SAJA — model Banyumas bukan dokumen terbitan
+    //   hok_rate  keterangan bebas ("angka lisan rapat") + SK Gubernur S07
+    //             yang bisa dibuka, karena keduanya memang dua hal berbeda:
+    //             angkanya dari rapat, batas bawahnya dari SK.
     const ASUMSI = [
-      ['gross_ha', 'Luas bruto', 100, 'ha', 'Keputusan pemilik proyek (rapat 26 Agu 2026)', 'high'],
+      ['gross_ha', 'Luas bruto', 100, 'ha', 'Keputusan pemilik proyek (rapat 26 Agu 2026)', 'high', 'USR'],
       ['net_ha', 'Areal efektif (88% bruto)', 88, 'ha efektif',
-       'Model Banyumas 02!C7 — 12% untuk jalan, drainase, buffer, bangunan', 'medium'],
+       'Model Banyumas 02!C7 — 12% untuk jalan, drainase, buffer, bangunan', 'medium', null],
       ['hok_rate', 'Upah harian', 150000, 'Rp/HOK',
-       'Angka lisan rapat 26 Agu; UMK Banyumas 2026 sebagai batas bawah', 'low'],
+       'Angka lisan rapat 26 Agu; UMK Banyumas 2026 sebagai batas bawah', 'low', 'S07'],
     ]
-    for (const [i, [kode, nama, nilai, satuan, sumber, keyakinan]] of ASUMSI.entries()) {
+    for (const [i, [kode, nama, nilai, satuan, sumber, keyakinan, kodeSumber]] of ASUMSI.entries()) {
       await c.query(
         `INSERT INTO app.budget_assumptions
-           (plan_id, code, label, value, unit, source_ref, confidence, sort_order, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7::app.assumption_confidence,$8,$9)`,
+           (plan_id, code, label, value, unit, source_ref, confidence, sort_order, created_by,
+            source_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::app.assumption_confidence,$8,$9,$10)`,
         [RAB, kode, nama, nilai, satuan, sumber, keyakinan, i,
-         '00000000-0000-4000-8000-0000000000e7'])
+         '00000000-0000-4000-8000-0000000000e7',
+         kodeSumber === null ? null : sumberIds[kodeSumber]])
     }
 
     for (const [i, [bulan, induk, sub, uraian, jenis, vol, uom, harga,
-                    tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan]] of barisRab.entries()) {
+                    tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan,
+                    kodeSumber]] of barisRab.entries()) {
       await c.query(
         `INSERT INTO app.budget_plan_items
            (plan_id, phase_month, cost_category_id, description, item_kind, volume,
             uom_item_id, unit_price_idr, sort_order, created_by,
-            stage, cost_kind, driver, source_ref, confidence, exclude_from_contingency)
+            stage, cost_kind, driver, source_ref, confidence, exclude_from_contingency,
+            source_id)
          VALUES ($1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10,
-                 $11,$12::app.budget_cost_kind,$13,$14,$15::app.assumption_confidence,$16)`,
+                 $11,$12::app.budget_cost_kind,$13,$14,$15::app.assumption_confidence,$16,
+                 $17)`,
         [RAB, bulan, kategoriRab(induk, sub), uraian, jenis, vol, uomIds[uom], harga, i,
          '00000000-0000-4000-8000-0000000000e7',
-         tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan])
+         tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan,
+         kodeSumber === null ? null : sumberIds[kodeSumber]])
     }
 
     // Sambungkan baris yang memang punya basis jelas. Volume-nya dihitung
@@ -1395,6 +1579,7 @@ async function seed() {
   console.log('\nLogin stub DINYALAKAN (app.auth_settings.stub_login_enabled = true).')
   console.log('Aplikasi juga perlu AUTH_MODE=stub di .env.local -- lihat .env.example.')
   console.log(`  RAB contoh         RAB-2026-01 (status Diajukan, menunggu keputusan finance)`)
+  console.log(`  registri sumber    ${SUMBER.length} kutipan dari 16_Sources (1 tanpa URL, 14 tanpa tanggal terbit)`)
   console.log('\nLogin demo (tanpa password):')
   for (const [, , email, name, role] of users) console.log(`  ${role.padEnd(12)} ${email.padEnd(26)} ${name}`)
   console.log(`  ${'viewer'.padEnd(12)} ${'direktur.mamuju@demo.invalid'} Rina Direktur Mamuju (entitas DEMO2)`)
