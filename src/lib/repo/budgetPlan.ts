@@ -608,6 +608,40 @@ export async function updateBudgetAssumptionValue(
   });
 }
 
+/**
+ * Simpan beberapa nilai asumsi sekaligus (tabel asumsi).
+ *
+ * Satu pernyataan, alasan sama seperti imporBudgetPlanItems: kalau tiap baris
+ * dikirim terpisah, sebagian bisa lolos dan sebagian ditolak policy, dan RAB
+ * berakhir setengah berubah — keadaan yang kepala migrasi 0062 sebut paling
+ * berbahaya karena ia terlihat konsisten. Trigger cascade 0062 menghitung ulang
+ * volume baris turunan untuk SETIAP asumsi yang benar-benar berubah.
+ *
+ * Mengembalikan id yang berubah; nol baris berarti tidak ada yang diubah ATAU
+ * seluruhnya disaring policy — keduanya diam, jadi pemanggil membandingkannya.
+ */
+export async function updateBudgetAssumptionValues(
+  ctx: RlsContext,
+  planId: string,
+  baris: { id: string; value: number; sourceId: string | null }[],
+): Promise<string[]> {
+  if (baris.length === 0) return [];
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `UPDATE app.budget_assumptions a
+          SET value = v.nilai, source_id = v.sumber, updated_at = now()
+         FROM (SELECT * FROM unnest($2::uuid[], $3::numeric[], $4::uuid[])
+                 AS t(id, nilai, sumber)) v
+        WHERE a.id = v.id
+          AND a.plan_id = $1
+          AND (a.value, a.source_id) IS DISTINCT FROM (v.nilai, v.sumber)
+        RETURNING a.id`,
+      [planId, baris.map((b) => b.id), baris.map((b) => b.value), baris.map((b) => b.sourceId)],
+    );
+    return r.rows.map((x: { id: string }) => x.id);
+  });
+}
+
 // ===========================================================================
 // Penugasan & serapan anggaran (0066)
 // ===========================================================================

@@ -10,6 +10,7 @@ import { OPERATIONAL_TIME_ZONE } from "./date";
 
 const idr = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 });
 const dec2 = new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const presisi4 = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 4 });
 
 export const EMPTY = "—";
 
@@ -31,6 +32,20 @@ export function formatIdrShort(v: number | null | undefined): string {
 export function formatHa(v: number | null | undefined): string {
   if (v === null || v === undefined) return EMPTY;
   return `${dec2.format(v)} ha`;
+}
+
+/**
+ * Angka yang ditampilkan APA ADANYA sampai 4 desimal.
+ *
+ * formatNumber() membulatkan ke bilangan bulat, dan itu benar untuk volume &
+ * rupiah. Ia SALAH untuk nilai asumsi: proporsi areal efektif 0,88 tampil
+ * sebagai "1" dan inflasi 0,04 sebagai "0" — layar menyebut angka yang berbeda
+ * dari angka yang dipakai menghitung, tepat pada nilai yang MENGGERAKKAN volume
+ * baris lain. Ditemukan setelah impor Excel pertama, 1 Sep 2026.
+ */
+export function formatNumberPresisi(v: number | null | undefined): string {
+  if (v === null || v === undefined) return EMPTY;
+  return presisi4.format(v);
 }
 
 export function formatNumber(v: number | null | undefined): string {

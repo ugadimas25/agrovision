@@ -11,7 +11,8 @@ import { listOptions } from "@/lib/repo/master";
 import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
   decideBudgetPlan, deleteBudgetPlanItem, setBudgetPlanItemActive, submitBudgetPlan,
-  updateBudgetAssumptionValue, updateBudgetPlanItems, buatPenugasan, setTanggalMulai,
+  updateBudgetAssumptionValues, updateBudgetPlanItems,
+  buatPenugasan, setTanggalMulai,
   imporBudgetPlanItems, imporBudgetAssumptions, listBudgetPlanItems,
 } from "@/lib/repo/budgetPlan";
 
@@ -353,6 +354,48 @@ export async function gridAction(_p: PlanState, fd: FormData): Promise<PlanState
   }
 }
 
+/**
+ * Simpan seluruh nilai asumsi dari tabel sekaligus.
+ *
+ * Satu form untuk satu tabel, sama seperti tabel komponen: <form> tidak boleh
+ * bersarang di <tr>/<td>, dan menyiasatinya dengan atribut `form=` membuat
+ * urutan fokus melompat di pembaca layar.
+ */
+export async function simpanAsumsiAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ok: false, message: "RAB tidak valid." };
+
+    const baris: { id: string; value: number; sourceId: string | null }[] = [];
+    for (const kunci of fd.keys()) {
+      if (!kunci.startsWith("nilai_")) continue;
+      const id = z.string().uuid().safeParse(kunci.slice("nilai_".length));
+      if (!id.success) continue;
+      const nilai = z.coerce.number().min(0).max(1e15).safeParse(fd.get(kunci));
+      if (!nilai.success) {
+        return { ok: false, message: "Ada nilai asumsi yang bukan angka." };
+      }
+      const sumber = z.string().uuid().nullable()
+        .safeParse(kosongkan(fd.get(`sumber_${id.data}`)));
+      baris.push({ id: id.data, value: nilai.data, sourceId: sumber.success ? sumber.data : null });
+    }
+
+    const berubah = await updateBudgetAssumptionValues(ctx, planId.data, baris);
+    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
+    if (baris.length === 0) return { ok: false, message: "Tidak ada asumsi untuk disimpan." };
+    if (berubah.length === 0) {
+      return { ok: true, message: "Tidak ada perubahan yang tersimpan. Kalau Anda memang mengubah sesuatu, RAB ini sudah diajukan/disetujui atau bukan susunan Anda." };
+    }
+    return {
+      ok: true,
+      message: `${berubah.length} asumsi disimpan. Volume baris yang memakainya sudah dihitung ulang database.`,
+    };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
 export async function submitPlanAction(_p: PlanState, fd: FormData): Promise<PlanState> {
   try {
     const ctx = await requireRole(...PENYUSUN);
@@ -442,41 +485,6 @@ export async function addAssumptionAction(_p: PlanState, fd: FormData): Promise<
     await addBudgetAssumption(ctx, parsed.data);
     revalidatePath(`/costing/rencana-anggaran/${parsed.data.planId}`);
     return { ok: true, message: `Asumsi ${parsed.data.code} ditambahkan.` };
-  } catch (e) {
-    return { ok: false, message: toMessage(e) };
-  }
-}
-
-/**
- * Ubah nilai satu asumsi — dan dengan itu, seluruh baris yang menurunkannya.
- *
- * Efek berantainya dikerjakan trigger database (0062), bukan di sini: kalau
- * perkalian ulang hidup di TypeScript, satu jalur tulis yang lupa memanggilnya
- * akan meninggalkan RAB yang setengah berubah — dan RAB setengah berubah lebih
- * berbahaya daripada yang salah seluruhnya, karena ia terlihat konsisten.
- */
-export async function updateAssumptionAction(_p: PlanState, fd: FormData): Promise<PlanState> {
-  try {
-    const ctx = await requireRole("agronomist", "approver", "super_admin");
-    const id = z.string().uuid().safeParse(fd.get("id"));
-    const planId = z.string().uuid().safeParse(fd.get("planId"));
-    const value = z.coerce.number().min(0).max(1e15).safeParse(fd.get("value"));
-    if (!id.success || !planId.success) return { ok: false, message: "Asumsi tidak valid." };
-    if (!value.success) return { ok: false, message: "Nilai asumsi tidak valid." };
-    // Kosong = sumber sengaja DILEPAS, bukan "tidak dikirim". Formulirnya selalu
-    // menyertakan pilihan ini, jadi keduanya tidak bisa tertukar.
-    const rawSumber = fd.get("sourceId");
-    const sumber = rawSumber === null || String(rawSumber).trim() === ""
-      ? null
-      : z.string().uuid().safeParse(rawSumber);
-    if (sumber !== null && !sumber.success) return { ok: false, message: "Sumber tidak valid." };
-
-    const n = await updateBudgetAssumptionValue(
-      ctx, id.data, value.data, sumber === null ? null : sumber.data);
-    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
-    return n === 0
-      ? { ok: false, message: "Asumsi tidak bisa diubah — RAB ini sudah diajukan atau bukan susunan Anda." }
-      : { ok: true, message: "Asumsi diperbarui. Baris yang memakainya ikut dihitung ulang." };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }
