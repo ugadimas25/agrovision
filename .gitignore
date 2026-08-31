@@ -46,6 +46,9 @@ next-env.d.ts
 
 # claude code local settings
 .claude/settings.local.json
+# Worktree sementara milik agent: berisi .next/ yang membuat lint melaporkan
+# ribuan galat dari artefak build, bukan dari kode repo ini.
+.claude/worktrees/
 
 # aset besar — dilayani dari GCS / bisa diregenerasi (bikin repo terlalu berat untuk di-clone Cloud Build)
 /public/tiles/
