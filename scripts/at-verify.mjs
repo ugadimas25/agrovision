@@ -1450,8 +1450,19 @@ async function main() {
     ok("kurva S jujur bahwa belum ada realisasi tertaut",
       visible(stlhTgl.html).includes("Belum ada pengeluaran disetujui"));
 
-    const idItem = (/<select[^>]*name="planItemId"[\s\S]{0,3000}?<option value="([0-9a-f-]{36})"/
-      .exec(stlhTgl.html) ?? [])[1];
+    // Dipilih baris yang volumenya CUKUP untuk ditugasi 5, bukan sekadar opsi
+    // pertama: pagu volume 0066 menolak penugasan yang melebihi baris RAB-nya,
+    // dan begitu daftar barisnya berubah (mis. setelah impor Excel menambah
+    // baris bervolume 1 lot), uji ini akan gagal karena aturan yang justru
+    // bekerja dengan benar. Label opsinya memuat volume: "uraian (7000 BATANG)".
+    const idItem = (() => {
+      const sel = /<select[^>]*name="planItemId"[\s\S]*?<\/select>/.exec(stlhTgl.html)?.[0] ?? "";
+      for (const m of sel.matchAll(/<option value="([0-9a-f-]{36})">([^<]*)<\/option>/g)) {
+        const vol = Number((/\(([\d.]+)\s/.exec(m[2]) ?? [])[1] ?? "0");
+        if (vol >= 10) return m[1];
+      }
+      return undefined;
+    })();
     // Sengaja memilih yang berperan CREATOR, bukan opsi pertama: seluruh alur
     // rapat berujung pada creator yang merealisasikan di lapangan.
     const idPenerima = (/<option value="([0-9a-f-]{36})">[^<]*\(creator\)/
