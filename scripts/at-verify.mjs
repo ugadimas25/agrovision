@@ -54,8 +54,17 @@ class Session {
    * Submit form Server Action. Field tersembunyi $ACTION_* diambil dari HTML
    * yang dirender — itulah yang membuat progressive enhancement bekerja.
    */
-  async submit(path, fields, { formMarker, files } = {}) {
-    const { html } = await this.get(path);
+  /**
+   * `html` opsional: kirim form yang ada di HTML ITU, tanpa memuat ulang halaman.
+   *
+   * Diperlukan untuk alur dua langkah seperti pratinjau impor Excel: formnya
+   * dirender dari state useActionState yang hanya hidup di respons POST
+   * sebelumnya, jadi GET baru tidak akan pernah memuatnya. Memuat ulang di sini
+   * bukan sekadar tidak praktis -- ia menguji alur yang berbeda dari yang
+   * dijalani pengguna.
+   */
+  async submit(path, fields, { formMarker, files, html: htmlDiberikan } = {}) {
+    const html = htmlDiberikan ?? (await this.get(path)).html;
     const form = pickForm(html, formMarker);
     if (!form) throw new Error(`Form tidak ditemukan di ${path}${formMarker ? ` (penanda: ${formMarker})` : ""}`);
 
@@ -287,6 +296,16 @@ async function main() {
     { code: catCode, name: catName, sortOrder: 9 }, { formMarker: "masterTypeCode" });
   const mdAfter = await admin.get("/pengaturan/master-data?tipe=cost_category");
   ok("item baru tampil di layar master data", mdAfter.html.includes(catName));
+
+  // Satuan dibuat lewat UI juga. Entitas DEV sengaja bermaster-data KOSONG,
+  // jadi tanpa langkah ini dropdown Satuan di form RAB memang kosong secara sah
+  // -- dan dropdown kosong yang SAH tidak bisa dibedakan dari dropdown kosong
+  // karena bug. Layar RAB sempat memanggil listOptions dengan kode tipe master
+  // "uom" yang tidak pernah ada (yang benar "unit_of_measure"), dan tidak ada
+  // satu pun uji yang menangkapnya.
+  const uomName = `Satuan Uji ${stamp}`;
+  await admin.submit("/pengaturan/master-data?tipe=unit_of_measure",
+    { code: `UOM${stamp}`, name: uomName, sortOrder: 9 }, { formMarker: "masterTypeCode" });
 
   const expPage = await creator.get("/costing/pengeluaran");
   const catId = optionId(expPage.html, "costCategoryId", catName);
@@ -1245,6 +1264,17 @@ async function main() {
     // BUKAN cuma bahwa layarnya dropdown, tapi bahwa SERVER menolak nilai di
     // luar daftar: Server Action bisa dipanggil POST langsung tanpa UI.
     // -----------------------------------------------------------------------
+    // Dropdown yang KOSONG tidak melempar galat apa pun -- ia hanya tampil
+    // sebagai daftar tanpa pilihan, dan pengguna menyimpulkan satuannya memang
+    // belum ada. Layar RAB memanggil listOptions dengan kode tipe master "uom"
+    // yang tidak pernah ada (yang benar "unit_of_measure"), jadi selama modul
+    // ini hidup, satuan tidak pernah bisa dipilih dari layar sama sekali.
+    // Satuan yang baru dibuat di AT1 harus benar-benar muncul di form RAB.
+    ok("dropdown Satuan berisi pilihan dari master, bukan kosong",
+      detail.html.includes(uomName),
+      detail.html.includes(uomName) ? ""
+        : detail.html.includes('name="uomItemId"') ? "select ada tapi tanpa pilihan" : "select tidak ada");
+
     ok("Tahap & penggerak dipilih dari daftar, bukan diketik bebas",
       detail.html.includes('<select name="stage"') && !detail.html.includes('list="tahap-rab"'));
 
@@ -1317,6 +1347,63 @@ async function main() {
         ok("baris yang dihapus benar-benar hilang dari layar",
           !visible(detail.html).includes("Baris salah masuk"));
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // Impor dari template Excel SUNGGUHAN (docs/RAB_..._R2.xlsx).
+    //
+    // Berkasnya benar-benar diunggah lewat HTTP, bukan digantikan data buatan:
+    // seluruh nilai fitur ini bergantung pada apakah ia membaca berkas yang
+    // dipakai orang, dan pembaca xlsx yang "kelihatannya benar" adalah cara
+    // paling halus memasukkan angka salah ke dalam anggaran.
+    // -----------------------------------------------------------------------
+    const { readFile } = await import("node:fs/promises");
+    let bytesTemplate = null;
+    try {
+      bytesTemplate = await readFile(new URL("../docs/RAB_Agroforestry_100ha_Banyumas_R2.xlsx", import.meta.url));
+    } catch { /* dilaporkan di bawah */ }
+    ok("template RAB tersedia untuk diuji", bytesTemplate !== null,
+      bytesTemplate ? "" : "docs/RAB_Agroforestry_100ha_Banyumas_R2.xlsx tidak ada");
+
+    if (bytesTemplate) {
+      const pra = await agro.submit(`/costing/rencana-anggaran/${id}`,
+        { planId: id, skenario: "1lokasi" },
+        { formMarker: 'name="berkas"',
+          files: { berkas: { blob: new Blob([bytesTemplate]), name: "RAB_R2.xlsx" } } });
+      const tPra = visible(pra.html);
+
+      ok("berkas Excel terbaca dan pratinjaunya muncul",
+        /36 komponen dan \d+ asumsi/.test(tPra),
+        (/(\d+) komponen dan (\d+) asumsi/.exec(tPra) ?? ["tidak ada ringkasan"])[0]);
+
+      ok("status pemeriksaan internal workbook (15_Checks) ditampilkan", tPra.includes("15_Checks"));
+
+      // Paling mudah disembunyikan, paling menyesatkan bila hilang: seluruh
+      // volume di sheet itu rumus, dan setelah diimpor menjadi angka tetap.
+      ok("pratinjau mengakui angka turunan akan menjadi angka tetap",
+        tPra.includes("turunan di Excel") && /36 dari 36 volume/.test(tPra),
+        /(\d+) dari (\d+) volume/.exec(tPra)?.[0] ?? "tidak disebutkan");
+
+      ok("pratinjau menyebut sheet yang TIDAK ikut diimpor", tPra.includes("rentang tahun"));
+
+      const petaKategori = {};
+      for (const m of pra.html.matchAll(/name="(kategori_[^"]+)"/g)) petaKategori[m[1]] = kat;
+      ok("pratinjau meminta pemetaan kategori per tahap",
+        Object.keys(petaKategori).length > 0, `${Object.keys(petaKategori).length} tahap`);
+
+      // Dikirim dari HTML pratinjau, bukan dari halaman yang dimuat ulang:
+      // form konfirmasi hanya ada di respons POST sebelumnya.
+      await agro.submit(`/costing/rencana-anggaran/${id}`,
+        { planId: id, ...petaKategori }, { formMarker: 'name="muatan"', html: pra.html });
+      detail = await agro.get(`/costing/rencana-anggaran/${id}`);
+      const tSes = visible(detail.html);
+
+      ok("baris dari Excel benar-benar masuk ke RAB",
+        tSes.includes("Drone orthomosaic"),
+        tSes.includes("Drone orthomosaic") ? "" : "baris 08_CAPEX_RAB tidak ditemukan di layar");
+      // Baris bervolume 0 (Cover crop) ditolak CHECK (volume > 0); alasannya
+      // harus disebut, bukan hilang tanpa jejak.
+      ok("baris bervolume 0 tidak masuk diam-diam", !tSes.includes("Cover crop/insectary"));
     }
 
     ok("agronomis TIDAK diberi tombol Setujui", !visible(detail.html).includes('value="approved"'));

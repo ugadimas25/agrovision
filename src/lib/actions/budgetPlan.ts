@@ -5,9 +5,14 @@ import { z } from "zod";
 import { requireRole } from "@/lib/session";
 import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
 import {
+  bacaWorkbookRab, type AsumsiImpor, type BarisImpor, type Masalah, type StatusModel,
+} from "@/lib/rab/impor-excel";
+import { listOptions } from "@/lib/repo/master";
+import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
   decideBudgetPlan, deleteBudgetPlanItem, setBudgetPlanItemActive, submitBudgetPlan,
   updateBudgetAssumptionValue, updateBudgetPlanItems, buatPenugasan, setTanggalMulai,
+  imporBudgetPlanItems, imporBudgetAssumptions, listBudgetPlanItems,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -592,5 +597,230 @@ export async function setTanggalMulaiAction(_p: PlanState, fd: FormData): Promis
     };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
+  }
+}
+
+// Impor berkas Excel (template RAB_Agroforestry_100ha_Banyumas_R2.xlsx)
+//
+// DUA LANGKAH, dan langkah pratinjau bukan hiasan. Berkasnya tidak membawa
+// kategori biaya sama sekali (`cost_category_id` wajib di 0060), satuannya
+// teks bebas yang belum tentu ada di master, dan sebagian tahap/penggerak bisa
+// di luar daftar tertutup. Menulis langsung berarti menebak ketiganya. Yang
+// dilakukan di sini: tunjukkan apa yang terbaca, apa yang tidak, dan minta
+// pengguna memetakan sisanya -- baru menulis.
+//
+// Sheet yang dibaca hanya 02_Assumptions dan 08_CAPEX_RAB. 05_Workplan_Labor,
+// 06_Equipment_Tools, 07_Agri_Inputs, dan 09_OPEX_10Y sengaja TIDAK diimpor:
+// ketiganya memakai rentang tahun (Mulai/Selesai, T1..T10, umur manfaat) yang
+// belum punya tempat di skema -- itu tahap 4 di docs/19. Pratinjau menyebutkan
+// ini apa adanya, karena RAB yang diam-diam hanya berisi CAPEX terlihat seperti
+// RAB yang lengkap.
+// ===========================================================================
+
+export type ImporState = {
+  ok: boolean;
+  message: string;
+  pratinjau?: {
+    skenario: "1lokasi" | "4lokasi";
+    namaBerkas: string;
+    asumsi: AsumsiImpor[];
+    komponen: BarisImpor[];
+    masalah: Masalah[];
+    /** Tahap unik yang perlu dipetakan ke kategori biaya oleh pengguna. */
+    tahapUnik: string[];
+    /** Satuan di berkas yang tidak ketemu di master; barisnya tetap masuk, uom-nya null. */
+    satuanTidakDikenal: string[];
+    komponenSudahAda: number;
+    /** Status konsistensi model dari sheet 15_Checks; null bila sheet tak ada. */
+    statusModel: StatusModel | null;
+    /** Berapa banyak angka yang di berkas berupa RUMUS, bukan ketikan. */
+    turunan: { volume: number; harga: number; total: number };
+  };
+};
+
+const imporKosong: ImporState = { ok: false, message: "" };
+
+export async function pratinjauImporAction(_p: ImporState, fd: FormData): Promise<ImporState> {
+  try {
+    const ctx = await requireRole("agronomist", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ...imporKosong, message: "RAB tidak valid." };
+
+    const berkas = fd.get("berkas");
+    if (!(berkas instanceof File) || berkas.size === 0) {
+      return { ...imporKosong, message: "Pilih berkas Excel-nya dulu." };
+    }
+    // 8 MB adalah batas serverActions.bodySizeLimit di next.config; ditolak di
+    // sini supaya pesannya jelas, bukan galat 413 yang tidak bisa dibaca.
+    if (berkas.size > 7_500_000) {
+      return { ...imporKosong, message: "Berkas lebih dari 7,5 MB. Hapus sheet yang tidak perlu, atau simpan ulang sebagai .xlsx." };
+    }
+    const skenario = fd.get("skenario") === "4lokasi" ? "4lokasi" : "1lokasi";
+
+    const hasil = bacaWorkbookRab(await berkas.arrayBuffer(), { skenario });
+    if (hasil.komponen.length === 0 && hasil.asumsi.length === 0) {
+      return {
+        ...imporKosong,
+        message: "Tidak ada baris yang terbaca. Pastikan berkasnya template RAB (butuh sheet 02_Assumptions dan 08_CAPEX_RAB).",
+      };
+    }
+
+    const uoms = await listOptions(ctx, "unit_of_measure");
+    const dikenal = new Set(uoms.map((u) => u.label.toLowerCase().trim()));
+    const satuanTidakDikenal = [...new Set(
+      hasil.komponen.map((k) => k.satuanTeks).filter((s): s is string => Boolean(s))
+        .filter((s) => !dikenal.has(s.toLowerCase().trim())),
+    )];
+    const tahapUnik = [...new Set(hasil.komponen.map((k) => k.tahap).filter((t): t is string => Boolean(t)))];
+    const komponenSudahAda = (await listBudgetPlanItems(ctx, planId.data)).length;
+
+    return {
+      ok: true,
+      message: `${hasil.komponen.length} komponen dan ${hasil.asumsi.length} asumsi terbaca dari ${berkas.name}.`,
+      pratinjau: {
+        skenario, namaBerkas: berkas.name, asumsi: hasil.asumsi, komponen: hasil.komponen,
+        masalah: hasil.masalah, tahapUnik, satuanTidakDikenal, komponenSudahAda,
+        statusModel: hasil.statusModel,
+        turunan: {
+          volume: hasil.komponen.filter((k) => k.volumeDariRumus).length,
+          harga: hasil.komponen.filter((k) => k.hargaDariRumus).length,
+          total: hasil.komponen.length,
+        },
+      },
+    };
+  } catch (e) {
+    return { ...imporKosong, message: toMessage(e) };
+  }
+}
+
+/** Bentuk muatan pratinjau yang dikirim balik dari layar. Divalidasi ulang di
+ *  sini, tidak dipercaya begitu saja: yang bulak-balik lewat peramban harus
+ *  diperiksa lagi seperti kiriman mana pun. */
+const muatanSchema = z.object({
+  komponen: z.array(z.object({
+    barisAsli: z.number().int(),
+    uraian: z.string().trim().min(1).max(300),
+    tahap: z.string().nullable(),
+    penggerak: z.string().nullable(),
+    volume: z.number().nullable(),
+    satuanTeks: z.string().nullable(),
+    hargaSatuan: z.number().nullable(),
+    sumberRef: z.string().nullable(),
+  })).max(2000),
+  asumsi: z.array(z.object({
+    barisAsli: z.number().int(),
+    variabel: z.string().trim().min(1).max(120),
+    nilai: z.number().nullable(),
+    satuan: z.string().nullable(),
+    idSumber: z.string().nullable(),
+    keyakinan: z.enum(["high", "medium", "low"]).nullable(),
+    catatan: z.string().nullable(),
+  })).max(500),
+});
+
+/** Kode asumsi dibuat dari nama variabelnya: huruf kecil, non-alfanumerik jadi
+ *  garis bawah. Kolom `code` punya UNIQUE(plan_id, code) dan dipakai
+ *  `basis_code` pada baris turunan, jadi ia harus stabil dan bisa ditebak
+ *  orang -- "Luas bruto" selalu jadi `luas_bruto`, bukan nomor acak. */
+function kodeAsumsi(variabel: string): string {
+  const k = variabel.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "").slice(0, 40);
+  return /^[a-z]/.test(k) ? k : `a_${k}`.slice(0, 40);
+}
+
+export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise<ImporState> {
+  try {
+    const ctx = await requireRole("agronomist", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ...imporKosong, message: "RAB tidak valid." };
+
+    let mentah: unknown;
+    try { mentah = JSON.parse(String(fd.get("muatan") ?? "")); }
+    catch { return { ...imporKosong, message: "Data pratinjau rusak. Unggah ulang berkasnya." }; }
+    const muatan = muatanSchema.safeParse(mentah);
+    if (!muatan.success) return { ...imporKosong, message: "Data pratinjau tidak valid. Unggah ulang berkasnya." };
+
+    // Pemetaan tahap -> kategori biaya, diisi pengguna di pratinjau. Berkasnya
+    // tidak punya kolom kategori sama sekali, dan cost_category_id wajib.
+    const petaKategori = new Map<string, string>();
+    for (const kunci of fd.keys()) {
+      if (!kunci.startsWith("kategori_")) continue;
+      const nilai = z.string().uuid().safeParse(fd.get(kunci));
+      if (nilai.success) petaKategori.set(kunci.slice("kategori_".length), nilai.data);
+    }
+
+    const uoms = await listOptions(ctx, "unit_of_measure");
+    const petaUom = new Map(uoms.map((u) => [u.label.toLowerCase().trim(), u.value]));
+
+    const dilewati: string[] = [];
+    const baris = muatan.data.komponen.flatMap((k) => {
+      const kategori = k.tahap ? petaKategori.get(k.tahap) : undefined;
+      if (!kategori) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): tahap belum dipetakan ke kategori biaya`);
+        return [];
+      }
+      // Volume 0 BUKAN sama dengan volume kosong, dan template R2 memakai
+      // keduanya dengan sengaja: baris "Cover crop/insectary establishment"
+      // bervolume 0 karena biayanya sudah dihitung di 17_Model_Fleksibel supaya
+      // tidak dobel. CHECK (volume > 0) di 0060 menolaknya, jadi ia dilewati --
+      // tapi alasannya disebut apa adanya, bukan disamakan dengan sel kosong.
+      if (k.volume === 0) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volumenya 0 di berkas — biasanya karena biayanya sudah dihitung di sheet lain`);
+        return [];
+      }
+      if (k.volume === null || k.volume < 0 || k.hargaSatuan === null) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volume atau harga satuan kosong di berkas`);
+        return [];
+      }
+      return [{
+        // Berkasnya tidak memuat bulan fase sama sekali (05_Workplan_Labor yang
+        // punya Mulai/Selesai belum diimpor), jadi semua baris masuk bulan ke-1
+        // dan harus disesuaikan di tabel. Pratinjau mengatakannya; menebak bulan
+        // dari tahap akan menciptakan jadwal yang tidak pernah disusun siapa pun.
+        phaseMonth: 1,
+        costCategoryId: kategori,
+        description: k.uraian,
+        // Tidak ada kolom jenis di berkas. 'consumable' adalah default kolomnya
+        // di 0060, dipakai apa adanya dan bukan tebakan dari uraian.
+        itemKind: "consumable",
+        volume: k.volume,
+        uomItemId: k.satuanTeks ? (petaUom.get(k.satuanTeks.toLowerCase().trim()) ?? null) : null,
+        unitPriceIdr: k.hargaSatuan,
+        // 08_CAPEX_RAB adalah sheet investasi awal; seluruh barisnya capex.
+        costKind: "capex" as const,
+        stage: (TAHAP as readonly string[]).includes(k.tahap ?? "") ? k.tahap : null,
+        driver: (PENGGERAK as readonly string[]).includes(k.penggerak ?? "") ? k.penggerak : null,
+        sourceRef: k.sumberRef,
+      }];
+    });
+
+    const asumsi = muatan.data.asumsi.flatMap((a) => {
+      if (a.nilai === null) {
+        dilewati.push(`asumsi baris ${a.barisAsli} (${a.variabel}): nilainya kosong di berkas`);
+        return [];
+      }
+      return [{
+        code: kodeAsumsi(a.variabel), label: a.variabel, value: a.nilai,
+        unit: a.satuan, sourceRef: a.idSumber, confidence: a.keyakinan, note: a.catatan,
+      }];
+    });
+
+    const nAsumsi = await imporBudgetAssumptions(ctx, planId.data, asumsi);
+    const nBaris = await imporBudgetPlanItems(ctx, planId.data, baris);
+    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
+
+    if (nBaris === 0 && nAsumsi === 0) {
+      return { ...imporKosong, message: "Tidak ada yang masuk. RAB ini mungkin sudah diajukan, atau bukan susunan Anda." };
+    }
+    const catatan = dilewati.length > 0 ? ` ${dilewati.length} baris dilewati.` : "";
+    const kurang = baris.length - nBaris;
+    return {
+      ok: kurang === 0,
+      message: kurang === 0
+        ? `Impor selesai: ${nBaris} komponen, ${nAsumsi} asumsi.${catatan} Semua masuk bulan ke-1 — sesuaikan di tabel.`
+        : `Hanya ${nBaris} dari ${baris.length} komponen yang masuk; sisanya ditolak policy RAB ini.${catatan}`,
+    };
+  } catch (e) {
+    return { ...imporKosong, message: toMessage(e) };
   }
 }
