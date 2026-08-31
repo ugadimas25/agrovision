@@ -114,6 +114,19 @@ export type HasilImpor = {
   asumsi: AsumsiImpor[];
   komponen: BarisImpor[];
   masalah: Masalah[];
+  /**
+   * Bulan MULAI paling awal per tahap, dari sheet 05_Workplan_Labor.
+   *
+   * 08_CAPEX_RAB tidak punya kolom bulan sama sekali, sehingga seluruh baris
+   * hasil impor menumpuk di bulan ke-1 dan "sebaran per bulan" jadi satu batang
+   * tunggal yang tidak berarti apa-apa. Jadwalnya ada, tapi di sheet lain --
+   * ini menyediakannya sebagai SARAN, dipakai hanya bila pengguna menekan
+   * tombolnya.
+   *
+   * Kuncinya nama tahap TANPA awalan huruf ("Land prep", bukan "B Land prep"),
+   * karena kedua sheet menuliskannya berbeda.
+   */
+  jadwalTahap: Record<string, number>;
   /** Dari sheet 15_Checks. null bila sheet-nya tidak ada di berkas. */
   statusModel: StatusModel | null;
 };
@@ -121,6 +134,7 @@ export type HasilImpor = {
 export const SHEET_KOMPONEN = "08_CAPEX_RAB";
 export const SHEET_ASUMSI = "02_Assumptions";
 export const SHEET_CEK = "15_Checks";
+export const SHEET_JADWAL = "05_Workplan_Labor";
 
 // ===========================================================================
 // §1. ZIP -- .xlsx adalah arsip ZIP berisi XML
@@ -833,6 +847,57 @@ function laporkanNilaiRumus(
  */
 const STATUS_LULUS = new Set(["pass", "ok", "lulus", "sesuai"]);
 
+/**
+ * Bulan mulai per tahap dari 05_Workplan_Labor.
+ *
+ * Sheet itu memuat DUA tabel. Yang pertama (Tahap | Aktivitas | Mulai | Selesai)
+ * berisi bulan; yang kedua (Aktivitas | T1 | T2 | ...) berisi HOK tahunan, dan
+ * kolom yang secara posisi sama dengan "Mulai" di sana berisi angka seperti
+ * 7.761,6. Membaca sheet ini tanpa membatasi tabelnya akan menghasilkan "bulan
+ * ke-7761" yang lolos begitu saja ke RAB.
+ *
+ * Karena itu pembacaan berhenti pada baris pertama yang tidak lagi berbentuk
+ * baris data tabel pertama: kolom Aktivitas kosong (baris TOTAL/judul bagian),
+ * atau Mulai bukan bilangan bulat 1..120.
+ */
+function bacaJadwalTahap(wb: Map<string, LembarMentah>): Record<string, number> {
+  const lembar = cariLembar(wb, SHEET_JADWAL);
+  if (!lembar) return {};
+
+  let hBaris = 0;
+  let kTahap = 0;
+  let kAktivitas = 0;
+  let kMulai = 0;
+  for (let baris = 1; baris <= lembar.barisMaks && !hBaris; baris++) {
+    let a = 0;
+    let b = 0;
+    let c = 0;
+    for (let kolom = 1; kolom <= lembar.kolomMaks; kolom++) {
+      const t = bacaTeks(lembar.sel(baris, kolom));
+      if (t === null) continue;
+      const n = normal(t);
+      if (!a && n === "tahap") a = kolom;
+      else if (!b && (n === "aktivitas" || n === "activity")) b = kolom;
+      else if (!c && (n === "mulai" || n === "start")) c = kolom;
+    }
+    if (a && b && c) { hBaris = baris; kTahap = a; kAktivitas = b; kMulai = c; }
+  }
+  if (!hBaris) return {};
+
+  const jadwal: Record<string, number> = {};
+  for (let baris = hBaris + 1; baris <= lembar.barisMaks; baris++) {
+    const tahap = bacaTeks(lembar.sel(baris, kTahap));
+    const aktivitas = bacaTeks(lembar.sel(baris, kAktivitas));
+    const mulai = lembar.sel(baris, kMulai);
+    if (!tahap || !aktivitas) break;                       // baris TOTAL / judul bagian
+    if (typeof mulai !== "number" || !Number.isInteger(mulai) || mulai < 1 || mulai > 120) break;
+    // Kunci tanpa awalan huruf tahap: 08 menulis "B Land prep", 05 "Land prep".
+    const kunci = normal(tahap).replace(/^[a-z]\s+/, "");
+    if (!(kunci in jadwal) || mulai < jadwal[kunci]) jadwal[kunci] = mulai;
+  }
+  return jadwal;
+}
+
 function bacaStatusModel(wb: Map<string, LembarMentah>): StatusModel | null {
   const lembar = cariLembar(wb, SHEET_CEK);
   if (!lembar) return null;
@@ -1151,5 +1216,6 @@ export function bacaWorkbookRab(
   // TIDAK memblokir impor, hanya melaporkan: workbook yang pemeriksaannya
   // sendiri gagal tetap boleh diimpor, asal pengguna melihatnya lebih dulu.
   const statusModel = bacaStatusModel(wb);
-  return { asumsi, komponen, masalah, statusModel };
+  const jadwalTahap = bacaJadwalTahap(wb);
+  return { asumsi, komponen, masalah, statusModel, jadwalTahap };
 }
