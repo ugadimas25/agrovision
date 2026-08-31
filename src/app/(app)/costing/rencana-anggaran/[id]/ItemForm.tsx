@@ -39,13 +39,14 @@ const KINDS: Option[] = [
  * perkaliannya sendiri.
  */
 export function ItemForm({
-  planId, horizonMonths, categories, uoms, afterApproval,
+  planId, horizonMonths, categories, uoms, afterApproval, assumptions,
 }: {
   planId: string;
   horizonMonths: number;
   categories: Option[];
   uoms: Option[];
   afterApproval: boolean;
+  assumptions: { code: string; label: string; unit: string | null; value: number }[];
 }) {
   const [state, formAction, pending] = useActionState(addItemAction, initial);
   const err = (k: string) => state.fieldErrors?.[k];
@@ -97,9 +98,36 @@ export function ItemForm({
             <input name="description" required maxLength={300} placeholder="mis. Bibit kelapa genjah 140/ha" className={cls("description")} />
           </label>
 
+          {/* Volume: diketik, ATAU diturunkan dari asumsi (basis × rasio).
+              Yang kedua adalah cara model Banyumas bekerja — ubah satu asumsi,
+              seluruh baris yang memakainya ikut bergerak. */}
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-slate-500">Volume</span>
-            <input name="volume" type="number" step="0.0001" min="0.0001" required className={cls("volume")} />
+            <input name="volume" type="number" step="0.0001" min="0" className={cls("volume")} />
+            <span className="mt-1 block text-xs text-slate-400">
+              Kosongkan bila diturunkan dari asumsi di bawah.
+            </span>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-500">Basis (asumsi)</span>
+            <select name="basisCode" defaultValue="" className={cls("basisCode")} disabled={assumptions.length === 0}>
+              <option value="">— volume diketik tangan —</option>
+              {assumptions.map((a) => (
+                <option key={a.code} value={a.code}>
+                  {a.code} — {a.label} ({a.value}{a.unit ? ` ${a.unit}` : ""})
+                </option>
+              ))}
+            </select>
+            {assumptions.length === 0 && (
+              <span className="mt-1 block text-xs text-slate-400">Belum ada asumsi di RAB ini.</span>
+            )}
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-500">Rasio per basis</span>
+            <input name="ratioPerBasis" type="number" step="0.000001" min="0" placeholder="mis. 70 (batang/ha)" className={cls("ratioPerBasis")} />
+            <span className="mt-1 block text-xs text-slate-400">volume = nilai asumsi × rasio</span>
           </label>
 
           <label className="block">

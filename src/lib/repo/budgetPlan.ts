@@ -43,6 +43,19 @@ export type BudgetPlanRow = {
   totalIdr: number | null;
 };
 
+export type BudgetAssumptionRow = {
+  id: string;
+  code: string;
+  label: string;
+  value: number;
+  unit: string | null;
+  sourceRef: string | null;
+  confidence: "high" | "medium" | "low" | null;
+  note: string | null;
+  /** Berapa baris RAB yang volumenya bergantung pada asumsi ini. */
+  usedBy: number;
+};
+
 export type BudgetPlanItemRow = {
   id: string;
   phaseMonth: number;
@@ -64,6 +77,9 @@ export type BudgetPlanItemRow = {
   excludeFromContingency: boolean;
   /** false = dicoret, tetap ditampilkan tapi tidak ikut total mana pun. */
   isActive: boolean;
+  /** 0062: volume diturunkan dari asumsi. null = diketik tangan. */
+  basisCode: string | null;
+  ratioPerBasis: number | null;
 };
 
 const PLAN_SELECT = `
@@ -144,12 +160,14 @@ export async function listBudgetPlanItems(ctx: RlsContext, planId: string): Prom
     cost_kind: "capex" | "opex"; stage: string | null; driver: string | null;
     source_ref: string | null; confidence: "high" | "medium" | "low" | null;
     exclude_from_contingency: boolean; is_active: boolean;
+    basis_code: string | null; ratio_per_basis: string | null;
   }>(
     ctx,
     `SELECT i.id, i.phase_month, cat.name AS category_name, i.description, i.item_kind,
             i.volume, uom.name AS uom_name, i.unit_price_idr, i.amount_idr,
             i.added_after_approval, i.note, i.cost_kind, i.stage, i.driver,
-            i.source_ref, i.confidence, i.exclude_from_contingency, i.is_active
+            i.source_ref, i.confidence, i.exclude_from_contingency, i.is_active,
+            i.basis_code, i.ratio_per_basis
        FROM app.budget_plan_items i
        LEFT JOIN app.master_items cat ON cat.id = i.cost_category_id
        LEFT JOIN app.master_items uom ON uom.id = i.uom_item_id
@@ -176,6 +194,8 @@ export async function listBudgetPlanItems(ctx: RlsContext, planId: string): Prom
     confidence: r.confidence,
     excludeFromContingency: r.exclude_from_contingency,
     isActive: r.is_active,
+    basisCode: r.basis_code,
+    ratioPerBasis: r.ratio_per_basis === null ? null : Number(r.ratio_per_basis),
   }));
 }
 
@@ -292,6 +312,80 @@ export async function decideBudgetPlan(
               decided_by = $4, decided_at = now(), updated_at = now()
         WHERE id = $1 AND approval_status IN ('submitted','under_review')`,
       [id, decision, reason, ctx.userId],
+    );
+    return r.rowCount ?? 0;
+  });
+}
+
+/**
+ * Asumsi satu RAB — pusat penggerak, mengikuti 02_Assumptions (tahap 2,
+ * docs/19). `usedBy` dihitung di SQL supaya layar bisa memperingatkan sebelum
+ * seseorang menghapus asumsi yang masih menggerakkan baris.
+ */
+export async function listBudgetAssumptions(
+  ctx: RlsContext,
+  planId: string,
+): Promise<BudgetAssumptionRow[]> {
+  const rows = await rlsQuery<{
+    id: string; code: string; label: string; value: string; unit: string | null;
+    source_ref: string | null; confidence: "high" | "medium" | "low" | null;
+    note: string | null; used_by: number;
+  }>(
+    ctx,
+    `SELECT a.id, a.code, a.label, a.value, a.unit, a.source_ref, a.confidence, a.note,
+            (SELECT count(*)::int FROM app.budget_plan_items i
+              WHERE i.plan_id = a.plan_id AND i.basis_code = a.code) AS used_by
+       FROM app.budget_assumptions a
+      WHERE a.plan_id = $1
+      ORDER BY a.sort_order, a.code`,
+    [planId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    label: r.label,
+    value: Number(r.value),
+    unit: r.unit,
+    sourceRef: r.source_ref,
+    confidence: r.confidence,
+    note: r.note,
+    usedBy: r.used_by,
+  }));
+}
+
+export async function addBudgetAssumption(
+  ctx: RlsContext,
+  input: {
+    planId: string; code: string; label: string; value: number; unit: string | null;
+    sourceRef: string | null; confidence: "high" | "medium" | "low" | null; note: string | null;
+  },
+): Promise<void> {
+  await rlsQuery(
+    ctx,
+    `INSERT INTO app.budget_assumptions
+       (plan_id, code, label, value, unit, source_ref, confidence, note, created_by,
+        sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::app.assumption_confidence,$8,$9,
+             COALESCE((SELECT max(sort_order) + 1 FROM app.budget_assumptions WHERE plan_id = $1), 0))`,
+    [input.planId, input.code, input.label, input.value, input.unit, input.sourceRef,
+     input.confidence, input.note, ctx.userId],
+  );
+}
+
+/**
+ * Ubah nilai asumsi. Trigger app.budget_assumption_cascade() (0062) langsung
+ * menghitung ulang seluruh baris yang memakainya — itulah inti tahap 2, dan
+ * sebabnya nilai TIDAK boleh diubah lewat UPDATE langsung dari tempat lain.
+ */
+export async function updateBudgetAssumptionValue(
+  ctx: RlsContext,
+  id: string,
+  value: number,
+): Promise<number> {
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `UPDATE app.budget_assumptions SET value = $2, updated_at = now() WHERE id = $1`,
+      [id, value],
     );
     return r.rowCount ?? 0;
   });

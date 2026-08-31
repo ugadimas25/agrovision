@@ -32,13 +32,26 @@ Angka paling jujur di seluruh berkas: **51 dari 100+ asumsi bertanda `Low`**. Mo
 
 ## Yang belum — dan kenapa
 
-### Tahap 2 · Pusat asumsi + penggerak yang benar-benar menghitung
+### ~~Tahap 2 · Pusat asumsi + penggerak~~ — ✅ SELESAI (migrasi 0062)
+
+`app.budget_assumptions` per RAB (kode, nilai, satuan, **sumber**, **keyakinan**), dan `budget_plan_items.basis_code` + `ratio_per_basis`. Volume kini **turunan**: `volume = nilai asumsi × rasio`, dihitung trigger database — bukan aplikasi, supaya seed, skrip impor, dan perbaikan lewat psql tidak bisa menulis volume yang tidak cocok dengan basisnya.
+
+Mengubah satu asumsi menghitung ulang seluruh baris yang memakainya, dan `amount_idr` (kolom `GENERATED` sejak 0060) ikut bergerak. Diuji: areal efektif 88 → 70 ha menggeser tiga baris sekaligus.
+
+**Satu aturan yang ditambahkan dan tidak ada di Excel:** asumsi **terkunci begitu RAB diajukan**, untuk semua peran termasuk finance. Excel adalah model yang dipakai satu orang; RAB di sini adalah dokumen yang **disetujui**. Kalau asumsi masih bisa digeser setelah persetujuan, nilai yang disetujui berubah tanpa keputusan baru — dan persetujuan atas angka yang berubah sendiri bukan persetujuan. Menambah baris setelah disetujui tetap boleh (kesepakatan rapat 26 Agu); yang dilarang hanya menggeser dasar hitungan yang sudah ada.
+
+`app.check_budget_derived_volume()` menjaga invariannya — padanan `15_Checks` untuk RAB, harus nol baris.
+
+<details>
+<summary>Catatan asli tahap 2 (sebelum dikerjakan)</summary>
+
 
 Di Excel, volume **tidak diketik**: `Jumlah = Basis × Rasio per basis`, dan basisnya menunjuk `02_Assumptions` (luas bruto 100 ha → areal efektif 88 ha → populasi per kerapatan). Satu perubahan luas menggerakkan CAPEX, OPEX, produksi, dan arus kas sekaligus.
 
 Di aplikasi, volume masih angka mati. Artinya mengubah asumsi luas berarti mengedit 11 baris satu per satu — dan tidak ada yang menjamin semuanya ikut berubah.
 
 **Butuh:** tabel `budget_assumptions` (variabel, nilai, satuan, sumber, keyakinan) + `budget_plan_items.basis_ratio`, lalu `volume` jadi kolom turunan. **Ditahan karena:** ini mengubah arti kolom `volume` yang sudah dipakai, dan bentuk asumsinya sebaiknya dikonfirmasi ke agronomis dulu.
+</details>
 
 ### Tahap 3 · Skenario (1 lokasi vs 4 lokasi)
 

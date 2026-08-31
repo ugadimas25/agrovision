@@ -1283,7 +1283,7 @@ async function seed() {
     const barisRab = [
       [1, 'Persiapan Lahan', 'Land Clearing', 'Land clearing manual — 10 orang x 5 hari', 'labor', 50, 'HOK', 150000,
        'B Land prep', 'capex', 'gross ha', 'Upah lisan rapat 26 Agu, belum ada penawaran kontraktor', 'low', false],
-      [1, 'Pengadaan Pupuk', 'Kapur / Dolomit', 'Dolomit 100 kg/ha untuk netralkan pH', 'consumable', 10000, 'KG', 3500,
+      [1, 'Pengadaan Pupuk', 'Kapur / Dolomit', 'Dolomit 100 kg/ha efektif untuk netralkan pH', 'consumable', 8800, 'KG', 3500,
        'B Soil', 'capex', 'net ha', 'Dosis: Kementan, Budi Daya Hortikultura 2022 (1-1,5 t/ha)', 'medium', false],
       [1, 'Alat & Mekanisasi', 'Alat Tangan', 'Cangkul — 1 unit per 0,5 ha', 'asset', 200, 'UNIT', 85000,
        'E Equipment', 'capex', 'net ha', 'Rasio lisan rapat 26 Agu', 'low', false],
@@ -1304,6 +1304,26 @@ async function seed() {
       [4, 'Pengadaan Pupuk', 'Pupuk Majemuk', 'NPK ~200 g/tanaman', 'consumable', 2800, 'KG', 12000,
        'B Soil', 'opex', 'net ha', 'Dosis lisan rapat; harga ritel', 'low', false],
     ]
+    // Asumsi RAB — pusat penggerak, mengikuti 02_Assumptions (migrasi 0062).
+    // Tiga baris di bawah bukan hiasan: bibit kelapa, bibit durian, dan dolomit
+    // volumenya DITURUNKAN dari net_ha, jadi mengubah satu angka areal efektif
+    // menggerakkan ketiganya sekaligus — itu inti tahap 2.
+    const ASUMSI = [
+      ['gross_ha', 'Luas bruto', 100, 'ha', 'Keputusan pemilik proyek (rapat 26 Agu 2026)', 'high'],
+      ['net_ha', 'Areal efektif (88% bruto)', 88, 'ha efektif',
+       'Model Banyumas 02!C7 — 12% untuk jalan, drainase, buffer, bangunan', 'medium'],
+      ['hok_rate', 'Upah harian', 150000, 'Rp/HOK',
+       'Angka lisan rapat 26 Agu; UMK Banyumas 2026 sebagai batas bawah', 'low'],
+    ]
+    for (const [i, [kode, nama, nilai, satuan, sumber, keyakinan]] of ASUMSI.entries()) {
+      await c.query(
+        `INSERT INTO app.budget_assumptions
+           (plan_id, code, label, value, unit, source_ref, confidence, sort_order, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::app.assumption_confidence,$8,$9)`,
+        [RAB, kode, nama, nilai, satuan, sumber, keyakinan, i,
+         '00000000-0000-4000-8000-0000000000e7'])
+    }
+
     for (const [i, [bulan, induk, sub, uraian, jenis, vol, uom, harga,
                     tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan]] of barisRab.entries()) {
       await c.query(
@@ -1316,6 +1336,19 @@ async function seed() {
         [RAB, bulan, kategoriRab(induk, sub), uraian, jenis, vol, uomIds[uom], harga, i,
          '00000000-0000-4000-8000-0000000000e7',
          tahap, jenisBiaya, penggerak, sumber, keyakinan, luarCadangan])
+    }
+
+    // Sambungkan baris yang memang punya basis jelas. Volume-nya dihitung
+    // ulang trigger 0062 (basis x rasio), jadi angka yang diisi di atas
+    // ditimpa nilai turunannya — dan itu memang yang diinginkan: 70 batang
+    // per ha EFEKTIF (88 ha), bukan per ha bruto.
+    for (const [uraianAwal, rasio] of [
+      ['Bibit kelapa%', 70], ['Bibit durian%', 70], ['Dolomit%', 100],
+    ]) {
+      await c.query(
+        `UPDATE app.budget_plan_items SET basis_code = 'net_ha', ratio_per_basis = $2
+          WHERE plan_id = $1 AND description LIKE $3`,
+        [RAB, rasio, uraianAwal])
     }
   }
 
