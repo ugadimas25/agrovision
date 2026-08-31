@@ -834,6 +834,152 @@ async function run() {
   r = await c.query(`SELECT count(*)::int n FROM app.budget_assumptions WHERE plan_id = $1`, [RAB2])
   ok('viewer tetap bisa MEMBACA asumsi (dasar angka tidak disembunyikan)', r.rows[0].n === 1)
 
+  // =========================================================================
+  // 0063: registri sumber — kutipan yang bisa diperiksa ulang
+  //
+  // Tiga hal yang diuji di sini, semuanya soal kejujuran dan bukan sekadar hak
+  // akses: (1) tautan yang mengaku bisa dibuka harus benar-benar bisa dibuka,
+  // (2) kutipan tidak boleh berpindah entitas, dan (3) bukti di balik RAB yang
+  // sudah diajukan tidak boleh diganti diam-diam.
+  // =========================================================================
+  console.log('\n=== 0063: registri sumber ===')
+  await as(U_AGRO, 'agronomist', CA)
+
+  const src = await c.query(
+    `INSERT INTO app.budget_sources
+       (company_id, code, topic, title, url, published_on, accessed_on, confidence, created_by)
+     VALUES ($1,'S07','Labor','Keputusan Gubernur Jateng 100.3.3.1/505/2025',
+             'https://jdih.jatengprov.go.id/kepgub_505_2025','2025-12-24','2026-08-26','high',$2)
+     RETURNING id`, [CA, U_AGRO])
+  const SRC = src.rows[0].id
+  ok('agronomist BISA mendaftarkan sumber', src.rowCount === 1)
+
+  // Sumber tanpa tautan SAH: keputusan rapat memang tidak punya URL, dan
+  // memaksanya punya hanya akan melahirkan tautan karangan.
+  const srcLisan = await c.query(
+    `INSERT INTO app.budget_sources (company_id, code, title, url, created_by)
+     VALUES ($1,'USR','Keputusan pemilik proyek (rapat 26 Agu)',NULL,$2) RETURNING id`,
+    [CA, U_AGRO])
+  ok('sumber TANPA tautan boleh masuk (url NULL → em-dash di layar)', srcLisan.rowCount === 1)
+
+  // ...tapi KALIMAT di kolom url ditolak. 16_Sources sendiri menulis
+  // "User-provided" di sana; kalau itu masuk, layar merendernya sebagai tautan
+  // yang bisa diklik dan tidak menuju ke mana pun.
+  await mustFail(c, 'kalimat "User-provided" di kolom URL DITOLAK',
+    `INSERT INTO app.budget_sources (company_id, code, title, url, created_by)
+     VALUES ($1,'S99','Sumber lisan','User-provided',$2)`, [CA, U_AGRO],
+    /budget_sources_url_check/i)
+
+  await mustFail(c, 'kode sumber ganda dalam satu entitas DITOLAK',
+    `INSERT INTO app.budget_sources (company_id, code, title, created_by)
+     VALUES ($1,'S07','Duplikat',$2)`, [CA, U_AGRO],
+    /budget_sources_company_id_code_key/i)
+
+  const rab3 = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, horizon_months, created_by)
+     VALUES ($1,'RAB-SUMBER','RAB uji sumber',12,$2) RETURNING id`, [CA, U_AGRO])
+  const RAB3 = rab3.rows[0].id
+
+  const kutip = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       volume, unit_price_idr, source_id, source_ref, created_by)
+     VALUES ($1,1,$2,'Upah harian',1,150000,$3,'Angka lisan rapat 26 Agu',$4) RETURNING id`,
+    [RAB3, CAT, SRC, U_AGRO])
+  r = await c.query(`SELECT source_id, source_ref FROM app.budget_plan_items WHERE id=$1`,
+    [kutip.rows[0].id])
+  ok('source_id dan source_ref hidup BERDAMPINGAN, tidak saling menggantikan',
+    r.rows[0].source_id === SRC && r.rows[0].source_ref === 'Angka lisan rapat 26 Agu')
+
+  // -------------------------------------------------------------------------
+  // Gerbang tulis. Dipecah per perintah, jadi DELETE ikut tergerbang — bentuk
+  // RESTRICTIVE FOR ALL + USING(true) yang dipakai bp_writer_roles (0060) TIDAK
+  // menggerbang DELETE sama sekali, karena DELETE tidak pernah membaca
+  // WITH CHECK.
+  // -------------------------------------------------------------------------
+  await as(U_VIEWER, 'viewer', CA)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_sources WHERE company_id=$1`, [CA])
+  ok('viewer TETAP bisa membaca registri (dasar angka tidak disembunyikan)',
+    r.rows[0].n === 2, `${r.rows[0].n} sumber`)
+
+  await mustFail(c, 'viewer TIDAK bisa mendaftarkan sumber',
+    `INSERT INTO app.budget_sources (company_id, code, title, created_by)
+     VALUES ($1,'VW','Sumber viewer',$2)`, [CA, U_VIEWER], /row-level security/i)
+
+  const suntingViewer = await c.query(
+    `UPDATE app.budget_sources SET title='diubah viewer' WHERE id=$1`, [SRC])
+  ok('viewer TIDAK bisa menyunting sumber (nol baris)', suntingViewer.rowCount === 0)
+
+  const hapusViewer = await c.query(`DELETE FROM app.budget_sources WHERE id=$1`, [SRC])
+  ok('viewer TIDAK bisa MENGHAPUS sumber (nol baris)', hapusViewer.rowCount === 0,
+    'gerbang tulis dipecah per perintah, jadi DELETE tidak lolos')
+
+  await as(U_CREATOR, 'creator', CA)
+  await mustFail(c, 'creator TIDAK bisa mendaftarkan sumber',
+    `INSERT INTO app.budget_sources (company_id, code, title, created_by)
+     VALUES ($1,'CR','Sumber creator',$2)`, [CA, U_CREATOR], /row-level security/i)
+
+  // -------------------------------------------------------------------------
+  // Isolasi tenant. Yang penting di sini BUKAN cuma "tidak terlihat": FK
+  // dievaluasi mesin dan melewati policy, jadi RLS saja tidak cukup untuk
+  // mencegah tenant A menuliskan uuid sumber tenant B ke barisnya sendiri.
+  // -------------------------------------------------------------------------
+  await as(U_TENANT_B, 'creator', CB)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_sources WHERE id=$1`, [SRC])
+  ok('sumber tenant A TIDAK terlihat oleh tenant B', r.rows[0].n === 0)
+
+  await as(U_TENANT_B, 'super_admin', CB)
+  const srcB = await c.query(
+    `INSERT INTO app.budget_sources (company_id, code, title, created_by)
+     VALUES ($1,'B01','Sumber tenant B',$2) RETURNING id`, [CB, U_TENANT_B])
+  const SRC_B = srcB.rows[0].id
+
+  await as(U_AGRO, 'agronomist', CA)
+  await mustFail(c, 'RAB tenant A TIDAK bisa mengutip sumber tenant B (FK melewati RLS)',
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       volume, unit_price_idr, source_id, created_by)
+     VALUES ($1,1,$2,'Kutipan lintas entitas',1,1,$3,$4)`, [RAB3, CAT, SRC_B, U_AGRO],
+    /tidak terdaftar di entitas/i)
+
+  await mustFail(c, 'asumsi tenant A TIDAK bisa mengutip sumber tenant B',
+    `INSERT INTO app.budget_assumptions (plan_id, code, label, value, source_id, created_by)
+     VALUES ($1,'lintas','Asumsi lintas entitas',1,$2,$3)`, [RAB3, SRC_B, U_AGRO],
+    /tidak terdaftar di entitas/i)
+
+  // -------------------------------------------------------------------------
+  // Identitas sumber membeku begitu dikutip RAB yang bukan lagi draft.
+  // Angkanya tidak bergerak; yang diganti buktinya — dan itu justru lebih sulit
+  // ketahuan daripada angka yang berubah.
+  // -------------------------------------------------------------------------
+  const suntingDraft = await c.query(
+    `UPDATE app.budget_sources SET title='Kepgub Jateng 100.3.3.1/505/2025 (judul dirapikan)'
+      WHERE id=$1`, [SRC])
+  ok('identitas sumber MASIH bisa diperbaiki selama RAB pengutipnya draft',
+    suntingDraft.rowCount === 1)
+
+  await c.query(`UPDATE app.budget_plans SET approval_status='submitted' WHERE id=$1`, [RAB3])
+
+  await mustFail(c, 'judul sumber TIDAK bisa diubah setelah dikutip RAB yang diajukan',
+    `UPDATE app.budget_sources SET title='diganti diam-diam' WHERE id=$1`, [SRC],
+    /sudah dikutip RAB/i)
+
+  await mustFail(c, 'tautan sumber TIDAK bisa diubah setelah dikutip RAB yang diajukan',
+    `UPDATE app.budget_sources SET url='https://contoh.invalid/lain' WHERE id=$1`, [SRC],
+    /sudah dikutip RAB/i)
+
+  // Penurunan keyakinan sengaja DIBIARKAN lewat: mengetahui sebuah sumber lebih
+  // lemah daripada yang dikira adalah informasi yang harus mengalir, bukan
+  // ditahan. Begitu pula tanggal akses — sumber daring bisa hilang.
+  const segarkan = await c.query(
+    `UPDATE app.budget_sources SET accessed_on='2026-08-31', confidence='low' WHERE id=$1`, [SRC])
+  ok('tanggal akses & keyakinan TETAP bisa disunting pada sumber yang identitasnya beku',
+    segarkan.rowCount === 1)
+
+  await mustFail(c, 'sumber yang sedang dikutip TIDAK bisa dihapus (ON DELETE RESTRICT)',
+    `DELETE FROM app.budget_sources WHERE id=$1`, [SRC], /violates foreign key/i)
+
+  r = await c.query(`SELECT count(*)::int n FROM app.check_budget_source_scope()`)
+  ok('check_budget_source_scope() bersih — tidak ada kutipan lintas entitas', r.rows[0].n === 0)
+
   await c.query('ROLLBACK')
   await c.end()
   await restoreStubSwitch()

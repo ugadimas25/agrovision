@@ -43,6 +43,36 @@ export type BudgetPlanRow = {
   totalIdr: number | null;
 };
 
+/**
+ * Registri sumber (0063) — padanan 16_Sources pada model Banyumas.
+ *
+ * `url` null berarti sumbernya memang tidak punya tautan (keputusan lisan,
+ * penawaran di atas kertas), BUKAN "belum diisi menyusul". Layar merendernya
+ * sebagai teks biasa, bukan tautan mati — tautan yang tidak menuju ke mana pun
+ * lebih buruk daripada tidak ada tautan, karena ia mengaku bisa diperiksa.
+ */
+export type BudgetSourceRow = {
+  id: string;
+  code: string;
+  topic: string | null;
+  title: string;
+  url: string | null;
+  publishedOn: string | null;
+  accessedOn: string | null;
+  confidence: "high" | "medium" | "low" | null;
+  note: string | null;
+  /** Berapa baris RAB + asumsi (seluruh entitas) yang mengutip sumber ini. */
+  citedBy: number;
+};
+
+/** Potongan sumber yang ikut menempel pada baris RAB / asumsi yang mengutipnya. */
+export type BudgetSourceRef = {
+  id: string;
+  code: string;
+  title: string;
+  url: string | null;
+};
+
 export type BudgetAssumptionRow = {
   id: string;
   code: string;
@@ -54,6 +84,9 @@ export type BudgetAssumptionRow = {
   note: string | null;
   /** Berapa baris RAB yang volumenya bergantung pada asumsi ini. */
   usedBy: number;
+  /** 0063. null = tidak ada sumber yang bisa ditautkan — periksa juga sourceRef,
+   *  keduanya berdampingan dan tidak saling menggantikan. */
+  source: BudgetSourceRef | null;
 };
 
 export type BudgetPlanItemRow = {
@@ -80,6 +113,9 @@ export type BudgetPlanItemRow = {
   /** 0062: volume diturunkan dari asumsi. null = diketik tangan. */
   basisCode: string | null;
   ratioPerBasis: number | null;
+  /** 0063. Berdampingan dengan sourceRef di atas: yang ini bisa dibuka ulang,
+   *  yang itu menampung keterangan bebas. null pada keduanya = belum disebutkan. */
+  source: BudgetSourceRef | null;
 };
 
 const PLAN_SELECT = `
@@ -161,16 +197,21 @@ export async function listBudgetPlanItems(ctx: RlsContext, planId: string): Prom
     source_ref: string | null; confidence: "high" | "medium" | "low" | null;
     exclude_from_contingency: boolean; is_active: boolean;
     basis_code: string | null; ratio_per_basis: string | null;
+    source_id: string | null; source_code: string | null;
+    source_title: string | null; source_url: string | null;
   }>(
     ctx,
     `SELECT i.id, i.phase_month, cat.name AS category_name, i.description, i.item_kind,
             i.volume, uom.name AS uom_name, i.unit_price_idr, i.amount_idr,
             i.added_after_approval, i.note, i.cost_kind, i.stage, i.driver,
             i.source_ref, i.confidence, i.exclude_from_contingency, i.is_active,
-            i.basis_code, i.ratio_per_basis
+            i.basis_code, i.ratio_per_basis,
+            src.id AS source_id, src.code AS source_code,
+            src.title AS source_title, src.url AS source_url
        FROM app.budget_plan_items i
        LEFT JOIN app.master_items cat ON cat.id = i.cost_category_id
        LEFT JOIN app.master_items uom ON uom.id = i.uom_item_id
+       LEFT JOIN app.budget_sources src ON src.id = i.source_id
       WHERE i.plan_id = $1
       ORDER BY i.cost_kind, i.stage NULLS LAST, i.phase_month, i.sort_order, i.created_at`,
     [planId],
@@ -196,7 +237,16 @@ export async function listBudgetPlanItems(ctx: RlsContext, planId: string): Prom
     isActive: r.is_active,
     basisCode: r.basis_code,
     ratioPerBasis: r.ratio_per_basis === null ? null : Number(r.ratio_per_basis),
+    source: toSourceRef(r.source_id, r.source_code, r.source_title, r.source_url),
   }));
+}
+
+/** LEFT JOIN yang tidak ketemu memberi seluruh kolomnya null; itu artinya baris
+ *  ini tidak mengutip registri, bukan mengutip sumber tanpa nama. */
+function toSourceRef(
+  id: string | null, code: string | null, title: string | null, url: string | null,
+): BudgetSourceRef | null {
+  return id === null ? null : { id, code: code ?? "", title: title ?? "", url };
 }
 
 /** Ringkasan per fase — dasar simulasi drawdown yang dibahas rapat. */
@@ -236,6 +286,8 @@ export async function addBudgetPlanItem(
     costKind: "capex" | "opex"; stage: string | null; driver: string | null;
     sourceRef: string | null; confidence: "high" | "medium" | "low" | null;
     excludeFromContingency: boolean;
+    /** 0063. Berdampingan dengan sourceRef, tidak menggantikannya. */
+    sourceId: string | null;
   },
 ): Promise<void> {
   // added_after_approval ditentukan DARI STATUS RAB-nya, bukan dari kiriman
@@ -246,15 +298,17 @@ export async function addBudgetPlanItem(
     `INSERT INTO app.budget_plan_items
        (plan_id, phase_month, cost_category_id, description, item_kind, volume,
         uom_item_id, unit_price_idr, note, created_by, added_after_approval,
-        cost_kind, stage, driver, source_ref, confidence, exclude_from_contingency)
+        cost_kind, stage, driver, source_ref, confidence, exclude_from_contingency,
+        source_id)
      SELECT $1,$2,$3,$4,$5::app.budget_item_kind,$6,$7,$8,$9,$10,
             (p.approval_status = 'approved'),
-            $11::app.budget_cost_kind,$12,$13,$14,$15::app.assumption_confidence,$16
+            $11::app.budget_cost_kind,$12,$13,$14,$15::app.assumption_confidence,$16,
+            $17
        FROM app.budget_plans p WHERE p.id = $1`,
     [input.planId, input.phaseMonth, input.costCategoryId, input.description, input.itemKind,
      input.volume, input.uomItemId, input.unitPriceIdr, input.note, ctx.userId,
      input.costKind, input.stage, input.driver, input.sourceRef, input.confidence,
-     input.excludeFromContingency],
+     input.excludeFromContingency, input.sourceId],
   );
 }
 
@@ -330,12 +384,17 @@ export async function listBudgetAssumptions(
     id: string; code: string; label: string; value: string; unit: string | null;
     source_ref: string | null; confidence: "high" | "medium" | "low" | null;
     note: string | null; used_by: number;
+    source_id: string | null; source_code: string | null;
+    source_title: string | null; source_url: string | null;
   }>(
     ctx,
     `SELECT a.id, a.code, a.label, a.value, a.unit, a.source_ref, a.confidence, a.note,
             (SELECT count(*)::int FROM app.budget_plan_items i
-              WHERE i.plan_id = a.plan_id AND i.basis_code = a.code) AS used_by
+              WHERE i.plan_id = a.plan_id AND i.basis_code = a.code) AS used_by,
+            src.id AS source_id, src.code AS source_code,
+            src.title AS source_title, src.url AS source_url
        FROM app.budget_assumptions a
+       LEFT JOIN app.budget_sources src ON src.id = a.source_id
       WHERE a.plan_id = $1
       ORDER BY a.sort_order, a.code`,
     [planId],
@@ -350,7 +409,67 @@ export async function listBudgetAssumptions(
     confidence: r.confidence,
     note: r.note,
     usedBy: r.used_by,
+    source: toSourceRef(r.source_id, r.source_code, r.source_title, r.source_url),
   }));
+}
+
+/**
+ * Registri sumber satu ENTITAS — bukan satu RAB.
+ *
+ * Satu SK Gubernur dikutip banyak RAB; menyalinnya per RAB akan melahirkan
+ * sepuluh versi yang perlahan berbeda isi (lihat kepala migrasi 0063).
+ * `citedBy` dihitung di SQL supaya layar bisa memberi tahu sebuah sumber masih
+ * dipakai SEBELUM ada yang mencoba menghapusnya — FK ON DELETE RESTRICT akan
+ * menolaknya, dan penolakan yang bisa ditebak lebih baik daripada galat.
+ */
+export async function listBudgetSources(ctx: RlsContext): Promise<BudgetSourceRow[]> {
+  const rows = await rlsQuery<{
+    id: string; code: string; topic: string | null; title: string; url: string | null;
+    published_on: string | null; accessed_on: string | null;
+    confidence: "high" | "medium" | "low" | null; note: string | null; cited_by: number;
+  }>(
+    ctx,
+    `SELECT s.id, s.code, s.topic, s.title, s.url,
+            to_char(s.published_on, 'YYYY-MM-DD') AS published_on,
+            to_char(s.accessed_on,  'YYYY-MM-DD') AS accessed_on,
+            s.confidence, s.note,
+            ((SELECT count(*) FROM app.budget_plan_items i WHERE i.source_id = s.id)
+           + (SELECT count(*) FROM app.budget_assumptions a WHERE a.source_id = s.id))::int AS cited_by
+       FROM app.budget_sources s
+      ORDER BY s.topic NULLS LAST, s.code`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    topic: r.topic,
+    title: r.title,
+    // null dipertahankan: sumber tanpa tautan/tanggal dirender em-dash, bukan
+    // string kosong yang terlihat seperti kolom yang lupa diisi.
+    url: r.url,
+    publishedOn: r.published_on,
+    accessedOn: r.accessed_on,
+    confidence: r.confidence,
+    note: r.note,
+    citedBy: r.cited_by,
+  }));
+}
+
+export async function createBudgetSource(
+  ctx: RlsContext,
+  input: {
+    code: string; topic: string | null; title: string; url: string | null;
+    publishedOn: string | null; accessedOn: string | null;
+    confidence: "high" | "medium" | "low" | null; note: string | null;
+  },
+): Promise<void> {
+  await rlsQuery(
+    ctx,
+    `INSERT INTO app.budget_sources
+       (company_id, code, topic, title, url, published_on, accessed_on, confidence, note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6::date,$7::date,$8::app.assumption_confidence,$9,$10)`,
+    [ctx.companyId, input.code, input.topic, input.title, input.url,
+     input.publishedOn, input.accessedOn, input.confidence, input.note, ctx.userId],
+  );
 }
 
 export async function addBudgetAssumption(
@@ -358,17 +477,19 @@ export async function addBudgetAssumption(
   input: {
     planId: string; code: string; label: string; value: number; unit: string | null;
     sourceRef: string | null; confidence: "high" | "medium" | "low" | null; note: string | null;
+    sourceId: string | null;
   },
 ): Promise<void> {
   await rlsQuery(
     ctx,
     `INSERT INTO app.budget_assumptions
        (plan_id, code, label, value, unit, source_ref, confidence, note, created_by,
-        sort_order)
+        sort_order, source_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7::app.assumption_confidence,$8,$9,
-             COALESCE((SELECT max(sort_order) + 1 FROM app.budget_assumptions WHERE plan_id = $1), 0))`,
+             COALESCE((SELECT max(sort_order) + 1 FROM app.budget_assumptions WHERE plan_id = $1), 0),
+             $10)`,
     [input.planId, input.code, input.label, input.value, input.unit, input.sourceRef,
-     input.confidence, input.note, ctx.userId],
+     input.confidence, input.note, ctx.userId, input.sourceId],
   );
 }
 
@@ -381,11 +502,14 @@ export async function updateBudgetAssumptionValue(
   ctx: RlsContext,
   id: string,
   value: number,
+  sourceId: string | null,
 ): Promise<number> {
   return withRls(ctx, async (c) => {
     const r = await c.query(
-      `UPDATE app.budget_assumptions SET value = $2, updated_at = now() WHERE id = $1`,
-      [id, value],
+      `UPDATE app.budget_assumptions
+          SET value = $2, source_id = $3, updated_at = now()
+        WHERE id = $1`,
+      [id, value, sourceId],
     );
     return r.rowCount ?? 0;
   });

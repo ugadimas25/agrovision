@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, ClipboardList, TriangleAlert } from "lucide-react";
 import { requireContext } from "@/lib/session";
-import { budgetPlanByPhase, getBudgetPlan, listBudgetAssumptions, listBudgetPlanItems } from "@/lib/repo/budgetPlan";
+import {
+  budgetPlanByPhase, getBudgetPlan, listBudgetAssumptions, listBudgetPlanItems,
+  listBudgetSources,
+} from "@/lib/repo/budgetPlan";
 import { listCategoryOptions, listOptions } from "@/lib/repo/master";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -13,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { AssumptionPanel } from "./AssumptionPanel";
 import { ItemForm } from "./ItemForm";
 import { PlanDecision } from "./PlanDecision";
+import { SourcePanel } from "./SourcePanel";
+import { SourceLink } from "./SourceLink";
 
 export const metadata = { title: "Detail RAB — AgroVision" };
 
@@ -46,12 +51,14 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
   // benar-benar tidak ada ATAU milik entitas lain — keduanya 404 bagi pemanggil.
   if (!plan) notFound();
 
-  const [items, perPhase, categories, uoms, assumptions] = await Promise.all([
+  const [items, perPhase, categories, uoms, assumptions, sources] = await Promise.all([
     listBudgetPlanItems(ctx, id),
     budgetPlanByPhase(ctx, id),
     listCategoryOptions(ctx),
     listOptions(ctx, "uom"),
     listBudgetAssumptions(ctx, id),
+    // Registri milik entitas, bukan RAB ini — jadi tanpa `id` (migrasi 0063).
+    listBudgetSources(ctx),
   ]);
 
   const role = ctx.session.role;
@@ -115,7 +122,16 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
       {/* Asumsi didahulukan di layar karena didahulukan juga secara logika:
           baris RAB menunjuk kodenya, jadi basis harus ada lebih dulu. */}
       <div className="mb-5">
-        <AssumptionPanel planId={plan.id} assumptions={assumptions} canEdit={canAddItem} />
+        <AssumptionPanel planId={plan.id} assumptions={assumptions} canEdit={canAddItem} sources={sources} />
+      </div>
+
+      {/* Registri sumber (0063). Ditempatkan setelah asumsi karena urutan
+          logikanya begitu: sumber menjelaskan dari mana asumsi berasal, dan
+          asumsi menggerakkan baris. Terlihat oleh SEMUA peran — viewer pun
+          harus bisa memeriksa dasar angka yang sedang ia baca; yang dibatasi
+          hanya siapa yang boleh mendaftarkan. */}
+      <div className="mb-5">
+        <SourcePanel sources={sources} canEdit={canAddItem} />
       </div>
 
       {canAddItem && (
@@ -127,6 +143,7 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
             categories={categories}
             uoms={uoms}
             afterApproval={plan.approvalStatus === "approved"}
+            sources={sources}
           />
         </div>
       )}
@@ -195,8 +212,18 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
                               keyakinan belum dinilai
                             </span>
                           )}
+                          {/* Kutipan yang bisa dibuka ulang (0063) dan
+                              keterangan bebas (0061) ditampilkan BERDAMPINGAN.
+                              Baris yang hanya punya keterangan bebas bukan
+                              baris yang setengah jadi: "Upah lisan rapat 26 Agu,
+                              belum ada penawaran kontraktor" memang tidak punya
+                              tautan, dan menyembunyikannya justru membuang
+                              informasi yang paling jujur di baris itu. */}
+                          {it.source && <SourceLink source={it.source} className="text-xs" />}
                           <span className="text-xs text-slate-400">
-                            {it.sourceRef ? `sumber: ${it.sourceRef}` : "sumber belum disebutkan"}
+                            {it.sourceRef
+                              ? `sumber: ${it.sourceRef}`
+                              : it.source === null ? "sumber belum disebutkan" : ""}
                             {it.driver ? ` · penggerak: ${it.driver}` : ""}
                             {it.excludeFromContingency ? " · di luar kontingensi" : ""}
                             {!it.isActive ? " · DICORET" : ""}

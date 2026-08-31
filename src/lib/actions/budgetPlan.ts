@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireRole } from "@/lib/session";
 import {
-  addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, decideBudgetPlan,
-  setBudgetPlanItemActive, submitBudgetPlan, updateBudgetAssumptionValue,
+  addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
+  decideBudgetPlan, setBudgetPlanItemActive, submitBudgetPlan, updateBudgetAssumptionValue,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -45,6 +45,15 @@ function toMessage(e: unknown): string {
   }
   if (/melewati horizon/.test(raw)) return raw;   // pesan trigger 0060 sudah jelas
   if (/rejection_needs_reason/.test(raw)) return "Penolakan wajib menyertakan alasan.";
+  // 0063. Pesan trigger/CHECK-nya sudah menjelaskan diri, jadi diteruskan apa
+  // adanya — kecuali dua yang butuh terjemahan dari nama constraint.
+  if (/budget_sources_company_id_code_key/.test(raw)) {
+    return "Kode sumber itu sudah dipakai di registri entitas ini.";
+  }
+  if (/budget_sources_url_check/.test(raw)) {
+    return "URL harus diawali http:// atau https://. Sumber tanpa tautan cukup dikosongkan.";
+  }
+  if (/sudah dikutip RAB|tidak terdaftar di entitas/.test(raw)) return raw;
   if (/row-level security/.test(raw)) return "Anda tidak berhak mengubah RAB ini.";
   return raw;
 }
@@ -110,6 +119,10 @@ const itemSchema = z.object({
   // constraint bpi_basis_berpasangan menegakkan hal yang sama di database.
   basisCode: z.string().trim().regex(/^[a-z][a-z0-9_]{1,40}$/).nullable().catch(null),
   ratioPerBasis: z.coerce.number().positive().max(1e9).nullable().catch(null),
+  // 0063: sumber dari registri. TIDAK wajib, dan itu disengaja — memaksa setiap
+  // baris menunjuk registri hanya akan melahirkan sumber karangan agar formulir
+  // lewat. sourceRef di atas tetap menampung keterangan bebas.
+  sourceId: z.string().uuid().nullable().catch(null),
 }).refine((v) => (v.basisCode === null) === (v.ratioPerBasis === null), {
   message: "Basis dan rasio harus diisi berpasangan", path: ["ratioPerBasis"],
 }).refine((v) => v.basisCode !== null || v.volume > 0, {
@@ -144,6 +157,7 @@ export async function addItemAction(_p: PlanState, fd: FormData): Promise<PlanSt
       excludeFromContingency: fd.get("excludeFromContingency") === "on",
       basisCode: kosong(fd.get("basisCode")),
       ratioPerBasis: kosong(fd.get("ratioPerBasis")),
+      sourceId: kosong(fd.get("sourceId")),
     });
     if (!parsed.success) {
       return { ok: false, message: parsed.error.issues[0]?.message ?? "Isian tidak valid", fieldErrors: fieldErrors(parsed.error) };
@@ -250,6 +264,7 @@ const assumptionSchema = z.object({
   sourceRef: z.string().trim().max(300).nullable().catch(null),
   confidence: z.enum(["high", "medium", "low"]).nullable().catch(null),
   note: z.string().trim().max(500).nullable().catch(null),
+  sourceId: z.string().uuid().nullable().catch(null),
 });
 
 export async function addAssumptionAction(_p: PlanState, fd: FormData): Promise<PlanState> {
@@ -266,6 +281,7 @@ export async function addAssumptionAction(_p: PlanState, fd: FormData): Promise<
       sourceRef: kosong(fd.get("sourceRef")),
       confidence: kosong(fd.get("confidence")),
       note: kosong(fd.get("note")),
+      sourceId: kosong(fd.get("sourceId")),
     });
     if (!parsed.success) {
       return { ok: false, message: parsed.error.issues[0]?.message ?? "Isian tidak valid", fieldErrors: fieldErrors(parsed.error) };
@@ -294,12 +310,76 @@ export async function updateAssumptionAction(_p: PlanState, fd: FormData): Promi
     const value = z.coerce.number().min(0).max(1e15).safeParse(fd.get("value"));
     if (!id.success || !planId.success) return { ok: false, message: "Asumsi tidak valid." };
     if (!value.success) return { ok: false, message: "Nilai asumsi tidak valid." };
+    // Kosong = sumber sengaja DILEPAS, bukan "tidak dikirim". Formulirnya selalu
+    // menyertakan pilihan ini, jadi keduanya tidak bisa tertukar.
+    const rawSumber = fd.get("sourceId");
+    const sumber = rawSumber === null || String(rawSumber).trim() === ""
+      ? null
+      : z.string().uuid().safeParse(rawSumber);
+    if (sumber !== null && !sumber.success) return { ok: false, message: "Sumber tidak valid." };
 
-    const n = await updateBudgetAssumptionValue(ctx, id.data, value.data);
+    const n = await updateBudgetAssumptionValue(
+      ctx, id.data, value.data, sumber === null ? null : sumber.data);
     revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
     return n === 0
       ? { ok: false, message: "Asumsi tidak bisa diubah — RAB ini sudah diajukan atau bukan susunan Anda." }
       : { ok: true, message: "Asumsi diperbarui. Baris yang memakainya ikut dihitung ulang." };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+/**
+ * Registri sumber (0063) — tahap 5 docs/19-rab-dari-excel-banyumas.md.
+ *
+ * Peran penulisnya sama dengan RAB: agronomis mendaftarkan rujukan teknis,
+ * finance mendaftarkan penawaran vendor. Gerbang sebenarnya tetap di database
+ * (policy bs_write_insert), yang berlaku walau requireRole di bawah terlewat.
+ *
+ * Registri milik ENTITAS, bukan satu RAB — karena itu tidak ada planId di sini.
+ */
+const sourceSchema = z.object({
+  code: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$/,
+    "Kode sumber: huruf/angka, boleh titik, garis, dan garis bawah — mis. S07"),
+  topic: z.string().trim().max(120).nullable().catch(null),
+  title: z.string().trim().min(1, "Judul sumber wajib diisi").max(300),
+  // URL wajib benar-benar URL. Sumber lisan DIKOSONGKAN, tidak diisi kalimat:
+  // tautan mati lebih buruk daripada tidak ada tautan, karena ia mengaku bisa
+  // diperiksa. CHECK di 0063 menegakkan hal yang sama di database.
+  url: z.url("URL harus diawali http:// atau https://").max(1000).nullable().catch(null),
+  // Tanggal terbit dikosongkan bila sumbernya hanya menyebut tahun. Menebak
+  // 1 Januari mengarang presisi yang tidak ada di sumbernya.
+  publishedOn: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().catch(null),
+  accessedOn: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().catch(null),
+  confidence: z.enum(["high", "medium", "low"]).nullable().catch(null),
+  note: z.string().trim().max(1000).nullable().catch(null),
+});
+
+export async function addSourceAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    if (!ctx.companyId) {
+      return { ok: false, message: "Pilih satu entitas dulu di pojok kanan atas — registri sumber milik satu entitas." };
+    }
+    const kosong = (v: FormDataEntryValue | null) =>
+      v === null || String(v).trim() === "" ? null : v;
+    const parsed = sourceSchema.safeParse({
+      code: fd.get("code"),
+      topic: kosong(fd.get("topic")),
+      title: fd.get("title"),
+      url: kosong(fd.get("url")),
+      publishedOn: kosong(fd.get("publishedOn")),
+      accessedOn: kosong(fd.get("accessedOn")),
+      confidence: kosong(fd.get("confidence")),
+      note: kosong(fd.get("note")),
+    });
+    if (!parsed.success) {
+      return { ok: false, message: parsed.error.issues[0]?.message ?? "Isian tidak valid", fieldErrors: fieldErrors(parsed.error) };
+    }
+    await createBudgetSource(ctx, parsed.data);
+    // Registri dipakai seluruh RAB entitas ini, bukan hanya yang sedang dibuka.
+    revalidatePath("/costing/rencana-anggaran", "layout");
+    return { ok: true, message: `Sumber ${parsed.data.code} masuk registri.` };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }
