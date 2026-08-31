@@ -11,6 +11,43 @@ import { formatIdr, formatNumber, EMPTY } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const awal: ImporState = { ok: false, message: "" };
+
+/**
+ * Padanan kata antara TAHAP di berkas (fase proyek, berbahasa Inggris) dan
+ * KATEGORI BIAYA di master (agronomis, berbahasa Indonesia).
+ *
+ * Dipakai HANYA oleh tombol "cocokkan otomatis" — tidak pernah mengisi sendiri
+ * saat pratinjau dibuka. Bedanya penting: yang diisi karena ditekan bisa
+ * diperiksa, yang terisi sendiri lolos tanpa dilihat. Kategori yang salah tidak
+ * memunculkan galat apa pun; ia hanya membuat laporan biaya berbohong dengan
+ * rapi.
+ *
+ * Tahap yang tidak punya padanan sengaja dibiarkan kosong. Sebagian besar fase
+ * proyek (A Land, C Drain, F Systems) memang tidak punya kategori agronomis
+ * yang setara, dan memaksakan yang "paling mirip" lebih buruk daripada meminta
+ * orang memilih.
+ */
+const PADANAN: { kunci: string; kata: string[] }[] = [
+  { kunci: "survey", kata: ["survei", "pemetaan", "survey"] },
+  { kunci: "land prep", kata: ["persiapan lahan", "lahan"] },
+  { kunci: "soil", kata: ["pupuk", "tanah"] },
+  { kunci: "planting", kata: ["bibit", "tanam"] },
+  { kunci: "equipment", kata: ["alat", "mekanisasi"] },
+  { kunci: "mobilization", kata: ["logistik", "angkut"] },
+  { kunci: "payroll", kata: ["tenaga kerja", "upah"] },
+];
+
+function cocokkan(tahap: string[], kategori: Option[]): Record<string, string> {
+  const hasil: Record<string, string> = {};
+  for (const t of tahap) {
+    const tl = t.toLowerCase();
+    const p = PADANAN.find((x) => tl.includes(x.kunci));
+    if (!p) continue;
+    const k = kategori.find((c) => p.kata.some((w) => c.label.toLowerCase().includes(w)));
+    if (k) hasil[t] = k.value;
+  }
+  return hasil;
+}
 type Option = { value: string; label: string };
 
 /**
@@ -183,8 +220,26 @@ export function ImporExcel({
                     Jujur, tapi tidak berguna. Satu pilihan untuk semua tahap
                     membereskan kasus yang paling lazim; per-tahap tetap bisa
                     diubah sesudahnya. */}
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setPeta((v) => ({ ...cocokkan(p.tahapUnik, categories), ...v }))}
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Cocokkan otomatis dari nama tahap
+                  </button>
+                  <span className="text-xs text-slate-500">
+                    {(() => {
+                      const n = Object.keys(cocokkan(p.tahapUnik, categories)).length;
+                      return n === 0
+                        ? "Tidak ada tahap yang punya padanan kategori di master entitas ini — pilih manual."
+                        : `${n} dari ${p.tahapUnik.length} tahap punya padanan; sisanya tetap perlu Anda pilih. Periksa sebelum menyimpan.`;
+                    })()}
+                  </span>
+                </div>
+
                 <label className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
-                  <span className="text-slate-600">Terapkan satu kategori ke semua tahap:</span>
+                  <span className="text-slate-600">Atau terapkan satu kategori ke semua tahap:</span>
                   <select
                     defaultValue=""
                     onChange={(e) => {
