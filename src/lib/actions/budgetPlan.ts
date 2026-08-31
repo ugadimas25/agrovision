@@ -574,6 +574,8 @@ export type ImporState = {
     statusModel: StatusModel | null;
     /** Berapa banyak angka yang di berkas berupa RUMUS, bukan ketikan. */
     turunan: { volume: number; harga: number; total: number };
+    /** Bulan mulai per tahap dari sheet 05; kunci tanpa awalan huruf. */
+    jadwalTahap: Record<string, number>;
   };
 };
 
@@ -620,6 +622,7 @@ export async function pratinjauImporAction(_p: ImporState, fd: FormData): Promis
         skenario, namaBerkas: berkas.name, asumsi: hasil.asumsi, komponen: hasil.komponen,
         masalah: hasil.masalah, tahapUnik, satuanTidakDikenal, komponenSudahAda,
         statusModel: hasil.statusModel,
+        jadwalTahap: hasil.jadwalTahap,
         turunan: {
           volume: hasil.komponen.filter((k) => k.volumeDariRumus).length,
           harga: hasil.komponen.filter((k) => k.hargaDariRumus).length,
@@ -682,10 +685,18 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
     // Pemetaan tahap -> kategori biaya, diisi pengguna di pratinjau. Berkasnya
     // tidak punya kolom kategori sama sekali, dan cost_category_id wajib.
     const petaKategori = new Map<string, string>();
+    // Bulan fase per tahap. Berkasnya tidak memuat bulan di 08_CAPEX_RAB, jadi
+    // tanpa ini seluruh baris menumpuk di bulan ke-1 dan "sebaran per bulan"
+    // menjadi satu batang tunggal yang tidak memberi tahu apa pun.
+    const petaBulan = new Map<string, number>();
     for (const kunci of fd.keys()) {
-      if (!kunci.startsWith("kategori_")) continue;
-      const nilai = z.string().uuid().safeParse(fd.get(kunci));
-      if (nilai.success) petaKategori.set(kunci.slice("kategori_".length), nilai.data);
+      if (kunci.startsWith("kategori_")) {
+        const nilai = z.string().uuid().safeParse(fd.get(kunci));
+        if (nilai.success) petaKategori.set(kunci.slice("kategori_".length), nilai.data);
+      } else if (kunci.startsWith("bulanTahap_")) {
+        const nilai = z.coerce.number().int().min(1).max(600).safeParse(fd.get(kunci));
+        if (nilai.success) petaBulan.set(kunci.slice("bulanTahap_".length), nilai.data);
+      }
     }
 
     const uoms = await listOptions(ctx, "unit_of_measure");
@@ -712,11 +723,11 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
         return [];
       }
       return [{
-        // Berkasnya tidak memuat bulan fase sama sekali (05_Workplan_Labor yang
-        // punya Mulai/Selesai belum diimpor), jadi semua baris masuk bulan ke-1
-        // dan harus disesuaikan di tabel. Pratinjau mengatakannya; menebak bulan
-        // dari tahap akan menciptakan jadwal yang tidak pernah disusun siapa pun.
-        phaseMonth: 1,
+        // 08_CAPEX_RAB tidak punya kolom bulan. Yang dipakai adalah bulan yang
+        // DITETAPKAN PENGGUNA per tahap di pratinjau -- boleh diisi sendiri,
+        // boleh diambil dari jadwal sheet 05 lewat tombol. Bila tidak diisi,
+        // jatuh ke bulan ke-1 dan pratinjau mengatakannya.
+        phaseMonth: (k.tahap && petaBulan.get(k.tahap)) || 1,
         costCategoryId: kategori,
         description: k.uraian,
         // Tidak ada kolom jenis di berkas. 'consumable' adalah default kolomnya

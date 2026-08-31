@@ -72,6 +72,10 @@ export function ImporExcel({
   // Pemetaan tahap -> kategori disimpan di sini supaya "terapkan ke semua" bisa
   // ada, dan supaya jumlah baris yang AKAN masuk bisa dihitung sebelum disimpan.
   const [peta, setPeta] = useState<Record<string, string>>({});
+  // Bulan fase per tahap. Bawaannya kosong (= bulan ke-1), bukan diisi dari
+  // jadwal sheet 05 secara otomatis: jadwal yang terpasang tanpa dilihat sama
+  // saja dengan jadwal karangan, hanya kebetulan berasal dari berkas.
+  const [bulan, setBulan] = useState<Record<string, number>>({});
 
   if (!canEdit) return null;
   const p = pra.pratinjau;
@@ -111,10 +115,11 @@ export function ImporExcel({
         </form>
 
         <p className="mt-2 text-xs text-slate-400">
-          Dibaca hanya sheet <b>02_Assumptions</b> dan <b>08_CAPEX_RAB</b>. Sheet rencana kerja
-          (05), peralatan (06), input pertanian (07), dan OPEX 10 tahun (09) belum ikut: ketiganya
-          memakai rentang tahun — Mulai/Selesai, T1…T10, umur manfaat — yang belum punya tempat di
-          aplikasi. Angkanya tetap harus dilihat di Excel sampai bagian itu dibangun.
+          Diimpor dari <b>02_Assumptions</b> dan <b>08_CAPEX_RAB</b>. Dua sheet lain dibaca tapi
+          tidak diimpor: <b>15_Checks</b> untuk status konsistensi model, dan <b>05_Workplan_Labor</b>
+          untuk bulan mulai tiap tahap. Peralatan (06), input pertanian (07), dan OPEX 10 tahun (09)
+          belum ikut — ketiganya memakai rentang tahun (T1…T10, umur manfaat) yang belum punya tempat
+          di aplikasi, jadi angkanya tetap harus dilihat di Excel sampai bagian itu dibangun.
         </p>
 
         {pra.message && !pra.ok && (
@@ -255,6 +260,34 @@ export function ImporExcel({
                   </select>
                 </label>
 
+                {/* Bulan fase per tahap. 08_CAPEX_RAB tidak punya kolomnya, dan
+                    tanpa ini seluruh baris menumpuk di bulan ke-1 sehingga
+                    "sebaran per bulan" jadi satu batang tunggal. Jadwalnya ada
+                    di sheet 05 — ditawarkan lewat tombol, bukan dipasang diam-diam. */}
+                {(() => {
+                  const kunci = (t: string) => t.toLowerCase().replace(/^[a-z]\s+/, "");
+                  const berjadwal = p.tahapUnik.filter((t) => p.jadwalTahap[kunci(t)] !== undefined);
+                  return (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
+                      <button
+                        type="button"
+                        disabled={berjadwal.length === 0}
+                        onClick={() => setBulan((v) => ({
+                          ...Object.fromEntries(berjadwal.map((t) => [t, p.jadwalTahap[kunci(t)]])), ...v,
+                        }))}
+                        className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Ambil bulan dari sheet rencana kerja (05)
+                      </button>
+                      <span className="text-xs text-slate-500">
+                        {berjadwal.length === 0
+                          ? "Berkas ini tidak memuat sheet 05_Workplan_Labor, jadi tidak ada jadwal yang bisa diambil — isi bulannya manual."
+                          : `${berjadwal.length} dari ${p.tahapUnik.length} tahap punya jadwal di berkas. Sisanya tetap bulan ke-1 sampai Anda ubah.`}
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {p.tahapUnik.map((t) => (
                     <label key={t} className="flex items-center gap-2 text-sm">
@@ -267,6 +300,14 @@ export function ImporExcel({
                           <option key={k.value} value={k.value}>{k.label}</option>
                         ))}
                       </select>
+                      <input
+                        type="number" min={1} step={1} name={`bulanTahap_${t}`}
+                        value={bulan[t] ?? 1}
+                        onChange={(e) => setBulan((v) => ({ ...v, [t]: Number(e.target.value) || 1 }))}
+                        aria-label={`Bulan fase untuk tahap ${t}`}
+                        title="Bulan fase"
+                        className="min-h-11 w-16 shrink-0 rounded-md border border-slate-200 px-2 text-right text-sm tabular-nums"
+                      />
                     </label>
                   ))}
                 </div>
@@ -295,8 +336,9 @@ export function ImporExcel({
             )}
 
             <p className="mt-3 text-xs text-slate-500">
-              Semua baris masuk sebagai <b>CAPEX bulan ke-1</b>: berkasnya tidak memuat bulan fase.
-              Sesuaikan langsung di tabel setelah impor.
+              Semua baris masuk sebagai <b>CAPEX</b>. Bulan fase diambil dari kotak di sebelah
+              tiap tahap — berkasnya tidak memuat kolom bulan, jadi yang berlaku adalah yang
+              Anda tetapkan di sini. Tetap bisa disesuaikan langsung di tabel setelah impor.
             </p>
 
             {/* Pratinjau baris — supaya yang menekan Simpan sudah melihat
