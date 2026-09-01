@@ -10,6 +10,7 @@ import {
   listSupplierOptions,
 } from "@/lib/repo/costing";
 import { listCategoryOptions, listOptions } from "@/lib/repo/master";
+import { listPenugasanSaya } from "@/lib/repo/budgetPlan";
 import { searchBlockOptions, listEstateOptions } from "@/lib/repo/blocks";
 import { listCropCodeOptions } from "@/lib/repo/operational";
 import { FilterBar } from "@/components/dashboard/FilterBar";
@@ -105,7 +106,7 @@ export default async function PengeluaranPage({
   // dipilih — di mode "semua entitas" createExpenditureAction menolak, jadi
   // merender formnya cuma menjanjikan yang pasti gagal.
   const formReady = canWrite && Boolean(ctx.companyId);
-  const [categories, units, blockOpts, costCenters, periods, suppliers, autoKategori] = formReady
+  const [categories, units, blockOpts, costCenters, periods, suppliers, autoKategori, penugasanSaya] = formReady
     ? await Promise.all([
         listCategoryOptions(ctx),
         listOptions(ctx, "unit_of_measure"),
@@ -114,8 +115,11 @@ export default async function PengeluaranPage({
         listFiscalPeriodOptions(ctx),
         listSupplierOptions(ctx),
         autoMaterializedCategories(ctx),
+        // 0066: penugasan RAB yang masih terbuka untuk pencatat ini. Kosong
+        // bukan berarti gagal -- tidak semua belanja berasal dari RAB.
+        listPenugasanSaya(ctx),
       ])
-    : [[], [], [], [], [], [], []];
+    : [[], [], [], [], [], [], [], []];
 
   return (
     <div>
@@ -160,6 +164,7 @@ export default async function PengeluaranPage({
             costCenters={costCenters}
             periods={periods}
             suppliers={suppliers}
+            penugasan={penugasanSaya}
           />
         </div>
       )}

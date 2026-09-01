@@ -146,6 +146,10 @@ export async function createExpenditure(
     amountIdr: number;
     note?: string | null;
     externalDocumentNo?: string | null;
+    /** 0066. Penugasan RAB yang direalisasikan pencatatan ini. null = pengeluaran
+     *  di luar RAB (tidak semua belanja berasal dari rencana anggaran). Trigger
+     *  0066 menolak tautan ke penugasan milik orang lain atau entitas lain. */
+    budgetAssignmentId?: string | null;
     evidence: {
       storagePath: string;
       sha256: string;
@@ -160,7 +164,8 @@ export async function createExpenditure(
       `INSERT INTO app.cost_transactions
          (company_id, cost_center_id, block_id, cost_category_id, uom_item_id, supplier_id,
           fiscal_period_id, transaction_date, quantity, unit_price_idr, amount_idr, unit,
-          is_overhead, external_document_no, note, approval_status, created_by, updated_by)
+          is_overhead, external_document_no, note, approval_status, created_by, updated_by,
+          budget_assignment_id)
        VALUES ($1,$2,$3,$4,$5,$6,
                -- Periode fiskal diturunkan dari TANGGAL bila tidak diberikan.
                -- Tanpa ini, pengeluaran tanpa periode tidak akan pernah cocok
@@ -172,7 +177,7 @@ export async function createExpenditure(
                               ORDER BY fp.starts_on LIMIT 1)),
                $8,$9,$10,$11,
                (SELECT code FROM app.master_items WHERE id = $5),
-               $12,$13,$14,'draft',$15,$15)
+               $12,$13,$14,'draft',$15,$15,$16)
        RETURNING id`,
       [
         ctx.companyId,
@@ -190,6 +195,7 @@ export async function createExpenditure(
         input.externalDocumentNo ?? null,
         input.note ?? null,
         ctx.userId,
+        input.budgetAssignmentId ?? null,
       ],
     );
     const id = ct.rows[0].id;

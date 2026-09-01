@@ -235,6 +235,17 @@ async function main() {
   await psql(`DELETE FROM app.audit_log WHERE entity_type='price_list' AND entity_id IN (
                 SELECT id FROM app.price_list WHERE code LIKE 'UJITARIF%')`);
   await psql(`DELETE FROM app.price_list WHERE code LIKE 'UJITARIF%'`);
+  // Urutan wajib: penugasan -> komponen RAB -> master. FK
+  // budget_assignments_plan_item_id_fkey dan
+  // budget_plan_items_cost_category_id_fkey menahan penghapusan dari ujung yang
+  // salah, dan pembersihan yang gagal membuat RUN BERIKUTNYA memulai dengan
+  // sisa data run sebelumnya -- kegagalan yang muncul sebagai uji lain yang
+  // aneh, jauh dari sebabnya.
+  await psql(`DELETE FROM app.budget_assignments WHERE plan_item_id IN (
+                SELECT i.id FROM app.budget_plan_items i
+                 WHERE i.cost_category_id IN (SELECT id FROM app.master_items WHERE code LIKE 'TEST%'))`);
+  await psql(`DELETE FROM app.budget_plan_items WHERE cost_category_id IN (
+                SELECT id FROM app.master_items WHERE code LIKE 'TEST%')`);
   await psql(`DELETE FROM app.master_items WHERE code LIKE 'TEST%'`);
   // Inbox harus terisolasi: sisa transaksi 'submitted' dari run lama akan
   // membuat hitungan item dan pemilihan baris ikut kacau.
@@ -1093,6 +1104,18 @@ async function main() {
     // hitungan uji lain.
     const DEV = "(SELECT id FROM app.companies WHERE code='DEV')";
     const EMAIL = "rab-agronomis@uji.invalid";
+    // Penugasan lebih dulu: FK budget_assignments_plan_item_id_fkey menahan
+    // penghapusan komponen RAB yang sudah pernah ditugaskan.
+    // Realisasi lebih dulu: ct_assignment_same_company memakai ON DELETE
+    // RESTRICT, dan itu memang disengaja -- penugasan yang sudah dibelanjakan
+    // tidak boleh lenyap beserta jejak uangnya. Pembersihan uji karena itu
+    // harus melepas tautannya dari ujung yang benar.
+    await psql(`DELETE FROM app.cost_transactions WHERE budget_assignment_id IN (
+                  SELECT a.id FROM app.budget_assignments a
+                    JOIN app.budget_plans p ON p.id = a.plan_id
+                   WHERE p.code LIKE 'RAB-AT-%')`);
+    await psql(`DELETE FROM app.budget_assignments WHERE plan_id IN (
+                  SELECT id FROM app.budget_plans WHERE code LIKE 'RAB-AT-%')`);
     await psql(`DELETE FROM app.budget_plan_items WHERE plan_id IN (
                   SELECT id FROM app.budget_plans WHERE code LIKE 'RAB-AT-%')`);
     await psql(`DELETE FROM app.budget_plans WHERE code LIKE 'RAB-AT-%'`);
@@ -1315,7 +1338,140 @@ async function main() {
     ok("agronomis tetap bisa MEMBACA RAB yang sudah disetujui",
       agroSesudah.status === 200 && visible(agroSesudah.html).includes("Bibit kelapa"));
 
+    // -----------------------------------------------------------------------
+    // Penugasan lapangan & kurva S serapan (0066).
+    //
+    // Alur rapat: agronomis usulkan -> disetujui -> agronomis bagi tugas ke
+    // creator -> creator realisasikan -> anggaran berkurang.
+    // -----------------------------------------------------------------------
+    const tSet = visible(agroSesudah.html);
+    ok("panel penugasan muncul setelah RAB disetujui", tSet.includes("Penugasan lapangan"));
+
+    // Tanpa tanggal mulai, kurva S TIDAK boleh digambar: bulan fase RAB relatif
+    // sementara realisasi bertanggal sungguhan, jadi keduanya belum sesumbu.
+    ok("kurva S menolak digambar selama tanggal mulai kosong",
+      tSet.includes("tanggal mulai RAB belum ditetapkan"));
+
+    // Diisi FINANCE, bukan agronomis: bp_edit_gate hanya mengizinkan
+    // approver/super_admin menyunting RAB yang sudah disetujui.
+    await fin.submit(`/costing/rencana-anggaran/${id}`,
+      { planId: id, startDate: "2026-09-01" }, { formMarker: 'name="startDate"' });
+    let stlhTgl = await agro.get(`/costing/rencana-anggaran/${id}`);
+    ok("setelah tanggal mulai diisi, kurva S digambar",
+      visible(stlhTgl.html).includes("Kurva S serapan anggaran")
+      && !visible(stlhTgl.html).includes("tanggal mulai RAB belum ditetapkan"));
+    ok("kurva S jujur bahwa belum ada realisasi tertaut",
+      visible(stlhTgl.html).includes("Belum ada pengeluaran disetujui"));
+
+    // Dipilih baris yang volumenya CUKUP untuk ditugasi 5, bukan sekadar opsi
+    // pertama: pagu volume 0066 menolak penugasan yang melebihi baris RAB-nya,
+    // dan begitu daftar barisnya berubah (mis. setelah impor Excel menambah
+    // baris bervolume 1 lot), uji ini akan gagal karena aturan yang justru
+    // bekerja dengan benar. Label opsinya memuat volume: "uraian (7000 BATANG)".
+    const idItem = (() => {
+      // Komentar HTML dibuang dulu: React SSR menyisipkan <!-- --> di antara dua
+      // ekspresi teks bersebelahan, sehingga label opsi yang dibaca manusia
+      // sebagai satu kalimat terpotong di sumbernya dan pola "tanpa < di dalam"
+      // tidak pernah cocok.
+      const sel = (/<select[^>]*name="planItemId"[\s\S]*?<\/select>/.exec(stlhTgl.html)?.[0] ?? "")
+        .replace(/<!--[\s\S]*?-->/g, "");
+      for (const m of sel.matchAll(/<option value="([0-9a-f-]{36})">([^<]*)</g)) {
+        // Angka di layar berformat Indonesia: "7.000" itu tujuh ribu, bukan
+        // tujuh koma nol. Number("7.000") = 7 akan memilih baris yang justru
+        // terlalu kecil, lalu penugasannya ditolak pagu.
+        const teks = (/\(([\d.,]+)\s/.exec(m[2]) ?? [])[1] ?? "0";
+        const vol = Number(teks.replace(/\./g, "").replace(",", "."));
+        if (vol >= 10) return m[1];
+      }
+      return undefined;
+    })();
+    // Sengaja memilih yang berperan CREATOR, bukan opsi pertama: seluruh alur
+    // rapat berujung pada creator yang merealisasikan di lapangan.
+    const idPenerima = (/<option value="([0-9a-f-]{36})">[^<]*\(creator\)/
+      .exec(stlhTgl.html) ?? [])[1];
+    ok("form penugasan menawarkan baris RAB dan penerima tugas",
+      Boolean(idItem) && Boolean(idPenerima));
+
+    if (idItem && idPenerima) {
+      await agro.submit(`/costing/rencana-anggaran/${id}`,
+        { planId: id, planItemId: idItem, assigneeUserId: idPenerima, volume: 5,
+          uomItemId: "", targetDate: "2026-09-30", note: "uji penugasan" },
+        { formMarker: 'name="assigneeUserId"' });
+      stlhTgl = await agro.get(`/costing/rencana-anggaran/${id}`);
+      ok("penugasan tersimpan dan tampil di daftar",
+        visible(stlhTgl.html).includes("uji penugasan"));
+
+      // Pagu volume: baris pertama RAB bervolume 7.000; menugaskan 999.999
+      // harus ditolak DAN pesannya menyebut angkanya, bukan sekadar "gagal".
+      const lebih = await agro.submit(`/costing/rencana-anggaran/${id}`,
+        { planId: id, planItemId: idItem, assigneeUserId: idPenerima, volume: 999999,
+          uomItemId: "", targetDate: "", note: "melebihi pagu" },
+        { formMarker: 'name="assigneeUserId"' });
+      const tLebih = visible(lebih.html);
+      // Pesannya harus menyebut ANGKA pagunya. "Gagal" saja membuat penyusun
+      // menebak-nebak berapa sisa yang masih boleh ditugaskan.
+      // ---------------------------------------------------------------------
+      // Langkah 5 & 6 rapat: creator merealisasikan, finance menyetujui,
+      // anggaran berkurang. Ini satu-satunya bagian yang membuktikan tautannya
+      // benar-benar menggerakkan angka -- sisanya hanya membuktikan formnya ada.
+      // ---------------------------------------------------------------------
+      const formBelanja = await creator.get("/costing/pengeluaran");
+      const idTugas = (new RegExp('name="budgetAssignmentId"[\\s\\S]{0,2000}?<option value="([0-9a-f-]{36})"')
+        .exec(formBelanja.html) ?? [])[1];
+      ok("penugasan muncul di form pengeluaran milik penerimanya", Boolean(idTugas),
+        idTugas ? "" : "dropdown penugasan kosong untuk creator yang ditugasi");
+
+      if (idTugas && blkId && catId) {
+        await creator.submit("/costing/pengeluaran",
+          { isOverhead: "false", blockId: blkId, costCategoryId: catId,
+            transactionDate: "2026-09-15", amountIdr: "12000000",
+            budgetAssignmentId: idTugas },
+          { formMarker: "isOverhead", files: { evidence: fakeJpeg() } });
+
+        const idBelanja = await psql(`SELECT id FROM app.cost_transactions
+                                       WHERE budget_assignment_id='${idTugas}' LIMIT 1`);
+        ok("realisasi tersimpan dengan tautan ke penugasan", Boolean(idBelanja));
+
+        // Sebelum disetujui, ia BUKAN serapan: angka yang belum diputuskan
+        // tidak boleh mengurangi anggaran.
+        let serap = await psql(`SELECT coalesce(sum(realisasi)::text,'NULL')
+                                  FROM app.budget_absorption('${id}')`);
+        ok("realisasi yang belum disetujui TIDAK mengurangi anggaran",
+          serap === "NULL", `serapan=${serap}`);
+
+        await psql(`UPDATE app.cost_transactions
+                       SET approval_status='approved', approval_id=NULL
+                     WHERE budget_assignment_id='${idTugas}'`);
+        serap = await psql(`SELECT coalesce(sum(realisasi)::text,'NULL')
+                              FROM app.budget_absorption('${id}')`);
+        ok("setelah disetujui, anggaran berkurang sebesar realisasinya",
+          serap === "12000000.00", `serapan=${serap}`);
+
+        const stlhSerap = await fin.get(`/costing/rencana-anggaran/${id}`);
+        const tSerap = visible(stlhSerap.html);
+        ok("kurva S menampilkan serapan di layar, bukan hanya di database",
+          tSerap.includes("Terserap") && tSerap.includes("12.000.000"));
+        ok("kurva S berhenti mengatakan 'belum ada pengeluaran disetujui'",
+          !tSerap.includes("Belum ada pengeluaran disetujui"));
+      }
+
+      const pesanPagu = (/>([^<>]*melebihi[^<>]*)</.exec(tLebih) ?? [])[1] ?? "";
+      ok("penugasan melebihi volume baris RAB ditolak, dengan angkanya disebut",
+        !tLebih.includes("Penugasan dibuat.") && /\d/.test(pesanPagu),
+        pesanPagu.trim().slice(0, 100) || "tidak ada pesan pagu yang terbaca");
+    }
+
     // Bersihkan: pemulihan tidak boleh jadi langkah yang bisa terlewat.
+    // Realisasi lebih dulu: ct_assignment_same_company memakai ON DELETE
+    // RESTRICT, dan itu memang disengaja -- penugasan yang sudah dibelanjakan
+    // tidak boleh lenyap beserta jejak uangnya. Pembersihan uji karena itu
+    // harus melepas tautannya dari ujung yang benar.
+    await psql(`DELETE FROM app.cost_transactions WHERE budget_assignment_id IN (
+                  SELECT a.id FROM app.budget_assignments a
+                    JOIN app.budget_plans p ON p.id = a.plan_id
+                   WHERE p.code LIKE 'RAB-AT-%')`);
+    await psql(`DELETE FROM app.budget_assignments WHERE plan_id IN (
+                  SELECT id FROM app.budget_plans WHERE code LIKE 'RAB-AT-%')`);
     await psql(`DELETE FROM app.budget_plan_items WHERE plan_id IN (
                   SELECT id FROM app.budget_plans WHERE code LIKE 'RAB-AT-%')`);
     await psql(`DELETE FROM app.budget_plans WHERE code LIKE 'RAB-AT-%'`);

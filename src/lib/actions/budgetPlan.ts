@@ -7,7 +7,7 @@ import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
 import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
   decideBudgetPlan, deleteBudgetPlanItem, setBudgetPlanItemActive, submitBudgetPlan,
-  updateBudgetAssumptionValue, updateBudgetPlanItems,
+  updateBudgetAssumptionValue, updateBudgetPlanItems, buatPenugasan, setTanggalMulai,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -528,6 +528,68 @@ export async function addSourceAction(_p: PlanState, fd: FormData): Promise<Plan
     // Registri dipakai seluruh RAB entitas ini, bukan hanya yang sedang dibuka.
     revalidatePath("/costing/rencana-anggaran", "layout");
     return { ok: true, message: `Sumber ${parsed.data.code} masuk registri.` };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+// ===========================================================================
+// Penugasan (0066): agronomis membagi baris RAB yang sudah disetujui kepada
+// creator yang akan merealisasikannya di lapangan.
+// ===========================================================================
+
+const penugasanSchema = z.object({
+  planId: z.string().uuid(),
+  planItemId: z.string().uuid("Pilih baris RAB yang ditugaskan"),
+  assigneeUserId: z.string().uuid("Pilih penerima tugas"),
+  volume: z.coerce.number().positive("Volume tugas harus lebih dari 0").max(1e12),
+  uomItemId: z.string().uuid().nullable(),
+  targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  note: z.string().trim().max(500).nullable(),
+});
+
+export async function buatPenugasanAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    // Yang membagi tugas adalah penyusun RAB-nya. Approver tidak masuk daftar:
+    // ia memutuskan anggaran, bukan membagi pekerjaan lapangan.
+    const ctx = await requireRole("agronomist", "super_admin");
+    const p = penugasanSchema.safeParse({
+      planId: fd.get("planId"),
+      planItemId: fd.get("planItemId"),
+      assigneeUserId: fd.get("assigneeUserId"),
+      volume: fd.get("volume"),
+      uomItemId: kosongkan(fd.get("uomItemId")),
+      targetDate: kosongkan(fd.get("targetDate")),
+      note: kosongkan(fd.get("note")),
+    });
+    if (!p.success) {
+      return { ok: false, message: p.error.issues[0]?.message ?? "Isian penugasan tidak lengkap" };
+    }
+    await buatPenugasan(ctx, p.data);
+    revalidatePath(`/costing/rencana-anggaran/${p.data.planId}`);
+    return { ok: true, message: "Penugasan dibuat." };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
+export async function setTanggalMulaiAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    const tgl = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable()
+      .safeParse(kosongkan(fd.get("startDate")));
+    if (!planId.success || !tgl.success) return { ok: false, message: "Tanggal tidak valid." };
+
+    const n = await setTanggalMulai(ctx, planId.data, tgl.data);
+    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
+    if (n === 0) return { ok: false, message: "Tanggal mulai tidak bisa diubah — RAB ini bukan susunan Anda, atau statusnya tidak mengizinkan." };
+    return {
+      ok: true,
+      message: tgl.data
+        ? "Tanggal mulai disimpan. Kurva S memakai tanggal ini sebagai bulan ke-1."
+        : "Tanggal mulai dikosongkan. Kurva S tidak akan digambar sampai diisi lagi.",
+    };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }

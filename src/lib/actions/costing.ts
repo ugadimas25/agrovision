@@ -78,6 +78,10 @@ const expenditureSchema = z
     unitPriceIdr: z.union([money, z.literal("")]).optional(),
     amountIdr: money.refine((v) => v > 0, "Total biaya harus lebih dari 0"),
     externalDocumentNo: z.string().trim().max(80).optional(),
+    // 0066: realisasi boleh menunjuk penugasan RAB. Opsional — tidak semua
+    // belanja berasal dari rencana anggaran, dan memaksakannya akan membuat
+    // pengeluaran di luar RAB tidak bisa dicatat sama sekali.
+    budgetAssignmentId: z.union([z.string().uuid("Penugasan tidak valid"), z.literal("")]).optional(),
     note: z.string().trim().max(1000).optional(),
   })
   .refine((d) => (d.isOverhead === "true" ? !d.blockId : Boolean(d.blockId)), {
@@ -125,6 +129,7 @@ export async function createExpenditureAction(
       unitPriceIdr: formData.get("unitPriceIdr") || "",
       amountIdr: formData.get("amountIdr"),
       externalDocumentNo: formData.get("externalDocumentNo") ?? "",
+      budgetAssignmentId: formData.get("budgetAssignmentId") ?? "",
       note: formData.get("note") ?? "",
     });
     if (!parsed.success) {
@@ -149,6 +154,7 @@ export async function createExpenditureAction(
       blockId: d.isOverhead === "true" ? null : (d.blockId as string),
       isOverhead: d.isOverhead === "true",
       costCategoryId: d.costCategoryId,
+      budgetAssignmentId: d.budgetAssignmentId ? d.budgetAssignmentId : null,
       costCenterId: d.costCenterId || null,
       supplierId: d.supplierId || null,
       uomItemId: d.uomItemId || null,

@@ -32,6 +32,7 @@ export function ExpenditureForm({
   costCenters,
   periods,
   suppliers,
+  penugasan,
 }: {
   categories: Opt[];
   units: Opt[];
@@ -39,6 +40,8 @@ export function ExpenditureForm({
   costCenters: Opt[];
   periods: Opt[];
   suppliers: Opt[];
+  /** 0066: penugasan RAB yang masih terbuka untuk pencatat ini. */
+  penugasan: Opt[];
 }) {
   const [state, formAction, pending] = useActionState(createExpenditureAction, initial);
   const [overhead, setOverhead] = useState(false);
@@ -172,6 +175,30 @@ export function ExpenditureForm({
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* Tautan ke penugasan RAB — inilah yang membuat anggaran berkurang.
+                Tanpa tautan, pengeluaran tetap tercatat tapi tidak muncul di
+                serapan RAB mana pun; itu sah (tidak semua belanja berasal dari
+                RAB) dan karena itu opsional, bukan wajib.
+
+                Daftarnya kosong bila pencatat tidak sedang ditugasi apa pun —
+                dan kalimat di bawah mengatakannya, supaya kosong tidak terbaca
+                sebagai fitur yang rusak. */}
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-500">
+                Realisasi dari penugasan RAB (opsional)
+              </span>
+              <select name="budgetAssignmentId" defaultValue=""
+                className="min-h-11 w-full rounded-md border border-slate-200 px-3 text-sm">
+                <option value="">— di luar RAB —</option>
+                {penugasan.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+              <span className="mt-1 block text-xs text-slate-400">
+                {penugasan.length === 0
+                  ? "Belum ada penugasan RAB untuk Anda. Pengeluaran ini tercatat di luar RAB."
+                  : "Dipilih = anggaran baris itu berkurang setelah pengeluaran disetujui."}
+              </span>
+            </label>
+
             <Field label="No. dokumen eksternal (opsional)" name="externalDocumentNo" />
             <Field label="Catatan (opsional)" name="note" />
           </div>

@@ -1223,6 +1223,327 @@ async function run() {
   r = await c.query(`SELECT count(*)::int n FROM app.check_budget_derived_volume()`)
   ok('check_budget_derived_volume() bersih setelah cascade lintas peran', r.rows[0].n === 0)
 
+  // =========================================================================
+  // 0066: penugasan RAB dan serapan anggaran
+  //
+  // Rantai yang diuji di sini adalah rantai uang: RAB disetujui -> agronomis
+  // menugaskan sebagian volume ke satu orang -> orang itu mencatat
+  // pengeluarannya -> anggarannya berkurang. Setiap sambungan punya cara
+  // gagalnya sendiri, dan hampir semuanya gagal DIAM kalau tidak dijaga:
+  //
+  //   - penugasan dari RAB yang belum disetujui  -> orang membelanjakan angka
+  //     yang belum diputuskan siapa pun;
+  //   - penugasan melebihi volume barisnya       -> satu baris 10 kg ditugaskan
+  //     tiga kali penuh, dan RAB yang disetujui berubah tanpa keputusan baru;
+  //   - penugasan lintas entitas                 -> FK dievaluasi mesin dan
+  //     MELEWATI policy (pelajaran 0063), jadi RLS saja tidak menutupnya;
+  //   - realisasi ditaut ke penugasan orang lain -> "siapa membelanjakan jatah
+  //     ini" kehilangan jawabannya;
+  //   - realisasi draft dihitung sebagai serapan -> angka yang belum diputuskan
+  //     siapa pun muncul sebagai uang yang sudah terpakai.
+  //
+  // Dua bentuk penolakan dibedakan sepanjang blok ini. Pelanggaran WITH CHECK
+  // dan RAISE dari trigger MELEMPAR (mustFail). Penyaringan klausa USING DIAM:
+  // nol baris, tanpa galat. Untuk yang diam, yang diperiksa selalu DUA hal --
+  // nol baris berubah DAN datanya masih utuh. rowCount saja tidak membuktikan
+  // apa pun: UPDATE yang tersaring dan UPDATE yang kebetulan tidak menemukan
+  // barisnya terlihat sama persis.
+  // =========================================================================
+  console.log('\n=== 0066: penugasan RAB (pagu volume, assignee, serapan) ===')
+
+  await as(U_AGRO, 'agronomist', CA)
+  const rab6 = await c.query(
+    `INSERT INTO app.budget_plans (company_id, code, name, horizon_months, created_by)
+     VALUES ($1,'RAB-TUGAS','RAB uji penugasan',12,$2) RETURNING id`, [CA, U_AGRO])
+  const RAB6 = rab6.rows[0].id
+
+  const itemA = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       item_kind, volume, unit_price_idr, created_by)
+     VALUES ($1,1,$2,'Pupuk KCL','consumable',10,50000,$3) RETURNING id`,
+    [RAB6, CAT, U_AGRO])
+  const ITEM_A = itemA.rows[0].id                       // anggaran Rp 500.000, volume 10
+
+  const itemB = await c.query(
+    `INSERT INTO app.budget_plan_items (plan_id, phase_month, cost_category_id, description,
+       item_kind, volume, unit_price_idr, created_by)
+     VALUES ($1,3,$2,'Bibit kelapa','consumable',100,1000,$3) RETURNING id`,
+    [RAB6, CAT, U_AGRO])
+  const ITEM_B = itemB.rows[0].id                       // anggaran Rp 100.000, tanpa penugasan
+
+  // --- RAB belum disetujui: tidak boleh ada penugasan sama sekali -----------
+  await mustFail(c, 'penugasan pada RAB yang BELUM disetujui DITOLAK',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,2,$5)`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_AGRO], /belum disetujui/i)
+
+  await c.query(`UPDATE app.budget_plans SET approval_status = 'submitted' WHERE id = $1`, [RAB6])
+  await mustFail(c, 'penugasan pada RAB yang baru DIAJUKAN juga DITOLAK',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,2,$5)`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_AGRO], /belum disetujui/i)
+
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(
+    `UPDATE app.budget_plans SET approval_status = 'approved', decided_by = $2, decided_at = now()
+      WHERE id = $1`, [RAB6, U_APPROVER])
+
+  // --- Kontrol positif: inti alurnya harus tetap hidup ----------------------
+  // Tanpa uji ini, tambalan yang menolak SEGALANYA juga "lulus" seluruh uji
+  // penolakan di bawah.
+  await as(U_AGRO, 'agronomist', CA)
+  const tugasDede = await c.query(
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, uom_item_id, target_date, note, created_by)
+     VALUES ($1,$2,$3,$4,2,NULL,'2026-01-20','Siapkan 2 kg KCL',$5) RETURNING id, status`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_AGRO])
+  const TUGAS_DEDE = tugasDede.rows[0].id
+  ok('agronomist BISA menugaskan pada RAB yang sudah disetujui',
+    tugasDede.rowCount === 1 && tugasDede.rows[0].status === 'assigned')
+
+  // --- Pagu volume: total penugasan aktif tidak boleh melewati barisnya -----
+  // Pesannya wajib MENYEBUT angkanya: "melebihi pagu" tanpa angka memaksa orang
+  // membuka layar lain untuk tahu berapa yang masih tersisa.
+  await mustFail(c, 'total penugasan melebihi volume baris RAB DITOLAK (dengan angkanya)',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,9,$5)`,
+    [CA, RAB6, ITEM_A, U_ADMIN, U_AGRO],
+    /volume baris 10, sudah ditugaskan 2, sisa 8, diminta 9/s)
+
+  // Menaikkan volume penugasan yang sudah ada tunduk pagu yang sama -- kalau
+  // hanya INSERT yang digerbang, jalan pintasnya tinggal "buat kecil lalu ubah".
+  await mustFail(c, 'MENAIKKAN volume penugasan sampai melewati pagu DITOLAK',
+    `UPDATE app.budget_assignments SET volume = 11 WHERE id = $1`, [TUGAS_DEDE],
+    /melebihi volume baris RAB/i)
+
+  // --- Assignee: lintas entitas, peran yang tak bisa menutup tugasnya -------
+  await mustFail(c, 'assignee dari entitas lain DITOLAK',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,1,$5)`,
+    [CA, RAB6, ITEM_A, U_TENANT_B, U_AGRO], /tidak terdaftar di entitas ini/i)
+
+  await mustFail(c, 'assignee berperan viewer DITOLAK (tugas yang tak akan pernah bisa ditutup)',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,1,$5)`,
+    [CA, RAB6, ITEM_A, U_VIEWER, U_AGRO], /tidak boleh mencatat realisasi/i)
+
+  // --- Volume nol / negatif ------------------------------------------------
+  // "Nol kg KCL" bukan penugasan; volume negatif akan MENGEMBALIKAN jatah ke
+  // baris RAB dan membuat pagu bisa dilewati lewat penjumlahan.
+  await mustFail(c, 'penugasan bervolume 0 DITOLAK',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,0,$5)`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_AGRO], /volume_check|violates check/i)
+
+  await mustFail(c, 'penugasan bervolume negatif DITOLAK',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,-5,$5)`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_AGRO], /volume_check|violates check/i)
+
+  // --- Baris RAB milik RAB lain: ditutup composite FK, bukan trigger --------
+  await mustFail(c, 'penugasan menunjuk baris RAB milik RAB lain DITOLAK',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,1,$5)`,
+    [CA, RAB6, B_LAMA, U_CREATOR, U_AGRO], /bas_item_in_plan|violates foreign key/i)
+
+  // --- creator = pencatat realisasi, bukan penugas --------------------------
+  await as(U_CREATOR, 'creator', CA)
+  await mustFail(c, 'creator TIDAK bisa membuat penugasan',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,1,$5)`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_CREATOR], /row-level security/i)
+
+  await as(U_VIEWER, 'viewer', CA)
+  await mustFail(c, 'viewer TIDAK bisa membuat penugasan',
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,1,$5)`,
+    [CA, RAB6, ITEM_A, U_CREATOR, U_VIEWER], /row-level security/i)
+
+  // Penugasan kedua, untuk orang lain -- dipakai menguji penyempitan SELECT.
+  await as(U_AGRO, 'agronomist', CA)
+  const tugasAdmin = await c.query(
+    `INSERT INTO app.budget_assignments (company_id, plan_id, plan_item_id, assignee_user_id,
+       volume, created_by) VALUES ($1,$2,$3,$4,1,$5) RETURNING id`,
+    [CA, RAB6, ITEM_A, U_ADMIN, U_AGRO])
+  const TUGAS_ADMIN = tugasAdmin.rows[0].id
+
+  // --- Penyempitan SELECT per penerima (sejajar B-23 / 0054) ---------------
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_assignments WHERE plan_id = $1`, [RAB6])
+  ok('agronomist melihat SELURUH penugasan RAB entitasnya', r.rows[0].n === 2, `${r.rows[0].n} penugasan`)
+
+  await as(U_CREATOR, 'creator', CA)
+  r = await c.query(
+    `SELECT count(*)::int n, count(*) FILTER (WHERE id = $2)::int mine
+       FROM app.budget_assignments WHERE plan_id = $1`, [RAB6, TUGAS_DEDE])
+  ok('creator HANYA melihat penugasan yang diberikan kepadanya',
+    r.rows[0].n === 1 && r.rows[0].mine === 1, `${r.rows[0].n} penugasan terlihat`)
+
+  await as(U_TENANT_B, 'creator', CB)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_assignments WHERE plan_id = $1`, [RAB6])
+  ok('penugasan tenant A TIDAK terlihat oleh tenant B', r.rows[0].n === 0)
+
+  // --- Apa yang boleh diubah PENERIMA tugas --------------------------------
+  await as(U_CREATOR, 'creator', CA)
+  await mustFail(c, 'penerima tugas TIDAK bisa menaikkan volumenya sendiri',
+    `UPDATE app.budget_assignments SET volume = 8 WHERE id = $1`, [TUGAS_DEDE],
+    /hanya boleh mengubah status dan catatan/i)
+
+  await mustFail(c, 'penerima tugas TIDAK bisa membatalkan penugasannya (itu melepas anggaran)',
+    `UPDATE app.budget_assignments SET status = 'cancelled' WHERE id = $1`, [TUGAS_DEDE],
+    /wewenang penugas/i)
+
+  const tandaiSelesai = await c.query(
+    `UPDATE app.budget_assignments SET status = 'done' WHERE id = $1`, [TUGAS_DEDE])
+  ok('penerima tugas BISA menandai tugasnya selesai', tandaiSelesai.rowCount === 1)
+
+  // Diam, bukan melempar: baris lama bukan miliknya, jadi klausa USING
+  // menyaringnya sebelum trigger mana pun sempat berbicara.
+  const ambilAlih = await c.query(
+    `UPDATE app.budget_assignments SET assignee_user_id = $2 WHERE id = $1`,
+    [TUGAS_ADMIN, U_CREATOR])
+  await as(U_AGRO, 'agronomist', CA)
+  r = await c.query(`SELECT assignee_user_id FROM app.budget_assignments WHERE id = $1`, [TUGAS_ADMIN])
+  ok('creator TIDAK bisa mengambil alih penugasan orang lain (nol baris, penerima utuh)',
+    ambilAlih.rowCount === 0 && r.rows[0].assignee_user_id === U_ADMIN,
+    `${ambilAlih.rowCount} baris, penerima ${r.rows[0].assignee_user_id === U_ADMIN ? 'utuh' : 'BERPINDAH'}`)
+
+  // --- Tautan realisasi ----------------------------------------------------
+  await as(U_CREATOR, 'creator', CA)
+  const realisasi1 = await c.query(
+    `INSERT INTO app.cost_transactions (company_id, cost_center_id, block_id, cost_category_id,
+       transaction_date, quantity, unit, amount_idr, budget_assignment_id, created_by)
+     VALUES ($1,$2,$3,$4,'2026-01-10',2,'kg',120000,$5,$6) RETURNING id, approval_status`,
+    [CA, CC, A_BLK1, CAT, TUGAS_DEDE, U_CREATOR])
+  const REAL1 = realisasi1.rows[0].id
+  ok('Pak Dede BISA menaut realisasinya ke penugasan yang diberikan kepadanya',
+    realisasi1.rowCount === 1 && realisasi1.rows[0].approval_status === 'draft')
+
+  await mustFail(c, 'creator TIDAK bisa menaut realisasi ke penugasan orang lain',
+    `INSERT INTO app.cost_transactions (company_id, cost_center_id, block_id, cost_category_id,
+       transaction_date, amount_idr, budget_assignment_id, created_by)
+     VALUES ($1,$2,$3,$4,'2026-01-11',50000,$5,$6)`,
+    [CA, CC, A_BLK1, CAT, TUGAS_ADMIN, U_CREATOR], /diberikan kepada/i)
+
+  await mustFail(c, 'creator TIDAK bisa MEMINDAHKAN realisasinya ke penugasan orang lain',
+    `UPDATE app.cost_transactions SET budget_assignment_id = $2 WHERE id = $1`,
+    [REAL1, TUGAS_ADMIN], /diberikan kepada/i)
+
+  await as(U_TENANT_B, 'creator', CB)
+  await mustFail(c, 'realisasi tenant B TIDAK bisa ditaut ke penugasan tenant A',
+    `INSERT INTO app.cost_transactions (company_id, cost_center_id, block_id, cost_category_id,
+       transaction_date, amount_idr, budget_assignment_id, created_by)
+     VALUES ($1,$2,$3,$4,'2026-01-12',50000,$5,$6)`,
+    [CB, CC, B_BLK1, CAT, TUGAS_DEDE, U_TENANT_B], /tidak ditemukan di entitas ini/i)
+
+  // --- Serapan: hanya realisasi APPROVED yang dihitung ---------------------
+  const serapan = async (itemId) => {
+    const s = await c.query(
+      `SELECT anggaran::text, ditugaskan::text, realisasi::text,
+              belum_diputuskan::text, sisa::text
+         FROM app.budget_absorption($1) WHERE item_id = $2`, [RAB6, itemId])
+    return s.rows[0] ?? {}
+  }
+
+  await as(U_AGRO, 'agronomist', CA)
+  let sA = await serapan(ITEM_A)
+  ok('realisasi berstatus draft TIDAK dihitung sebagai serapan (realisasi NULL)',
+    sA.realisasi === null && sA.belum_diputuskan === '120000.00',
+    `realisasi ${sA.realisasi}, belum_diputuskan ${sA.belum_diputuskan}`)
+  ok('sisa ikut NULL selama belum ada realisasi yang diputuskan (bukan "sisa = anggaran")',
+    sA.sisa === null, `sisa ${sA.sisa}`)
+  ok('ditugaskan menjumlahkan penugasan aktif (2 + 1)', Number(sA.ditugaskan) === 3, `${sA.ditugaskan}`)
+
+  const sB = await serapan(ITEM_B)
+  ok('baris tanpa realisasi tertaut mengembalikan NULL, BUKAN 0',
+    sB.realisasi === null && sB.sisa === null && sB.ditugaskan === null,
+    `realisasi ${sB.realisasi}, ditugaskan ${sB.ditugaskan}, sisa ${sB.sisa}`)
+
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(
+    `UPDATE app.cost_transactions SET approval_status = 'approved' WHERE id = $1`, [REAL1])
+
+  await as(U_AGRO, 'agronomist', CA)
+  sA = await serapan(ITEM_A)
+  ok('realisasi berstatus approved DIHITUNG sebagai serapan',
+    sA.realisasi === '120000.00' && sA.belum_diputuskan === null,
+    `realisasi ${sA.realisasi}, belum_diputuskan ${sA.belum_diputuskan}`)
+  ok('sisa = anggaran - realisasi (500.000 - 120.000)', Number(sA.sisa) === 380000, `sisa ${sA.sisa}`)
+
+  // Serapan yang MELEWATI anggaran harus terlihat, bukan dijepit ke nol.
+  await as(U_CREATOR, 'creator', CA)
+  const realisasi2 = await c.query(
+    `INSERT INTO app.cost_transactions (company_id, cost_center_id, block_id, cost_category_id,
+       transaction_date, amount_idr, budget_assignment_id, created_by)
+     VALUES ($1,$2,$3,$4,'2026-03-05',600000,$5,$6) RETURNING id`,
+    [CA, CC, A_BLK1, CAT, TUGAS_DEDE, U_CREATOR])
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(`UPDATE app.cost_transactions SET approval_status = 'approved' WHERE id = $1`,
+    [realisasi2.rows[0].id])
+
+  await as(U_AGRO, 'agronomist', CA)
+  sA = await serapan(ITEM_A)
+  ok('serapan melebihi anggaran terlihat sebagai sisa NEGATIF, tidak dijepit ke nol',
+    Number(sA.realisasi) === 720000 && Number(sA.sisa) === -220000,
+    `realisasi ${sA.realisasi}, sisa ${sA.sisa}`)
+
+  // --- Penugasan yang sudah punya realisasi tidak boleh dihapus ------------
+  // FK, bukan policy: pemeriksaan referensial berjalan di dalam mesin dan
+  // melewati RLS, jadi realisasi yang tak terlihat si penghapus tetap menahan.
+  await mustFail(c, 'penugasan yang sudah punya realisasi TIDAK bisa dihapus',
+    `DELETE FROM app.budget_assignments WHERE id = $1`, [TUGAS_DEDE],
+    /violates foreign key|ct_assignment_same_company/i)
+
+  await as(U_CREATOR, 'creator', CA)
+  const hapusSendiri = await c.query(
+    `DELETE FROM app.budget_assignments WHERE id = $1`, [TUGAS_DEDE])
+  await as(U_AGRO, 'agronomist', CA)
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_assignments WHERE id = $1`, [TUGAS_DEDE])
+  ok('penerima tugas TIDAK bisa menghapus penugasannya (nol baris, penugasan utuh)',
+    hapusSendiri.rowCount === 0 && r.rows[0].n === 1,
+    `${hapusSendiri.rowCount} baris terhapus, ${r.rows[0].n} tersisa`)
+
+  // --- Kurva S -------------------------------------------------------------
+  r = await c.query(`SELECT count(*)::int n FROM app.budget_s_curve($1)`, [RAB6])
+  ok('kurva S mengembalikan NOL BARIS selama start_date RAB masih kosong',
+    r.rows[0].n === 0, `${r.rows[0].n} baris — menebak titik nol adalah mengarang jadwal`)
+
+  await as(U_APPROVER, 'approver', CA)
+  await c.query(`UPDATE app.budget_plans SET start_date = '2026-01-01' WHERE id = $1`, [RAB6])
+
+  await as(U_AGRO, 'agronomist', CA)
+  const kurva = await c.query(
+    `SELECT bulan_ke, rencana_kumulatif::text AS rencana, realisasi_kumulatif::text AS realisasi
+       FROM app.budget_s_curve($1) ORDER BY bulan_ke`, [RAB6])
+  const bulan = Object.fromEntries(kurva.rows.map(x => [x.bulan_ke, x]))
+  ok('kurva S digambar setelah start_date ditetapkan (12 bulan sesuai horizon)',
+    kurva.rows.length === 12, `${kurva.rows.length} baris`)
+  ok('rencana kumulatif mengikuti phase_month (bulan 1: 500.000; bulan 3: 600.000)',
+    Number(bulan[1]?.rencana) === 500000 && Number(bulan[3]?.rencana) === 600000,
+    `b1 ${bulan[1]?.rencana}, b3 ${bulan[3]?.rencana}`)
+  ok('realisasi kumulatif memakai indeks bulan dari start_date (b1 120.000, b3 720.000)',
+    Number(bulan[1]?.realisasi) === 120000 && Number(bulan[3]?.realisasi) === 720000,
+    `b1 ${bulan[1]?.realisasi}, b3 ${bulan[3]?.realisasi}`)
+  ok('bulan tanpa belanja DI ANTARA data tetap membawa kumulatifnya (b2 = 120.000)',
+    Number(bulan[2]?.realisasi) === 120000, `b2 ${bulan[2]?.realisasi}`)
+  ok('setelah bulan terakhir yang berdata, realisasi kumulatif NULL — bukan garis datar',
+    bulan[4]?.realisasi === null && bulan[12]?.realisasi === null
+      && Number(bulan[12]?.rencana) === 600000,
+    `b4 ${bulan[4]?.realisasi}, b12 ${bulan[12]?.realisasi}`)
+
+  // --- Kontrol positif penutup --------------------------------------------
+  const batal = await c.query(
+    `UPDATE app.budget_assignments SET status = 'cancelled' WHERE id = $1`, [TUGAS_ADMIN])
+  sA = await serapan(ITEM_A)
+  ok('penugas BISA membatalkan penugasan, dan jatah volumenya kembali (3 → 2)',
+    batal.rowCount === 1 && Number(sA.ditugaskan) === 2, `ditugaskan ${sA.ditugaskan}`)
+
+  const hapusPenugas = await c.query(
+    `DELETE FROM app.budget_assignments WHERE id = $1`, [TUGAS_ADMIN])
+  ok('penugas BISA menghapus penugasan yang belum punya realisasi', hapusPenugas.rowCount === 1)
+
+  r = await c.query(`SELECT count(*)::int n FROM app.check_budget_assignment_integrity()`)
+  ok('check_budget_assignment_integrity() bersih', r.rows[0].n === 0)
+
   await c.query('ROLLBACK')
   await c.end()
   await restoreStubSwitch()
