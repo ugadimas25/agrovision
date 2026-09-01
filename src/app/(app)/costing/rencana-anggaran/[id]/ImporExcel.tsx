@@ -203,6 +203,34 @@ export function ImporExcel({
               </div>
             )}
 
+            {/* Penautan baris ke asumsi. Tanpa ini, seluruh angka hasil impor
+                jadi angka mati: kolom "Dipakai" di tabel asumsi nol semua, dan
+                mengubah luas lahan tidak menggerakkan apa pun — padahal itu
+                justru yang dibangun migrasi 0062. */}
+            {p.tautan.length > 0 && (
+              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
+                <label className="flex items-start gap-2 font-semibold">
+                  <input type="checkbox" name="tautkanAsumsi" defaultChecked className="mt-0.5 h-4 w-4" />
+                  Tautkan {p.tautan.length} baris ke asumsinya
+                </label>
+                <p className="mt-1 text-xs">
+                  Rasionya dihitung dari volume di berkas dibagi nilai asumsinya, dan hanya
+                  ditawarkan bila perkalian baliknya kembali persis ke volume semula. Karena itu
+                  penautan <b>tidak menggeser satu rupiah pun</b> — ia membuat baris ini ikut
+                  bergerak ketika asumsinya diubah kelak.
+                </p>
+                <ul className="mt-1.5 space-y-0.5 text-xs">
+                  {p.tautan.slice(0, 6).map((t) => (
+                    <li key={t.barisAsli}>
+                      {t.uraian} = <b>{t.kodeAsumsi}</b> ({formatNumber(t.nilaiAsumsi)}) ×{" "}
+                      {formatNumber(t.rasio)}
+                    </li>
+                  ))}
+                  {p.tautan.length > 6 && <li>…dan {p.tautan.length - 6} lainnya.</li>}
+                </ul>
+              </div>
+            )}
+
             {/* Status konsistensi model, dari sheet 15_Checks. Panduan template
                 menyatakan sendiri: "STATUS MODEL harus PASS sebelum workbook
                 digunakan." Impor dari workbook yang pemeriksaannya sendiri gagal

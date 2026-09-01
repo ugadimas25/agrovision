@@ -1410,9 +1410,21 @@ async function main() {
       // Dikirim dari HTML pratinjau, bukan dari halaman yang dimuat ulang:
       // form konfirmasi hanya ada di respons POST sebelumnya.
       await agro.submit(`/costing/rencana-anggaran/${id}`,
-        { planId: id, ...petaKategori, ...petaBulan }, { formMarker: 'name="muatan"', html: pra.html });
+        { planId: id, ...petaKategori, ...petaBulan, tautkanAsumsi: "on" },
+        { formMarker: 'name="muatan"', html: pra.html });
       detail = await agro.get(`/costing/rencana-anggaran/${id}`);
       const tSes = visible(detail.html);
+
+      // Penautan ke asumsi: inti tahap 2. Tanpa ini seluruh angka hasil impor
+      // jadi angka mati dan kolom "Dipakai" di tabel asumsi nol semua.
+      const nTaut = Number(await psql(`SELECT count(*) FROM app.budget_plan_items
+                                        WHERE plan_id='${id}' AND basis_code IS NOT NULL`));
+      ok("baris impor ditautkan ke asumsi, bukan jadi angka mati", nTaut > 0, `${nTaut} baris tertaut`);
+
+      // Penautan TIDAK boleh menggeser rupiah: rasionya berasal dari pembagian
+      // volume itu sendiri, jadi trigger 0062 harus mengembalikan angka yang sama.
+      ok("penautan tidak menggeser volume satu pun",
+        Number(await psql(`SELECT count(*) FROM app.check_budget_derived_volume()`)) === 0);
 
       const nBulan = Number(await psql(`SELECT count(DISTINCT phase_month) FROM app.budget_plan_items
                                           WHERE plan_id='${id}'`));

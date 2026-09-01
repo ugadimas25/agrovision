@@ -645,10 +645,65 @@ export type ImporState = {
     turunan: { volume: number; harga: number; total: number };
     /** Bulan mulai per tahap dari sheet 05; kunci tanpa awalan huruf. */
     jadwalTahap: Record<string, number>;
+    /** Baris yang volumenya bisa dinyatakan sebagai asumsi x rasio. */
+    tautan: UsulTautan[];
   };
 };
 
 const imporKosong: ImporState = { ok: false, message: "" };
+
+/**
+ * Padanan antara PENGGERAK di 08_CAPEX_RAB dan ASUMSI hasil impor 02.
+ *
+ * Dicocokkan lewat SATUAN asumsinya, bukan namanya: nama dibuat dari label
+ * Indonesia yang bisa berubah antar versi berkas, sedangkan satuan ("ha efektif",
+ * "site") menyatakan besaran yang dimaksud. Hanya tiga penggerak yang dipetakan —
+ * ketiganya besaran pokok yang volumenya benar-benar kelipatan langsung. Sisanya
+ * (sample, pit, ton, m) berhubungan lewat pembagian atau rantai perhitungan, dan
+ * menautkannya dengan rasio hasil bagi akan menyembunyikan hubungan yang
+ * sebenarnya lebih rumit.
+ */
+const PADANAN_PENGGERAK: { penggerak: string; cocok: (unit: string, kode: string) => boolean }[] = [
+  { penggerak: "gross ha", cocok: (u, k) => u === "ha" && k.includes("bruto") },
+  { penggerak: "net ha", cocok: (u) => u.includes("efektif") },
+  { penggerak: "site", cocok: (u) => u === "site" },
+];
+
+export type UsulTautan = {
+  barisAsli: number; uraian: string; kodeAsumsi: string; labelAsumsi: string;
+  nilaiAsumsi: number; rasio: number;
+};
+
+/**
+ * Baris mana yang volumenya bisa dinyatakan sebagai asumsi x rasio.
+ *
+ * Rasionya DIHITUNG dengan pembagian, bukan ditebak — dan hanya ditawarkan bila
+ * perkalian baliknya kembali persis ke volume semula (toleransi setengah sen).
+ * Rasio yang tidak bulat, seperti 40 sampel dibagi 88 ha, adalah tanda bahwa
+ * penggeraknya bukan hubungan langsung; menautkannya akan membuat layar
+ * mengklaim rumus yang tidak pernah dipakai siapa pun.
+ */
+function usulkanTautan(
+  komponen: BarisImpor[],
+  asumsi: { kode: string; label: string; nilai: number; satuan: string | null }[],
+): UsulTautan[] {
+  const usul: UsulTautan[] = [];
+  for (const k of komponen) {
+    if (!k.penggerak || k.volume === null || k.volume <= 0) continue;
+    const padanan = PADANAN_PENGGERAK.find((p) => p.penggerak === k.penggerak);
+    if (!padanan) continue;
+    const a = asumsi.find((x) => x.nilai > 0
+      && padanan.cocok((x.satuan ?? "").toLowerCase().trim(), x.kode));
+    if (!a) continue;
+    const rasio = Math.round((k.volume / a.nilai) * 10000) / 10000;
+    if (rasio <= 0 || Math.abs(a.nilai * rasio - k.volume) > 0.005) continue;
+    usul.push({
+      barisAsli: k.barisAsli, uraian: k.uraian, kodeAsumsi: a.kode,
+      labelAsumsi: a.label, nilaiAsumsi: a.nilai, rasio,
+    });
+  }
+  return usul;
+}
 
 export async function pratinjauImporAction(_p: ImporState, fd: FormData): Promise<ImporState> {
   try {
@@ -692,6 +747,9 @@ export async function pratinjauImporAction(_p: ImporState, fd: FormData): Promis
         masalah: hasil.masalah, tahapUnik, satuanTidakDikenal, komponenSudahAda,
         statusModel: hasil.statusModel,
         jadwalTahap: hasil.jadwalTahap,
+        tautan: usulkanTautan(hasil.komponen, hasil.asumsi.map((a) => ({
+          kode: kodeAsumsi(a.variabel), label: a.variabel, nilai: a.nilai ?? 0, satuan: a.satuan,
+        }))),
         turunan: {
           volume: hasil.komponen.filter((k) => k.volumeDariRumus).length,
           harga: hasil.komponen.filter((k) => k.hargaDariRumus).length,
@@ -771,6 +829,23 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
     const uoms = await listOptions(ctx, "unit_of_measure");
     const petaUom = new Map(uoms.map((u) => [u.label.toLowerCase().trim(), u.value]));
 
+    // Tautan DIHITUNG ULANG di sini dari muatan yang sama, tidak diterima jadi
+    // dari peramban: rasio yang dikirim klien bisa saja tidak cocok dengan
+    // volume dan asumsinya, dan trigger 0062 akan menghitung ulang volume dari
+    // rasio itu — angka RAB berubah tanpa ada yang memintanya.
+    const tautkan = fd.get("tautkanAsumsi") === "on";
+    const petaTautan = new Map<number, { kode: string; rasio: number }>();
+    if (tautkan) {
+      for (const t of usulkanTautan(
+        muatan.data.komponen as unknown as BarisImpor[],
+        muatan.data.asumsi.map((a) => ({
+          kode: kodeAsumsi(a.variabel), label: a.variabel, nilai: a.nilai ?? 0, satuan: a.satuan,
+        })),
+      )) {
+        petaTautan.set(t.barisAsli, { kode: t.kodeAsumsi, rasio: t.rasio });
+      }
+    }
+
     const dilewati: string[] = [];
     const baris = muatan.data.komponen.flatMap((k) => {
       const kategori = k.tahap ? petaKategori.get(k.tahap) : undefined;
@@ -819,6 +894,13 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
         stage: (TAHAP as readonly string[]).includes(k.tahap ?? "") ? k.tahap : null,
         driver: (PENGGERAK as readonly string[]).includes(k.penggerak ?? "") ? k.penggerak : null,
         sourceRef: k.sumberRef,
+        // Volume yang dikirim tetap apa adanya; bila basis diisi, trigger 0062
+        // menimpanya dengan nilai_asumsi x rasio. Karena rasionya justru berasal
+        // dari pembagian volume itu, hasilnya kembali ke angka yang sama —
+        // penautan tidak menggeser satu rupiah pun, ia hanya membuat baris ini
+        // ikut bergerak ketika asumsinya diubah kelak.
+        basisCode: petaTautan.get(k.barisAsli)?.kode ?? null,
+        ratioPerBasis: petaTautan.get(k.barisAsli)?.rasio ?? null,
       }];
     });
 
@@ -835,6 +917,7 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
 
     const nAsumsi = await imporBudgetAssumptions(ctx, planId.data, asumsi);
     const nBaris = await imporBudgetPlanItems(ctx, planId.data, baris);
+    const nTaut = baris.filter((b) => b.basisCode !== null).length;
     revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
 
     if (nBaris === 0 && nAsumsi === 0) {
@@ -858,7 +941,7 @@ export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise
     return {
       ok: kurang === 0,
       message: kurang === 0
-        ? `Impor selesai: ${nBaris} komponen, ${nAsumsi} asumsi.${catatan ? ` ${catatan}.` : ""}${sebaran}`
+        ? `Impor selesai: ${nBaris} komponen, ${nAsumsi} asumsi.${catatan ? ` ${catatan}.` : ""}${sebaran}${nTaut > 0 ? ` ${nTaut} baris ditautkan ke asumsi — volumenya kini ikut bergerak.` : ""}`
         : `Hanya ${nBaris} dari ${baris.length} komponen yang masuk; sisanya ditolak policy RAB ini.${catatan ? ` ${catatan}.` : ""}`,
     };
   } catch (e) {

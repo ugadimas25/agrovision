@@ -799,6 +799,9 @@ export async function imporBudgetPlanItems(
     volume: number; uomItemId: string | null; unitPriceIdr: number;
     costKind: "capex" | "opex"; stage: string | null; driver: string | null;
     sourceRef: string | null;
+    /** 0062. Diisi bila baris ini ditautkan ke asumsi; volume lalu dihitung
+     *  ulang trigger dari nilai_asumsi x rasio, bukan dari angka yang dikirim. */
+    basisCode: string | null; ratioPerBasis: number | null;
   }[],
 ): Promise<number> {
   if (baris.length === 0) return 0;
@@ -807,25 +810,27 @@ export async function imporBudgetPlanItems(
       `INSERT INTO app.budget_plan_items
          (plan_id, phase_month, cost_category_id, description, item_kind, volume,
           uom_item_id, unit_price_idr, created_by, added_after_approval,
-          cost_kind, stage, driver, source_ref, sort_order)
+          cost_kind, stage, driver, source_ref, sort_order, basis_code, ratio_per_basis)
        SELECT $1, v.bulan, v.kategori, v.uraian, v.jenis::app.budget_item_kind, v.volume,
               v.uom, v.harga, $2, (p.approval_status = 'approved'),
               v.kind::app.budget_cost_kind, v.tahap, v.penggerak, v.sumber,
               COALESCE((SELECT max(sort_order) + 1 FROM app.budget_plan_items WHERE plan_id = $1), 0)
-                + v.urut
+                + v.urut,
+              v.basis, v.rasio
          FROM app.budget_plans p,
               (SELECT * FROM unnest($3::int[], $4::uuid[], $5::text[], $6::text[], $7::numeric[],
                                     $8::uuid[], $9::numeric[], $10::text[], $11::text[], $12::text[],
-                                    $13::text[])
+                                    $13::text[], $14::text[], $15::numeric[])
                  WITH ORDINALITY AS t(bulan, kategori, uraian, jenis, volume, uom, harga,
-                                      kind, tahap, penggerak, sumber, urut)) v
+                                      kind, tahap, penggerak, sumber, basis, rasio, urut)) v
         WHERE p.id = $1`,
       [planId, ctx.userId,
        baris.map((b) => b.phaseMonth), baris.map((b) => b.costCategoryId),
        baris.map((b) => b.description), baris.map((b) => b.itemKind),
        baris.map((b) => b.volume), baris.map((b) => b.uomItemId),
        baris.map((b) => b.unitPriceIdr), baris.map((b) => b.costKind),
-       baris.map((b) => b.stage), baris.map((b) => b.driver), baris.map((b) => b.sourceRef)],
+       baris.map((b) => b.stage), baris.map((b) => b.driver), baris.map((b) => b.sourceRef),
+       baris.map((b) => b.basisCode), baris.map((b) => b.ratioPerBasis)],
     );
     return r.rowCount ?? 0;
   });
