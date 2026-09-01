@@ -5,9 +5,15 @@ import { z } from "zod";
 import { requireRole } from "@/lib/session";
 import { TAHAP, PENGGERAK } from "@/lib/rab/daftar";
 import {
+  bacaWorkbookRab, type AsumsiImpor, type BarisImpor, type Masalah, type StatusModel,
+} from "@/lib/rab/impor-excel";
+import { listOptions } from "@/lib/repo/master";
+import {
   addBudgetAssumption, addBudgetPlanItem, createBudgetPlan, createBudgetSource,
   decideBudgetPlan, deleteBudgetPlanItem, setBudgetPlanItemActive, submitBudgetPlan,
-  updateBudgetAssumptionValue, updateBudgetPlanItems, buatPenugasan, setTanggalMulai,
+  updateBudgetAssumptionValues, updateBudgetPlanItems,
+  buatPenugasan, setTanggalMulai,
+  imporBudgetPlanItems, imporBudgetAssumptions, listBudgetPlanItems,
 } from "@/lib/repo/budgetPlan";
 
 /**
@@ -348,6 +354,48 @@ export async function gridAction(_p: PlanState, fd: FormData): Promise<PlanState
   }
 }
 
+/**
+ * Simpan seluruh nilai asumsi dari tabel sekaligus.
+ *
+ * Satu form untuk satu tabel, sama seperti tabel komponen: <form> tidak boleh
+ * bersarang di <tr>/<td>, dan menyiasatinya dengan atribut `form=` membuat
+ * urutan fokus melompat di pembaca layar.
+ */
+export async function simpanAsumsiAction(_p: PlanState, fd: FormData): Promise<PlanState> {
+  try {
+    const ctx = await requireRole("agronomist", "approver", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ok: false, message: "RAB tidak valid." };
+
+    const baris: { id: string; value: number; sourceId: string | null }[] = [];
+    for (const kunci of fd.keys()) {
+      if (!kunci.startsWith("nilai_")) continue;
+      const id = z.string().uuid().safeParse(kunci.slice("nilai_".length));
+      if (!id.success) continue;
+      const nilai = z.coerce.number().min(0).max(1e15).safeParse(fd.get(kunci));
+      if (!nilai.success) {
+        return { ok: false, message: "Ada nilai asumsi yang bukan angka." };
+      }
+      const sumber = z.string().uuid().nullable()
+        .safeParse(kosongkan(fd.get(`sumber_${id.data}`)));
+      baris.push({ id: id.data, value: nilai.data, sourceId: sumber.success ? sumber.data : null });
+    }
+
+    const berubah = await updateBudgetAssumptionValues(ctx, planId.data, baris);
+    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
+    if (baris.length === 0) return { ok: false, message: "Tidak ada asumsi untuk disimpan." };
+    if (berubah.length === 0) {
+      return { ok: true, message: "Tidak ada perubahan yang tersimpan. Kalau Anda memang mengubah sesuatu, RAB ini sudah diajukan/disetujui atau bukan susunan Anda." };
+    }
+    return {
+      ok: true,
+      message: `${berubah.length} asumsi disimpan. Volume baris yang memakainya sudah dihitung ulang database.`,
+    };
+  } catch (e) {
+    return { ok: false, message: toMessage(e) };
+  }
+}
+
 export async function submitPlanAction(_p: PlanState, fd: FormData): Promise<PlanState> {
   try {
     const ctx = await requireRole(...PENYUSUN);
@@ -437,41 +485,6 @@ export async function addAssumptionAction(_p: PlanState, fd: FormData): Promise<
     await addBudgetAssumption(ctx, parsed.data);
     revalidatePath(`/costing/rencana-anggaran/${parsed.data.planId}`);
     return { ok: true, message: `Asumsi ${parsed.data.code} ditambahkan.` };
-  } catch (e) {
-    return { ok: false, message: toMessage(e) };
-  }
-}
-
-/**
- * Ubah nilai satu asumsi — dan dengan itu, seluruh baris yang menurunkannya.
- *
- * Efek berantainya dikerjakan trigger database (0062), bukan di sini: kalau
- * perkalian ulang hidup di TypeScript, satu jalur tulis yang lupa memanggilnya
- * akan meninggalkan RAB yang setengah berubah — dan RAB setengah berubah lebih
- * berbahaya daripada yang salah seluruhnya, karena ia terlihat konsisten.
- */
-export async function updateAssumptionAction(_p: PlanState, fd: FormData): Promise<PlanState> {
-  try {
-    const ctx = await requireRole("agronomist", "approver", "super_admin");
-    const id = z.string().uuid().safeParse(fd.get("id"));
-    const planId = z.string().uuid().safeParse(fd.get("planId"));
-    const value = z.coerce.number().min(0).max(1e15).safeParse(fd.get("value"));
-    if (!id.success || !planId.success) return { ok: false, message: "Asumsi tidak valid." };
-    if (!value.success) return { ok: false, message: "Nilai asumsi tidak valid." };
-    // Kosong = sumber sengaja DILEPAS, bukan "tidak dikirim". Formulirnya selalu
-    // menyertakan pilihan ini, jadi keduanya tidak bisa tertukar.
-    const rawSumber = fd.get("sourceId");
-    const sumber = rawSumber === null || String(rawSumber).trim() === ""
-      ? null
-      : z.string().uuid().safeParse(rawSumber);
-    if (sumber !== null && !sumber.success) return { ok: false, message: "Sumber tidak valid." };
-
-    const n = await updateBudgetAssumptionValue(
-      ctx, id.data, value.data, sumber === null ? null : sumber.data);
-    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
-    return n === 0
-      ? { ok: false, message: "Asumsi tidak bisa diubah — RAB ini sudah diajukan atau bukan susunan Anda." }
-      : { ok: true, message: "Asumsi diperbarui. Baris yang memakainya ikut dihitung ulang." };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
   }
@@ -592,5 +605,346 @@ export async function setTanggalMulaiAction(_p: PlanState, fd: FormData): Promis
     };
   } catch (e) {
     return { ok: false, message: toMessage(e) };
+  }
+}
+
+// Impor berkas Excel (template RAB_Agroforestry_100ha_Banyumas_R2.xlsx)
+//
+// DUA LANGKAH, dan langkah pratinjau bukan hiasan. Berkasnya tidak membawa
+// kategori biaya sama sekali (`cost_category_id` wajib di 0060), satuannya
+// teks bebas yang belum tentu ada di master, dan sebagian tahap/penggerak bisa
+// di luar daftar tertutup. Menulis langsung berarti menebak ketiganya. Yang
+// dilakukan di sini: tunjukkan apa yang terbaca, apa yang tidak, dan minta
+// pengguna memetakan sisanya -- baru menulis.
+//
+// Sheet yang dibaca hanya 02_Assumptions dan 08_CAPEX_RAB. 05_Workplan_Labor,
+// 06_Equipment_Tools, 07_Agri_Inputs, dan 09_OPEX_10Y sengaja TIDAK diimpor:
+// ketiganya memakai rentang tahun (Mulai/Selesai, T1..T10, umur manfaat) yang
+// belum punya tempat di skema -- itu tahap 4 di docs/19. Pratinjau menyebutkan
+// ini apa adanya, karena RAB yang diam-diam hanya berisi CAPEX terlihat seperti
+// RAB yang lengkap.
+// ===========================================================================
+
+export type ImporState = {
+  ok: boolean;
+  message: string;
+  pratinjau?: {
+    skenario: "1lokasi" | "4lokasi";
+    namaBerkas: string;
+    asumsi: AsumsiImpor[];
+    komponen: BarisImpor[];
+    masalah: Masalah[];
+    /** Tahap unik yang perlu dipetakan ke kategori biaya oleh pengguna. */
+    tahapUnik: string[];
+    /** Satuan di berkas yang tidak ketemu di master; barisnya tetap masuk, uom-nya null. */
+    satuanTidakDikenal: string[];
+    komponenSudahAda: number;
+    /** Status konsistensi model dari sheet 15_Checks; null bila sheet tak ada. */
+    statusModel: StatusModel | null;
+    /** Berapa banyak angka yang di berkas berupa RUMUS, bukan ketikan. */
+    turunan: { volume: number; harga: number; total: number };
+    /** Bulan mulai per tahap dari sheet 05; kunci tanpa awalan huruf. */
+    jadwalTahap: Record<string, number>;
+    /** Baris yang volumenya bisa dinyatakan sebagai asumsi x rasio. */
+    tautan: UsulTautan[];
+  };
+};
+
+const imporKosong: ImporState = { ok: false, message: "" };
+
+/**
+ * Padanan antara PENGGERAK di 08_CAPEX_RAB dan ASUMSI hasil impor 02.
+ *
+ * Dicocokkan lewat SATUAN asumsinya, bukan namanya: nama dibuat dari label
+ * Indonesia yang bisa berubah antar versi berkas, sedangkan satuan ("ha efektif",
+ * "site") menyatakan besaran yang dimaksud. Hanya tiga penggerak yang dipetakan —
+ * ketiganya besaran pokok yang volumenya benar-benar kelipatan langsung. Sisanya
+ * (sample, pit, ton, m) berhubungan lewat pembagian atau rantai perhitungan, dan
+ * menautkannya dengan rasio hasil bagi akan menyembunyikan hubungan yang
+ * sebenarnya lebih rumit.
+ */
+const PADANAN_PENGGERAK: { penggerak: string; cocok: (unit: string, kode: string) => boolean }[] = [
+  { penggerak: "gross ha", cocok: (u, k) => u === "ha" && k.includes("bruto") },
+  { penggerak: "net ha", cocok: (u) => u.includes("efektif") },
+  { penggerak: "site", cocok: (u) => u === "site" },
+];
+
+export type UsulTautan = {
+  barisAsli: number; uraian: string; kodeAsumsi: string; labelAsumsi: string;
+  nilaiAsumsi: number; rasio: number;
+};
+
+/**
+ * Baris mana yang volumenya bisa dinyatakan sebagai asumsi x rasio.
+ *
+ * Rasionya DIHITUNG dengan pembagian, bukan ditebak — dan hanya ditawarkan bila
+ * perkalian baliknya kembali persis ke volume semula (toleransi setengah sen).
+ * Rasio yang tidak bulat, seperti 40 sampel dibagi 88 ha, adalah tanda bahwa
+ * penggeraknya bukan hubungan langsung; menautkannya akan membuat layar
+ * mengklaim rumus yang tidak pernah dipakai siapa pun.
+ */
+function usulkanTautan(
+  komponen: BarisImpor[],
+  asumsi: { kode: string; label: string; nilai: number; satuan: string | null }[],
+): UsulTautan[] {
+  const usul: UsulTautan[] = [];
+  for (const k of komponen) {
+    if (!k.penggerak || k.volume === null || k.volume <= 0) continue;
+    const padanan = PADANAN_PENGGERAK.find((p) => p.penggerak === k.penggerak);
+    if (!padanan) continue;
+    const a = asumsi.find((x) => x.nilai > 0
+      && padanan.cocok((x.satuan ?? "").toLowerCase().trim(), x.kode));
+    if (!a) continue;
+    const rasio = Math.round((k.volume / a.nilai) * 10000) / 10000;
+    if (rasio <= 0 || Math.abs(a.nilai * rasio - k.volume) > 0.005) continue;
+    usul.push({
+      barisAsli: k.barisAsli, uraian: k.uraian, kodeAsumsi: a.kode,
+      labelAsumsi: a.label, nilaiAsumsi: a.nilai, rasio,
+    });
+  }
+  return usul;
+}
+
+export async function pratinjauImporAction(_p: ImporState, fd: FormData): Promise<ImporState> {
+  try {
+    const ctx = await requireRole("agronomist", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ...imporKosong, message: "RAB tidak valid." };
+
+    const berkas = fd.get("berkas");
+    if (!(berkas instanceof File) || berkas.size === 0) {
+      return { ...imporKosong, message: "Pilih berkas Excel-nya dulu." };
+    }
+    // 8 MB adalah batas serverActions.bodySizeLimit di next.config; ditolak di
+    // sini supaya pesannya jelas, bukan galat 413 yang tidak bisa dibaca.
+    if (berkas.size > 7_500_000) {
+      return { ...imporKosong, message: "Berkas lebih dari 7,5 MB. Hapus sheet yang tidak perlu, atau simpan ulang sebagai .xlsx." };
+    }
+    const skenario = fd.get("skenario") === "4lokasi" ? "4lokasi" : "1lokasi";
+
+    const hasil = bacaWorkbookRab(await berkas.arrayBuffer(), { skenario });
+    if (hasil.komponen.length === 0 && hasil.asumsi.length === 0) {
+      return {
+        ...imporKosong,
+        message: "Tidak ada baris yang terbaca. Pastikan berkasnya template RAB (butuh sheet 02_Assumptions dan 08_CAPEX_RAB).",
+      };
+    }
+
+    const uoms = await listOptions(ctx, "unit_of_measure");
+    const dikenal = new Set(uoms.map((u) => u.label.toLowerCase().trim()));
+    const satuanTidakDikenal = [...new Set(
+      hasil.komponen.map((k) => k.satuanTeks).filter((s): s is string => Boolean(s))
+        .filter((s) => !dikenal.has(s.toLowerCase().trim())),
+    )];
+    const tahapUnik = [...new Set(hasil.komponen.map((k) => k.tahap).filter((t): t is string => Boolean(t)))];
+    const komponenSudahAda = (await listBudgetPlanItems(ctx, planId.data)).length;
+
+    return {
+      ok: true,
+      message: `${hasil.komponen.length} komponen dan ${hasil.asumsi.length} asumsi terbaca dari ${berkas.name}.`,
+      pratinjau: {
+        skenario, namaBerkas: berkas.name, asumsi: hasil.asumsi, komponen: hasil.komponen,
+        masalah: hasil.masalah, tahapUnik, satuanTidakDikenal, komponenSudahAda,
+        statusModel: hasil.statusModel,
+        jadwalTahap: hasil.jadwalTahap,
+        tautan: usulkanTautan(hasil.komponen, hasil.asumsi.map((a) => ({
+          kode: kodeAsumsi(a.variabel), label: a.variabel, nilai: a.nilai ?? 0, satuan: a.satuan,
+        }))),
+        turunan: {
+          volume: hasil.komponen.filter((k) => k.volumeDariRumus).length,
+          harga: hasil.komponen.filter((k) => k.hargaDariRumus).length,
+          total: hasil.komponen.length,
+        },
+      },
+    };
+  } catch (e) {
+    return { ...imporKosong, message: toMessage(e) };
+  }
+}
+
+/** Bentuk muatan pratinjau yang dikirim balik dari layar. Divalidasi ulang di
+ *  sini, tidak dipercaya begitu saja: yang bulak-balik lewat peramban harus
+ *  diperiksa lagi seperti kiriman mana pun. */
+const muatanSchema = z.object({
+  komponen: z.array(z.object({
+    barisAsli: z.number().int(),
+    uraian: z.string().trim().min(1).max(300),
+    tahap: z.string().nullable(),
+    penggerak: z.string().nullable(),
+    volume: z.number().nullable(),
+    satuanTeks: z.string().nullable(),
+    hargaSatuan: z.number().nullable(),
+    sumberRef: z.string().nullable(),
+  })).max(2000),
+  asumsi: z.array(z.object({
+    barisAsli: z.number().int(),
+    variabel: z.string().trim().min(1).max(120),
+    nilai: z.number().nullable(),
+    satuan: z.string().nullable(),
+    idSumber: z.string().nullable(),
+    keyakinan: z.enum(["high", "medium", "low"]).nullable(),
+    catatan: z.string().nullable(),
+  })).max(500),
+});
+
+/** Kode asumsi dibuat dari nama variabelnya: huruf kecil, non-alfanumerik jadi
+ *  garis bawah. Kolom `code` punya UNIQUE(plan_id, code) dan dipakai
+ *  `basis_code` pada baris turunan, jadi ia harus stabil dan bisa ditebak
+ *  orang -- "Luas bruto" selalu jadi `luas_bruto`, bukan nomor acak. */
+function kodeAsumsi(variabel: string): string {
+  const k = variabel.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "").slice(0, 40);
+  return /^[a-z]/.test(k) ? k : `a_${k}`.slice(0, 40);
+}
+
+export async function jalankanImporAction(_p: ImporState, fd: FormData): Promise<ImporState> {
+  try {
+    const ctx = await requireRole("agronomist", "super_admin");
+    const planId = z.string().uuid().safeParse(fd.get("planId"));
+    if (!planId.success) return { ...imporKosong, message: "RAB tidak valid." };
+
+    let mentah: unknown;
+    try { mentah = JSON.parse(String(fd.get("muatan") ?? "")); }
+    catch { return { ...imporKosong, message: "Data pratinjau rusak. Unggah ulang berkasnya." }; }
+    const muatan = muatanSchema.safeParse(mentah);
+    if (!muatan.success) return { ...imporKosong, message: "Data pratinjau tidak valid. Unggah ulang berkasnya." };
+
+    // Pemetaan tahap -> kategori biaya, diisi pengguna di pratinjau. Berkasnya
+    // tidak punya kolom kategori sama sekali, dan cost_category_id wajib.
+    const petaKategori = new Map<string, string>();
+    // Bulan fase per tahap. Berkasnya tidak memuat bulan di 08_CAPEX_RAB, jadi
+    // tanpa ini seluruh baris menumpuk di bulan ke-1 dan "sebaran per bulan"
+    // menjadi satu batang tunggal yang tidak memberi tahu apa pun.
+    const petaBulan = new Map<string, number>();
+    for (const kunci of fd.keys()) {
+      if (kunci.startsWith("kategori_")) {
+        const nilai = z.string().uuid().safeParse(fd.get(kunci));
+        if (nilai.success) petaKategori.set(kunci.slice("kategori_".length), nilai.data);
+      } else if (kunci.startsWith("bulanTahap_")) {
+        const nilai = z.coerce.number().int().min(1).max(600).safeParse(fd.get(kunci));
+        if (nilai.success) petaBulan.set(kunci.slice("bulanTahap_".length), nilai.data);
+      }
+    }
+
+    const uoms = await listOptions(ctx, "unit_of_measure");
+    const petaUom = new Map(uoms.map((u) => [u.label.toLowerCase().trim(), u.value]));
+
+    // Tautan DIHITUNG ULANG di sini dari muatan yang sama, tidak diterima jadi
+    // dari peramban: rasio yang dikirim klien bisa saja tidak cocok dengan
+    // volume dan asumsinya, dan trigger 0062 akan menghitung ulang volume dari
+    // rasio itu — angka RAB berubah tanpa ada yang memintanya.
+    const tautkan = fd.get("tautkanAsumsi") === "on";
+    const petaTautan = new Map<number, { kode: string; rasio: number }>();
+    if (tautkan) {
+      for (const t of usulkanTautan(
+        muatan.data.komponen as unknown as BarisImpor[],
+        muatan.data.asumsi.map((a) => ({
+          kode: kodeAsumsi(a.variabel), label: a.variabel, nilai: a.nilai ?? 0, satuan: a.satuan,
+        })),
+      )) {
+        petaTautan.set(t.barisAsli, { kode: t.kodeAsumsi, rasio: t.rasio });
+      }
+    }
+
+    const dilewati: string[] = [];
+    const baris = muatan.data.komponen.flatMap((k) => {
+      const kategori = k.tahap ? petaKategori.get(k.tahap) : undefined;
+      if (!kategori) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): tahap belum dipetakan ke kategori biaya`);
+        return [];
+      }
+      // Volume 0 BUKAN sama dengan volume kosong, dan template R2 memakai
+      // keduanya dengan sengaja: baris "Cover crop/insectary establishment"
+      // bervolume 0 karena biayanya sudah dihitung di 17_Model_Fleksibel supaya
+      // tidak dobel. CHECK (volume > 0) di 0060 menolaknya, jadi ia dilewati --
+      // tapi alasannya disebut apa adanya, bukan disamakan dengan sel kosong.
+      if (k.volume === 0) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volumenya 0 di berkas — biasanya karena biayanya sudah dihitung di sheet lain`);
+        return [];
+      }
+      if (k.volume === null || k.volume < 0 || k.hargaSatuan === null) {
+        dilewati.push(`baris ${k.barisAsli} (${k.uraian}): volume atau harga satuan kosong di berkas`);
+        return [];
+      }
+      // Pos borongan di model ditulis dengan satuan "Rp", harga satuan Rp 1, dan
+      // NILAI RUPIAHNYA di kolom volume ("All planting stock" volume
+      // 2.330.768.000 x Rp 1). Jumlahnya benar, tapi kolom Volume jadi tidak
+      // berarti apa-apa — dan lebih buruk: baris seperti itu tidak akan pernah
+      // bisa ditautkan ke asumsi, karena "volume" -nya bukan kuantitas.
+      //
+      // Ditukar menjadi 1 x harga penuh. Jumlahnya identik (GENERATED tetap
+      // volume x harga), tapi kolomnya kembali berarti.
+      const borongan = (k.satuanTeks ?? "").trim().toLowerCase() === "rp" && k.hargaSatuan === 1;
+      return [{
+        // 08_CAPEX_RAB tidak punya kolom bulan. Yang dipakai adalah bulan yang
+        // DITETAPKAN PENGGUNA per tahap di pratinjau -- boleh diisi sendiri,
+        // boleh diambil dari jadwal sheet 05 lewat tombol. Bila tidak diisi,
+        // jatuh ke bulan ke-1 dan pratinjau mengatakannya.
+        phaseMonth: (k.tahap && petaBulan.get(k.tahap)) || 1,
+        costCategoryId: kategori,
+        description: k.uraian,
+        // Tidak ada kolom jenis di berkas. 'consumable' adalah default kolomnya
+        // di 0060, dipakai apa adanya dan bukan tebakan dari uraian.
+        itemKind: "consumable",
+        volume: borongan ? 1 : k.volume,
+        uomItemId: k.satuanTeks ? (petaUom.get(k.satuanTeks.toLowerCase().trim()) ?? null) : null,
+        unitPriceIdr: borongan ? k.volume : k.hargaSatuan,
+        // 08_CAPEX_RAB adalah sheet investasi awal; seluruh barisnya capex.
+        costKind: "capex" as const,
+        stage: (TAHAP as readonly string[]).includes(k.tahap ?? "") ? k.tahap : null,
+        driver: (PENGGERAK as readonly string[]).includes(k.penggerak ?? "") ? k.penggerak : null,
+        sourceRef: k.sumberRef,
+        // Volume yang dikirim tetap apa adanya; bila basis diisi, trigger 0062
+        // menimpanya dengan nilai_asumsi x rasio. Karena rasionya justru berasal
+        // dari pembagian volume itu, hasilnya kembali ke angka yang sama —
+        // penautan tidak menggeser satu rupiah pun, ia hanya membuat baris ini
+        // ikut bergerak ketika asumsinya diubah kelak.
+        basisCode: petaTautan.get(k.barisAsli)?.kode ?? null,
+        ratioPerBasis: petaTautan.get(k.barisAsli)?.rasio ?? null,
+      }];
+    });
+
+    const asumsi = muatan.data.asumsi.flatMap((a) => {
+      if (a.nilai === null) {
+        dilewati.push(`asumsi baris ${a.barisAsli} (${a.variabel}): nilainya kosong di berkas`);
+        return [];
+      }
+      return [{
+        code: kodeAsumsi(a.variabel), label: a.variabel, value: a.nilai,
+        unit: a.satuan, sourceRef: a.idSumber, confidence: a.keyakinan, note: a.catatan,
+      }];
+    });
+
+    const nAsumsi = await imporBudgetAssumptions(ctx, planId.data, asumsi);
+    const nBaris = await imporBudgetPlanItems(ctx, planId.data, baris);
+    const nTaut = baris.filter((b) => b.basisCode !== null).length;
+    revalidatePath(`/costing/rencana-anggaran/${planId.data}`);
+
+    if (nBaris === 0 && nAsumsi === 0) {
+      return { ...imporKosong, message: "Tidak ada yang masuk. RAB ini mungkin sudah diajukan, atau bukan susunan Anda." };
+    }
+    const kurang = baris.length - nBaris;
+    // Bulan yang BENAR-BENAR dipakai, bukan kalimat tetap. Pesan sebelumnya
+    // selalu berbunyi "Semua masuk bulan ke-1" meski bulannya diisi — kalimat
+    // tetap yang berbohong begitu perilakunya berubah, dan tidak ada yang
+    // menangkapnya karena ia bukan angka yang dihitung dari apa pun.
+    const bulanDipakai = [...new Set(baris.map((b) => b.phaseMonth))].sort((a, b) => a - b);
+    const sebaran = bulanDipakai.length === 0 ? ""
+      : bulanDipakai.length === 1 ? ` Semua masuk bulan ke-${bulanDipakai[0]}.`
+      : ` Tersebar ke bulan ${bulanDipakai.join(", ")}.`;
+    const nLewatKomponen = muatan.data.komponen.length - baris.length;
+    const nLewatAsumsi = muatan.data.asumsi.length - asumsi.length;
+    const catatan = [
+      nLewatKomponen > 0 ? `${nLewatKomponen} komponen dilewati` : "",
+      nLewatAsumsi > 0 ? `${nLewatAsumsi} asumsi dilewati` : "",
+    ].filter(Boolean).join(", ");
+    return {
+      ok: kurang === 0,
+      message: kurang === 0
+        ? `Impor selesai: ${nBaris} komponen, ${nAsumsi} asumsi.${catatan ? ` ${catatan}.` : ""}${sebaran}${nTaut > 0 ? ` ${nTaut} baris ditautkan ke asumsi — volumenya kini ikut bergerak.` : ""}`
+        : `Hanya ${nBaris} dari ${baris.length} komponen yang masuk; sisanya ditolak policy RAB ini.${catatan ? ` ${catatan}.` : ""}`,
+    };
+  } catch (e) {
+    return { ...imporKosong, message: toMessage(e) };
   }
 }

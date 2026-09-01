@@ -16,6 +16,7 @@ import { formatIdr, formatNumber, EMPTY } from "@/lib/format";
 import { AssumptionPanel } from "./AssumptionPanel";
 import { ItemForm } from "./ItemForm";
 import { ItemGrid } from "./ItemGrid";
+import { ImporExcel } from "./ImporExcel";
 import { PlanDecision } from "./PlanDecision";
 import { SourcePanel } from "./SourcePanel";
 import { PenugasanPanel } from "./Penugasan";
@@ -161,6 +162,13 @@ export default async function DetailRabPage({ params }: { params: Promise<{ id: 
           />
         </div>
       )}
+
+      {/* Impor hanya untuk PENYUSUN pada RAB draft/rejected -- bukan
+          canAddItem, yang juga mencakup finance menambah baris pada RAB yang
+          sudah disetujui. Menumpahkan puluhan baris dari berkas ke RAB yang
+          sudah diputuskan bukan "menambah pos susulan" seperti kesepakatan
+          rapat, melainkan menyusun ulang anggaran yang sudah disetujui. */}
+      <ImporExcel planId={plan.id} categories={categories} canEdit={isDrafter && editable} />
 
       {/* RAB kosong TETAP menampilkan tabelnya selama penyusunnya boleh
           menyunting: baris kosong di ujung tabel adalah tempat mengetiknya,

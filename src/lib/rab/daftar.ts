@@ -27,6 +27,11 @@ export const TAHAP = [
 export const PENGGERAK = [
   "gross ha", "net ha", "site", "lot", "sample", "pit", "ton", "m", "unit",
   "% stock", "tree kg", "equipment", "annual", "calculated",
+  // "system" dipakai 08_CAPEX_RAB baris 39 (Certification/ESG/traceability) pada
+  // template R2. Ditambahkan karena daftar tertutup ini harus memuat apa yang
+  // model sungguhan pakai -- kalau tidak, impor menjatuhkan penggeraknya jadi
+  // kosong dan baris itu kehilangan keterangan asal volumenya.
+  "system",
 ] as const;
 
 export type Tahap = (typeof TAHAP)[number];

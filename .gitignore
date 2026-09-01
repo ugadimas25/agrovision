@@ -64,3 +64,6 @@ TIKET-*-INTERNAL.md
 
 # Kredensial hasil scripts/setup-identity-platform.mjs -- JANGAN pernah di-commit.
 identity-platform-credentials.txt
+
+# Berkas kunci Excel/LibreOffice saat workbook sedang dibuka.
+.~*.xlsx

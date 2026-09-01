@@ -608,6 +608,40 @@ export async function updateBudgetAssumptionValue(
   });
 }
 
+/**
+ * Simpan beberapa nilai asumsi sekaligus (tabel asumsi).
+ *
+ * Satu pernyataan, alasan sama seperti imporBudgetPlanItems: kalau tiap baris
+ * dikirim terpisah, sebagian bisa lolos dan sebagian ditolak policy, dan RAB
+ * berakhir setengah berubah — keadaan yang kepala migrasi 0062 sebut paling
+ * berbahaya karena ia terlihat konsisten. Trigger cascade 0062 menghitung ulang
+ * volume baris turunan untuk SETIAP asumsi yang benar-benar berubah.
+ *
+ * Mengembalikan id yang berubah; nol baris berarti tidak ada yang diubah ATAU
+ * seluruhnya disaring policy — keduanya diam, jadi pemanggil membandingkannya.
+ */
+export async function updateBudgetAssumptionValues(
+  ctx: RlsContext,
+  planId: string,
+  baris: { id: string; value: number; sourceId: string | null }[],
+): Promise<string[]> {
+  if (baris.length === 0) return [];
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `UPDATE app.budget_assumptions a
+          SET value = v.nilai, source_id = v.sumber, updated_at = now()
+         FROM (SELECT * FROM unnest($2::uuid[], $3::numeric[], $4::uuid[])
+                 AS t(id, nilai, sumber)) v
+        WHERE a.id = v.id
+          AND a.plan_id = $1
+          AND (a.value, a.source_id) IS DISTINCT FROM (v.nilai, v.sumber)
+        RETURNING a.id`,
+      [planId, baris.map((b) => b.id), baris.map((b) => b.value), baris.map((b) => b.sourceId)],
+    );
+    return r.rows.map((x: { id: string }) => x.id);
+  });
+}
+
 // ===========================================================================
 // Penugasan & serapan anggaran (0066)
 // ===========================================================================
@@ -741,6 +775,68 @@ export async function setTanggalMulai(
 }
 
 /**
+ * Impor massal dari berkas Excel: seluruh baris ditulis dalam SATU pernyataan.
+ *
+ * Bukan sekadar efisiensi. Kalau tiap baris dikirim terpisah, sebagian bisa
+ * lolos dan sebagian ditolak policy, dan penggunanya mendapat RAB yang terisi
+ * separuh dari berkas yang ia kira masuk seluruhnya -- keadaan yang paling
+ * berbahaya menurut kepala migrasi 0062, karena ia terlihat konsisten. Dengan
+ * satu pernyataan, penolakan RLS mana pun membatalkan seluruh impor.
+ *
+ * `amount_idr` sengaja TIDAK diterima dari berkas meski kolom Total ada di
+ * sheet-nya: ia kolom GENERATED (volume x harga satuan). Kalau Total di sheet
+ * berbeda dari perkaliannya sendiri, itu dilaporkan sebagai masalah di
+ * pratinjau -- bukan diam-diam dipakai menggantikan hitungan database.
+ *
+ * Mengembalikan jumlah baris yang benar-benar masuk; pemanggil membandingkannya
+ * dengan jumlah yang dikirim, karena penyaringan lewat USING tidak melempar.
+ */
+export async function imporBudgetPlanItems(
+  ctx: RlsContext,
+  planId: string,
+  baris: {
+    phaseMonth: number; costCategoryId: string; description: string; itemKind: string;
+    volume: number; uomItemId: string | null; unitPriceIdr: number;
+    costKind: "capex" | "opex"; stage: string | null; driver: string | null;
+    sourceRef: string | null;
+    /** 0062. Diisi bila baris ini ditautkan ke asumsi; volume lalu dihitung
+     *  ulang trigger dari nilai_asumsi x rasio, bukan dari angka yang dikirim. */
+    basisCode: string | null; ratioPerBasis: number | null;
+  }[],
+): Promise<number> {
+  if (baris.length === 0) return 0;
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `INSERT INTO app.budget_plan_items
+         (plan_id, phase_month, cost_category_id, description, item_kind, volume,
+          uom_item_id, unit_price_idr, created_by, added_after_approval,
+          cost_kind, stage, driver, source_ref, sort_order, basis_code, ratio_per_basis)
+       SELECT $1, v.bulan, v.kategori, v.uraian, v.jenis::app.budget_item_kind, v.volume,
+              v.uom, v.harga, $2, (p.approval_status = 'approved'),
+              v.kind::app.budget_cost_kind, v.tahap, v.penggerak, v.sumber,
+              COALESCE((SELECT max(sort_order) + 1 FROM app.budget_plan_items WHERE plan_id = $1), 0)
+                + v.urut,
+              v.basis, v.rasio
+         FROM app.budget_plans p,
+              (SELECT * FROM unnest($3::int[], $4::uuid[], $5::text[], $6::text[], $7::numeric[],
+                                    $8::uuid[], $9::numeric[], $10::text[], $11::text[], $12::text[],
+                                    $13::text[], $14::text[], $15::numeric[])
+                 WITH ORDINALITY AS t(bulan, kategori, uraian, jenis, volume, uom, harga,
+                                      kind, tahap, penggerak, sumber, basis, rasio, urut)) v
+        WHERE p.id = $1`,
+      [planId, ctx.userId,
+       baris.map((b) => b.phaseMonth), baris.map((b) => b.costCategoryId),
+       baris.map((b) => b.description), baris.map((b) => b.itemKind),
+       baris.map((b) => b.volume), baris.map((b) => b.uomItemId),
+       baris.map((b) => b.unitPriceIdr), baris.map((b) => b.costKind),
+       baris.map((b) => b.stage), baris.map((b) => b.driver), baris.map((b) => b.sourceRef),
+       baris.map((b) => b.basisCode), baris.map((b) => b.ratioPerBasis)],
+    );
+    return r.rowCount ?? 0;
+  });
+}
+
+/**
  * Penugasan yang MASIH TERBUKA untuk pengguna saat ini — dipakai form
  * pengeluaran supaya realisasi bisa ditautkan ke baris RAB yang benar.
  *
@@ -767,4 +863,38 @@ export async function listPenugasanSaya(
     value: r.id,
     label: `${r.code} — ${r.item_description} (${Number(r.volume)} ${r.uom_name ?? ""})`.trim(),
   }));
+}
+
+/** Impor massal asumsi. Alasan satu-pernyataan sama seperti imporBudgetPlanItems. */
+export async function imporBudgetAssumptions(
+  ctx: RlsContext,
+  planId: string,
+  baris: {
+    code: string; label: string; value: number; unit: string | null;
+    sourceRef: string | null; confidence: "high" | "medium" | "low" | null; note: string | null;
+  }[],
+): Promise<number> {
+  if (baris.length === 0) return 0;
+  return withRls(ctx, async (c) => {
+    const r = await c.query(
+      `INSERT INTO app.budget_assumptions
+         (plan_id, code, label, value, unit, source_ref, confidence, note, created_by, sort_order)
+       SELECT $1, v.kode, v.label, v.nilai, v.satuan, v.sumber,
+              v.keyakinan::app.assumption_confidence, v.catatan, $2,
+              COALESCE((SELECT max(sort_order) + 1 FROM app.budget_assumptions WHERE plan_id = $1), 0)
+                + v.urut
+         FROM (SELECT * FROM unnest($3::text[], $4::text[], $5::numeric[], $6::text[],
+                                    $7::text[], $8::text[], $9::text[])
+                 WITH ORDINALITY AS t(kode, label, nilai, satuan, sumber, keyakinan, catatan, urut)) v
+       -- Asumsi dengan kode yang sudah ada dilewati, bukan ditimpa: menimpanya
+       -- akan menggerakkan volume seluruh baris turunan yang memakainya, dan
+       -- impor berkas tidak boleh diam-diam mengubah angka yang sudah disusun.
+       ON CONFLICT (plan_id, code) DO NOTHING`,
+      [planId, ctx.userId,
+       baris.map((b) => b.code), baris.map((b) => b.label), baris.map((b) => b.value),
+       baris.map((b) => b.unit), baris.map((b) => b.sourceRef),
+       baris.map((b) => b.confidence), baris.map((b) => b.note)],
+    );
+    return r.rowCount ?? 0;
+  });
 }
